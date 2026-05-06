@@ -54,3 +54,7 @@ injection_payload = {
 if __name__ == "__main__":
     send_case("normal", normal_payload)
     send_case("prompt_injection", injection_payload)
+    response = client.get("/api/v1/logs?limit=5")
+    print("\n=== latest_logs ===")
+    print("status:", response.status_code)
+    print("body:", response.json())

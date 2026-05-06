@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 import uuid
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
+from database import get_db, init_database
+from models import InterceptLog
 from security_engine import (
     AuditDecision,
     permission_control,
@@ -29,6 +34,19 @@ app = FastAPI(
     description="Middleware sandbox prototype for LLM agent runtime security.",
     version="0.1.0",
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+init_database()
 
 
 class ChatMessage(BaseModel):
@@ -54,6 +72,15 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
 
 
+class InterceptLogResponse(BaseModel):
+    id: int
+    timestamp: str
+    threat_type: str
+    action_taken: str
+    original_prompt: str
+    details: dict[str, Any]
+
+
 def _latest_user_prompt(messages: list[ChatMessage]) -> str:
     for message in reversed(messages):
         if message.role == "user":
@@ -72,9 +99,32 @@ def _raise_if_blocked(
     layer: str,
     decision: AuditDecision,
     source_excerpt: str,
+    original_prompt: str,
+    threat_type: str,
+    db: Session,
+    details: dict[str, Any] | None = None,
 ) -> None:
     if decision.allowed:
         return
+
+    log_details = {
+        "request_id": request_id,
+        "layer": layer,
+        "reason": decision.reason,
+        "risk_score": decision.risk_score,
+        "matched_rules": decision.matched_rules,
+        "source_excerpt": source_excerpt[:500],
+        **(details or {}),
+    }
+    db.add(
+        InterceptLog(
+            threat_type=threat_type,
+            action_taken="Blocked",
+            original_prompt=original_prompt,
+            details=json.dumps(log_details, ensure_ascii=False),
+        )
+    )
+    db.commit()
 
     logger.warning(
         "ShadowAgent intercepted request_id=%s layer=%s reason=%s risk_score=%.2f matched_rules=%s source_excerpt=%r",
@@ -103,10 +153,39 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "service": "shadow-agent-gateway"}
 
 
+@app.get("/api/v1/logs")
+async def list_intercept_logs(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    safe_limit = max(1, min(limit, 100))
+    logs = (
+        db.query(InterceptLog)
+        .order_by(InterceptLog.timestamp.desc(), InterceptLog.id.desc())
+        .limit(safe_limit)
+        .all()
+    )
+
+    return {
+        "items": [
+            InterceptLogResponse(
+                id=log.id,
+                timestamp=log.timestamp.isoformat(),
+                threat_type=log.threat_type,
+                action_taken=log.action_taken,
+                original_prompt=log.original_prompt,
+                details=json.loads(log.details),
+            ).model_dump()
+            for log in logs
+        ]
+    }
+
+
 @app.post("/api/v1/chat/completions")
 async def chat_completions(
     payload: ChatCompletionRequest,
     request: Request,
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     request_id = request.headers.get("x-request-id", str(uuid.uuid4()))
     started_at = time.perf_counter()
@@ -120,6 +199,10 @@ async def chat_completions(
         layer="trusted_instruction",
         decision=prompt_decision,
         source_excerpt=separated["trusted_instruction"],
+        original_prompt=prompt,
+        threat_type="Prompt Injection",
+        db=db,
+        details={"model": payload.model},
     )
 
     external_decision = semantic_intent_check(separated["untrusted_data"])
@@ -128,6 +211,10 @@ async def chat_completions(
         layer="untrusted_external_data",
         decision=external_decision,
         source_excerpt=separated["untrusted_data"],
+        original_prompt=prompt,
+        threat_type="Prompt Injection",
+        db=db,
+        details={"model": payload.model},
     )
 
     permission_decision = permission_control(payload.tool_name, payload.parameters)
@@ -136,6 +223,14 @@ async def chat_completions(
         layer="tool_permission",
         decision=permission_decision,
         source_excerpt=payload.tool_name or "",
+        original_prompt=prompt,
+        threat_type="Unauthorized API",
+        db=db,
+        details={
+            "model": payload.model,
+            "tool_name": payload.tool_name,
+            "parameters": payload.parameters or {},
+        },
     )
 
     latency_ms = round((time.perf_counter() - started_at) * 1000, 3)
