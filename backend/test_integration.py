@@ -6,19 +6,26 @@ Run from the repository root:
 
 from __future__ import annotations
 
+import os
+
 from fastapi.testclient import TestClient
+
+os.environ.setdefault("SHADOW_AGENT_ADMIN_API_KEY", "test-admin-key")
+os.environ.setdefault("SHADOW_AGENT_CLIENT_API_KEY", "test-client-key")
 
 from main import app
 
 
 client = TestClient(app)
+CLIENT_HEADERS = {"x-api-key": "test-client-key"}
+ADMIN_HEADERS = {"x-api-key": "test-admin-key"}
 
 
 def post_completion(name: str, payload: dict) -> tuple[int, dict]:
     response = client.post(
         "/api/v1/chat/completions",
         json=payload,
-        headers={"x-request-id": f"integration-{name}"},
+        headers={**CLIENT_HEADERS, "x-request-id": f"integration-{name}"},
     )
     body = response.json()
     print(f"\n=== {name} ===")
@@ -81,7 +88,10 @@ if __name__ == "__main__":
     assert_status("prompt_injection", injection_status, 403)
     assert_status("unauthorized_tool", unauthorized_status, 403)
 
-    logs_response = client.get("/api/v1/logs?limit=20")
+    unauthenticated_logs_response = client.get("/api/v1/logs?limit=20")
+    assert_status("unauthenticated_logs", unauthenticated_logs_response.status_code, 401)
+
+    logs_response = client.get("/api/v1/logs?limit=20", headers=ADMIN_HEADERS)
     assert_status("logs", logs_response.status_code, 200)
     logs = logs_response.json()["items"]
     threat_types = {item["threat_type"] for item in logs}

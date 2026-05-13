@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
 from typing import Any, Literal
@@ -15,6 +16,15 @@ from sqlalchemy.orm import Session
 
 from database import get_db, init_database
 from models import InterceptLog
+from security_controls import (
+    Principal,
+    rate_limit_middleware,
+    redact_text,
+    require_admin,
+    require_client,
+    sanitize_json,
+    sanitize_request_id,
+)
 from security_engine import (
     AuditDecision,
     permission_control,
@@ -29,6 +39,17 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 
+
+def _allowed_origins() -> list[str]:
+    configured = os.getenv("SHADOW_AGENT_ALLOWED_ORIGINS")
+    if not configured:
+        return [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
+    return [origin.strip() for origin in configured.split(",") if origin.strip()]
+
+
 app = FastAPI(
     title="Shadow Agent Gateway",
     description="Middleware sandbox prototype for LLM agent runtime security.",
@@ -37,32 +58,32 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.middleware("http")(rate_limit_middleware)
 
 init_database()
 
 
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
-    content: str
+    content: str = Field(min_length=1, max_length=12000)
 
 
 class ChatCompletionRequest(BaseModel):
-    model: str = Field(default="shadow-agent-simulated")
-    messages: list[ChatMessage]
+    model: str = Field(default="shadow-agent-simulated", max_length=120)
+    messages: list[ChatMessage] = Field(min_length=1, max_length=100)
     external_context: str | None = Field(
         default=None,
+        max_length=20000,
         description="Untrusted retrieval/API/plugin result to be purified before LLM use.",
     )
     tool_name: str | None = Field(
         default=None,
+        max_length=128,
         description="Optional downstream tool name requested by the agent runtime.",
     )
     parameters: dict[str, Any] | None = Field(
@@ -113,15 +134,15 @@ def _raise_if_blocked(
         "reason": decision.reason,
         "risk_score": decision.risk_score,
         "matched_rules": decision.matched_rules,
-        "source_excerpt": source_excerpt[:500],
+        "source_excerpt": redact_text(source_excerpt, max_chars=500),
         **(details or {}),
     }
     db.add(
         InterceptLog(
             threat_type=threat_type,
             action_taken="Blocked",
-            original_prompt=original_prompt,
-            details=json.dumps(log_details, ensure_ascii=False),
+            original_prompt=redact_text(original_prompt),
+            details=json.dumps(sanitize_json(log_details), ensure_ascii=False),
         )
     )
     db.commit()
@@ -156,6 +177,7 @@ async def health() -> dict[str, str]:
 @app.get("/api/v1/logs")
 async def list_intercept_logs(
     limit: int = 20,
+    principal: Principal = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     safe_limit = max(1, min(limit, 100))
@@ -185,9 +207,12 @@ async def list_intercept_logs(
 async def chat_completions(
     payload: ChatCompletionRequest,
     request: Request,
+    principal: Principal = Depends(require_client),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    request_id = request.headers.get("x-request-id", str(uuid.uuid4()))
+    request_id = (
+        sanitize_request_id(request.headers.get("x-request-id")) or str(uuid.uuid4())
+    )
     started_at = time.perf_counter()
     prompt = _latest_user_prompt(payload.messages)
 
@@ -202,7 +227,7 @@ async def chat_completions(
         original_prompt=prompt,
         threat_type="Prompt Injection",
         db=db,
-        details={"model": payload.model},
+        details={"model": payload.model, "principal": principal.subject},
     )
 
     external_decision = semantic_intent_check(separated["untrusted_data"])
@@ -214,7 +239,7 @@ async def chat_completions(
         original_prompt=prompt,
         threat_type="Prompt Injection",
         db=db,
-        details={"model": payload.model},
+        details={"model": payload.model, "principal": principal.subject},
     )
 
     permission_decision = permission_control(payload.tool_name, payload.parameters)
@@ -229,7 +254,8 @@ async def chat_completions(
         details={
             "model": payload.model,
             "tool_name": payload.tool_name,
-            "parameters": payload.parameters or {},
+            "parameters": sanitize_json(payload.parameters or {}),
+            "principal": principal.subject,
         },
     )
 

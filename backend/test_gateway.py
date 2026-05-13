@@ -6,19 +6,26 @@ Run from the repository root:
 
 from __future__ import annotations
 
+import os
+
 from fastapi.testclient import TestClient
+
+os.environ.setdefault("SHADOW_AGENT_ADMIN_API_KEY", "test-admin-key")
+os.environ.setdefault("SHADOW_AGENT_CLIENT_API_KEY", "test-client-key")
 
 from main import app
 
 
 client = TestClient(app)
+CLIENT_HEADERS = {"x-api-key": "test-client-key"}
+ADMIN_HEADERS = {"x-api-key": "test-admin-key"}
 
 
 def send_case(name: str, payload: dict) -> None:
     response = client.post(
         "/api/v1/chat/completions",
         json=payload,
-        headers={"x-request-id": f"smoke-{name}"},
+        headers={**CLIENT_HEADERS, "x-request-id": f"smoke-{name}"},
     )
     print(f"\n=== {name} ===")
     print("status:", response.status_code)
@@ -54,7 +61,7 @@ injection_payload = {
 if __name__ == "__main__":
     send_case("normal", normal_payload)
     send_case("prompt_injection", injection_payload)
-    response = client.get("/api/v1/logs?limit=5")
+    response = client.get("/api/v1/logs?limit=5", headers=ADMIN_HEADERS)
     print("\n=== latest_logs ===")
     print("status:", response.status_code)
     print("body:", response.json())
