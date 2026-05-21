@@ -7,6 +7,7 @@ import logging
 import os
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -14,8 +15,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from database import get_db, init_database
-from models import InterceptLog
+from database import SessionLocal, get_db, init_database
+from models import AuditLog, InterceptLog
 from security_controls import (
     Principal,
     rate_limit_middleware,
@@ -27,6 +28,7 @@ from security_controls import (
 )
 from security_engine import (
     AuditDecision,
+    inspect_prompt,
     permission_control,
     semantic_intent_check,
     separate_instruction_and_data,
@@ -38,6 +40,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
+audit_log_executor = ThreadPoolExecutor(max_workers=2)
 
 
 def _allowed_origins() -> list[str]:
@@ -169,6 +172,59 @@ def _raise_if_blocked(
     )
 
 
+def _risk_level(score: float) -> str:
+    if score >= 0.9:
+        return "high"
+    if score >= 0.75:
+        return "medium"
+    return "low"
+
+
+def _persist_audit_log(
+    request_id: str,
+    original_instruction: str,
+    decision: AuditDecision,
+    reason: str,
+) -> None:
+    db = SessionLocal()
+    try:
+        db.add(
+            AuditLog(
+                request_id=request_id,
+                original_instruction=redact_text(original_instruction),
+                risk_level=_risk_level(decision.risk_score),
+                triggered_rule_name=", ".join(decision.matched_rules) or "none",
+                intercept_reason=reason,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _submit_audit_log(
+    request_id: str,
+    layer: str,
+    source_text: str,
+    decision: AuditDecision,
+) -> None:
+    if decision.allowed:
+        return
+
+    reason = (
+        "indirect_prompt_injection_detected_in_untrusted_external_context"
+        if layer == "untrusted_external_data"
+        else decision.reason
+    )
+    audit_log_executor.submit(
+        _persist_audit_log,
+        request_id,
+        source_text,
+        decision,
+        reason,
+    )
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "shadow-agent-gateway"}
@@ -217,6 +273,51 @@ async def chat_completions(
     prompt = _latest_user_prompt(payload.messages)
 
     separated = separate_instruction_and_data(prompt, payload.external_context)
+
+    prompt_audit_decision = inspect_prompt(separated["trusted_instruction"], db)
+    _submit_audit_log(
+        request_id=request_id,
+        layer="trusted_instruction",
+        source_text=separated["trusted_instruction"],
+        decision=prompt_audit_decision,
+    )
+    _raise_if_blocked(
+        request_id=request_id,
+        layer="trusted_instruction",
+        decision=prompt_audit_decision,
+        source_excerpt=separated["trusted_instruction"],
+        original_prompt=prompt,
+        threat_type="Prompt Injection",
+        db=db,
+        details={
+            "model": payload.model,
+            "principal": principal.subject,
+            "audit_source": "database_blacklist_policy",
+        },
+    )
+
+    external_audit_decision = inspect_prompt(separated["untrusted_data"], db)
+    _submit_audit_log(
+        request_id=request_id,
+        layer="untrusted_external_data",
+        source_text=separated["untrusted_data"],
+        decision=external_audit_decision,
+    )
+    _raise_if_blocked(
+        request_id=request_id,
+        layer="untrusted_external_data",
+        decision=external_audit_decision,
+        source_excerpt=separated["untrusted_data"],
+        original_prompt=prompt,
+        threat_type="Prompt Injection",
+        db=db,
+        details={
+            "model": payload.model,
+            "principal": principal.subject,
+            "audit_source": "database_blacklist_policy",
+            "indirect_prompt_injection": True,
+        },
+    )
 
     prompt_decision = semantic_intent_check(separated["trusted_instruction"])
     _raise_if_blocked(

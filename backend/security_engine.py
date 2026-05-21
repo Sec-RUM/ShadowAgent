@@ -6,6 +6,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from sqlalchemy.orm import Session
+
+from models import SecurityPolicy
+
 
 CONTEXT_TAG_PATTERN = re.compile(
     r"<(?P<tag>context|external_context|retrieved_context|tool_result|data)\b[^>]*>"
@@ -35,7 +39,7 @@ INJECTION_PATTERNS = [
 ] + [
     re.compile(r"\bignore (all )?(previous|prior|above) instructions\b", re.IGNORECASE),
     re.compile(r"\bdisregard (all )?(previous|prior|above) instructions\b", re.IGNORECASE),
-    re.compile(r"\b忽略(以上|前述|之前|所有).{0,12}(指令|规则|要求)\b", re.IGNORECASE),
+    re.compile(r"忽略(以上|前述|之前|所有).{0,12}(指令|规则|要求)", re.IGNORECASE),
 ]
 
 ALLOWED_TOOLS = {
@@ -44,6 +48,34 @@ ALLOWED_TOOLS = {
     "execute_shell": False,
 }
 
+DEFAULT_SECURITY_POLICIES = [
+    {
+        "name": "ignore_previous_instructions",
+        "blacklist_keyword": r"\b(ignore|disregard)\s+(all\s+)?(previous|prior|above)\s+instructions\b",
+        "description": "Blocks attempts to override trusted system or user instructions.",
+    },
+    {
+        "name": "system_prompt_exfiltration",
+        "blacklist_keyword": r"\b(system\s+prompt|hidden\s+instructions?|developer\s+message)\b",
+        "description": "Blocks attempts to reveal hidden prompts or higher-priority messages.",
+    },
+    {
+        "name": "jailbreak_mode_switch",
+        "blacklist_keyword": r"\b(you\s+are\s+now|developer\s+mode|jailbreak|bypass)\b",
+        "description": "Blocks jailbreak-style attempts to change the model's operating mode.",
+    },
+    {
+        "name": "tool_result_instruction_smuggling",
+        "blacklist_keyword": r"\b(call|execute|run)\s+[^.\n]{0,80}\b(admin|credential|shell|token|secret)\b",
+        "description": "Blocks tool-result text that tries to smuggle privileged tool calls.",
+    },
+    {
+        "name": "chinese_instruction_override",
+        "blacklist_keyword": r"(忽略|无视|覆盖).{0,16}(之前|以上|系统|开发者).{0,16}(指令|规则|提示)",
+        "description": "Blocks Chinese prompt-injection phrasing that overrides prior rules.",
+    },
+]
+
 
 @dataclass(slots=True)
 class AuditDecision:
@@ -51,6 +83,66 @@ class AuditDecision:
     reason: str = "allowed"
     risk_score: float = 0.0
     matched_rules: list[str] = field(default_factory=list)
+
+
+def ensure_default_security_policies(db: Session) -> None:
+    """Seed built-in blacklist policies without overwriting local admin changes."""
+
+    existing_names = {
+        name
+        for (name,) in db.query(SecurityPolicy.name)
+        .filter(SecurityPolicy.name.in_([item["name"] for item in DEFAULT_SECURITY_POLICIES]))
+        .all()
+    }
+    missing_policies = [
+        SecurityPolicy(**policy)
+        for policy in DEFAULT_SECURITY_POLICIES
+        if policy["name"] not in existing_names
+    ]
+    if not missing_policies:
+        return
+
+    db.add_all(missing_policies)
+    db.commit()
+
+
+def inspect_prompt(text: str, db: Session) -> AuditDecision:
+    """Inspect untrusted prompt text with DB-backed blacklist regex policies.
+
+    This supports indirect prompt-injection defense: callers should inspect
+    external retrieval/tool/plugin content separately from trusted user intent.
+    """
+
+    if not text.strip():
+        return AuditDecision(allowed=True, risk_score=0.0)
+
+    ensure_default_security_policies(db)
+    policies = (
+        db.query(SecurityPolicy)
+        .filter(SecurityPolicy.enabled.is_(True))
+        .order_by(SecurityPolicy.id.asc())
+        .all()
+    )
+
+    matched_rules: list[str] = []
+    for policy in policies:
+        try:
+            pattern = re.compile(policy.blacklist_keyword, re.IGNORECASE | re.DOTALL)
+        except re.error:
+            continue
+
+        if pattern.search(text):
+            matched_rules.append(policy.name)
+
+    if matched_rules:
+        return AuditDecision(
+            allowed=False,
+            reason="blacklisted_prompt_pattern_detected",
+            risk_score=0.93,
+            matched_rules=matched_rules,
+        )
+
+    return AuditDecision(allowed=True, risk_score=0.05)
 
 
 def separate_instruction_and_data(prompt: str, external_context: str | None) -> dict[str, str]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Lock
 from typing import Generator
 
 from sqlalchemy import create_engine
@@ -28,11 +29,14 @@ SessionLocal = sessionmaker(
     bind=engine,
 )
 
+_init_lock = Lock()
+
 
 def init_database() -> None:
-    import models  # noqa: F401
+    with _init_lock:
+        import models  # noqa: F401
 
-    Base.metadata.create_all(bind=engine)
+        Base.metadata.create_all(bind=engine)
 
 
 def get_db() -> Generator[Session, None, None]:
