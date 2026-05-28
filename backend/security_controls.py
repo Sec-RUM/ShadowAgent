@@ -9,6 +9,7 @@ import hmac
 import json
 import os
 import re
+import secrets
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -39,6 +40,7 @@ SENSITIVE_TEXT_PATTERNS = [
     re.compile(r"(?i)\bbearer\s+[a-z0-9._~+/=-]{12,}"),
 ]
 REQUEST_ID_PATTERN = re.compile(r"[^a-zA-Z0-9_.:-]")
+PASSWORD_HASH_ITERATIONS = 120_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +80,19 @@ def _env_secret(name: str) -> str | None:
     return None
 
 
+def _jwt_secret() -> str | None:
+    configured = _env_secret("SHADOW_AGENT_JWT_SECRET")
+    if configured:
+        return configured
+
+    admin_key = _env_secret("SHADOW_AGENT_ADMIN_API_KEY") or ""
+    client_key = _env_secret("SHADOW_AGENT_CLIENT_API_KEY") or ""
+    if not admin_key and not client_key:
+        return None
+
+    return hashlib.sha256(f"{admin_key}|{client_key}|shadow-agent-jwt".encode("utf-8")).hexdigest()
+
+
 def _unauthorized(message: str = "Authentication required.") -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -111,8 +126,84 @@ def _b64url_decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + padding)
 
 
+def _b64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    derived = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        PASSWORD_HASH_ITERATIONS,
+    )
+    return f"pbkdf2_sha256${PASSWORD_HASH_ITERATIONS}${salt}${derived.hex()}"
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    try:
+        algorithm, iterations_text, salt, expected_hash = stored_hash.split("$", 3)
+    except ValueError:
+        return False
+
+    if algorithm != "pbkdf2_sha256":
+        return False
+
+    try:
+        iterations = int(iterations_text)
+    except ValueError:
+        return False
+
+    derived = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        iterations,
+    )
+    return hmac.compare_digest(derived.hex(), expected_hash)
+
+
+def create_jwt(
+    subject: str,
+    role: str,
+    expires_in_seconds: int = 60 * 60 * 12,
+    extra_claims: dict[str, Any] | None = None,
+) -> tuple[str, int]:
+    secret = _jwt_secret()
+    if not secret:
+        raise _auth_not_configured()
+    if len(secret) < 32:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "weak_jwt_secret",
+                "message": "SHADOW_AGENT_JWT_SECRET must be at least 32 characters.",
+            },
+        )
+
+    now = int(time.time())
+    payload = {
+        "sub": subject,
+        "role": role,
+        "iat": now,
+        "nbf": now,
+        "exp": now + max(60, expires_in_seconds),
+    }
+    if extra_claims:
+        payload.update(extra_claims)
+
+    header = {"alg": "HS256", "typ": "JWT"}
+    header_b64 = _b64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
+    payload_b64 = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
+    signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    token = f"{header_b64}.{payload_b64}.{_b64url_encode(signature)}"
+    return token, payload["exp"]
+
+
 def _verify_jwt(token: str) -> Principal | None:
-    secret = _env_secret("SHADOW_AGENT_JWT_SECRET")
+    secret = _jwt_secret()
     if not secret:
         return None
     if len(secret) < 32:

@@ -52,16 +52,20 @@ type IconComponent = React.ComponentType<{
 
 type ViewKey = "overview" | "logs" | "policies" | "gateway" | "settings" | "help";
 
-type StoredUser = {
+type SessionUser = {
   id: string;
   name: string;
   email: string;
-  passwordHash: string;
-  role: "admin" | "analyst";
+  role: string;
   createdAt: string;
 };
 
-type SessionUser = Omit<StoredUser, "passwordHash">;
+type AuthSession = {
+  accessToken: string;
+  expiresAt: number;
+  tokenType: "bearer";
+  user: SessionUser;
+};
 
 type InterceptLog = {
   id: number;
@@ -79,6 +83,8 @@ type PolicyRule = {
   enabled: boolean;
   severity: "low" | "medium" | "high";
   scope: string;
+  pattern?: string;
+  systemManaged?: boolean;
   custom?: boolean;
 };
 
@@ -87,6 +93,8 @@ type ToolPermission = {
   name: string;
   description: string;
   allowed: boolean;
+  requiresAdminApproval?: boolean;
+  systemManaged?: boolean;
 };
 
 type AppSettings = {
@@ -124,11 +132,86 @@ type LocalDecision = {
   reason: string;
   matchedRules: string[];
   layer: string;
+  category?: string;
+  recommendedAction?: string;
+};
+
+type BackendPolicy = {
+  id: number;
+  name: string;
+  blacklist_keyword: string;
+  description: string;
+  severity: string;
+  scope: string;
+  enabled: boolean;
+  system_managed: boolean;
+};
+
+type BackendToolPolicy = {
+  id: number;
+  tool_name: string;
+  description: string;
+  allowed: boolean;
+  requires_admin_approval: boolean;
+  system_managed: boolean;
+};
+
+type AnalyzeResponse = {
+  decision: "allowed" | "blocked";
+  risk_score: number;
+  category: string;
+  recommended_action: string;
+  blocked_checks: Array<Record<string, unknown>>;
+  checks: Record<string, Record<string, unknown>>;
+  separation?: Record<string, string>;
+};
+
+type ApprovalItem = {
+  id: number;
+  request_id: string;
+  status: string;
+  threat_type: string;
+  reason: string;
+  recommended_action: string;
+  original_prompt: string;
+  tool_name: string;
+  categories: string[];
+  evidence: string[];
+  details: Record<string, unknown>;
+  reviewed_by: string;
+  review_comment: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type AlertItem = {
+  id: number;
+  request_id: string;
+  severity: string;
+  channel: string;
+  title: string;
+  summary: string;
+  status: string;
+  details: Record<string, unknown>;
+  created_at: string;
+};
+
+type ReplayItem = {
+  id: number;
+  source_request_id: string;
+  replay_request_id: string;
+  triggered_by: string;
+  verdict: string;
+  risk_score: string;
+  category: string;
+  details: Record<string, unknown>;
+  created_at: string;
 };
 
 const STORAGE_KEYS = {
   users: "shadow-agent-users",
   session: "shadow-agent-session",
+  authSession: "shadow-agent-auth-session",
   settings: "shadow-agent-settings",
   policies: "shadow-agent-policies",
   tools: "shadow-agent-tools",
@@ -374,14 +457,6 @@ function removeStorage(key: string) {
   }
 }
 
-function fingerprint(value: string) {
-  try {
-    return window.btoa(unescape(encodeURIComponent(value))).split("").reverse().join("");
-  } catch {
-    return value;
-  }
-}
-
 function isViewKey(value: string): value is ViewKey {
   return VIEW_ITEMS.some((item) => item.id === value);
 }
@@ -456,7 +531,73 @@ function detailText(value: unknown) {
   return JSON.stringify(value);
 }
 
-function buildHeaders(settings: AppSettings, intent: "admin" | "client", json = false) {
+function categoryLabel(category: string | undefined) {
+  switch (category) {
+    case "prompt_injection":
+      return "提示词注入";
+    case "tool_permission":
+      return "未授权工具调用";
+    case "secret_exfiltration":
+      return "敏感信息外传";
+    case "sensitive_file_access":
+      return "敏感文件访问";
+    case "internal_network_access":
+      return "内网或元数据访问";
+    case "credential_access":
+      return "凭据访问";
+    case "command_execution":
+      return "危险命令执行";
+    case "destructive_action":
+      return "破坏性操作";
+    case "privilege_escalation":
+      return "权限提升";
+    case "security_evasion":
+      return "安全规避";
+    case "persistence":
+      return "持久化行为";
+    default:
+      return "";
+  }
+}
+
+function reasonLabel(reason: string | undefined, category?: string) {
+  switch (reason) {
+    case "dangerous_behavior_detected":
+      return categoryLabel(category) || "检测到高风险危险行为。";
+    case "prompt_injection_detected":
+      return "检测到提示词注入迹象。";
+    case "blacklisted_prompt_pattern_detected":
+      return "命中了黑名单提示词规则。";
+    case "tool_not_permitted":
+      return "当前工具不在允许名单中。";
+    case "admin_permission_required":
+      return "该操作需要管理员权限。";
+    case "admin_approval_required":
+      return "该操作需要管理员审批。";
+    default:
+      return reason || "";
+  }
+}
+
+function friendlyDecisionReason(reason: string | undefined, category?: string) {
+  const normalized = reasonLabel(reason, category);
+  if (!normalized) return "系统判定该请求存在安全风险，已阻断。";
+  if (normalized === categoryLabel(category) && normalized) {
+    return `${normalized}，请求已被阻断。`;
+  }
+  return normalized;
+}
+
+function logReasonText(details: Record<string, unknown>) {
+  return friendlyDecisionReason(detailText(details.reason), detailText(details.category));
+}
+
+function buildHeaders(
+  settings: AppSettings,
+  intent: "admin" | "client",
+  json = false,
+  authSession: AuthSession | null = null
+) {
   const headers: Record<string, string> = {};
   const apiKey =
     intent === "admin"
@@ -464,9 +605,64 @@ function buildHeaders(settings: AppSettings, intent: "admin" | "client", json = 
       : settings.clientApiKey.trim() || settings.adminApiKey.trim();
 
   if (json) headers["Content-Type"] = "application/json";
-  if (apiKey) headers["X-API-Key"] = apiKey;
+  if (authSession?.accessToken) {
+    headers.Authorization = `Bearer ${authSession.accessToken}`;
+  } else if (apiKey) {
+    headers["X-API-Key"] = apiKey;
+  }
 
   return headers;
+}
+
+function isAuthSessionValid(session: AuthSession | null) {
+  return Boolean(session?.accessToken && session.expiresAt * 1000 > Date.now());
+}
+
+function normalizeSeverity(value: unknown): PolicyRule["severity"] {
+  const text = typeof value === "string" ? value.toLowerCase() : "";
+  if (text === "high" || text === "medium" || text === "low") return text;
+  return "medium";
+}
+
+function threatTypeFromDecision(decision: Pick<LocalDecision, "layer" | "category">) {
+  if (decision.category === "secret_exfiltration") return "Data Exfiltration";
+  if (decision.category === "sensitive_file_access") return "Sensitive File Access";
+  if (decision.category === "internal_network_access") return "Internal Network Access";
+  if (decision.category === "credential_access") return "Credential Access";
+  if (decision.category === "command_execution") return "Dangerous Command Execution";
+  if (decision.category === "destructive_action") return "Destructive Command";
+  if (decision.category === "privilege_escalation") return "Privilege Escalation";
+  if (decision.category === "security_evasion") return "Security Evasion";
+  if (decision.category === "persistence") return "Persistence";
+  if (decision.category === "tool_permission" || decision.layer === "tool_permission") {
+    return "Unauthorized Tool Use";
+  }
+  return "Prompt Injection";
+}
+
+function mapBackendPolicy(policy: BackendPolicy): PolicyRule {
+  return {
+    id: String(policy.id),
+    name: policy.name,
+    description: policy.description,
+    enabled: policy.enabled,
+    severity: normalizeSeverity(policy.severity),
+    scope: policy.scope || "Prompt",
+    pattern: policy.blacklist_keyword,
+    systemManaged: policy.system_managed,
+    custom: !policy.system_managed,
+  };
+}
+
+function mapBackendToolPolicy(policy: BackendToolPolicy): ToolPermission {
+  return {
+    id: String(policy.id),
+    name: policy.tool_name,
+    description: policy.description,
+    allowed: policy.allowed,
+    requiresAdminApproval: policy.requires_admin_approval,
+    systemManaged: policy.system_managed,
+  };
 }
 
 function stampSampleLogs() {
@@ -600,9 +796,13 @@ export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [view, setView] = useState<ViewKey>("overview");
   const [user, setUser] = useState<SessionUser | null>(null);
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authForm, setAuthForm] = useState({ name: "", email: "", password: "", confirmPassword: "" });
   const [logs, setLogs] = useState<InterceptLog[]>([]);
+  const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const [replays, setReplays] = useState<ReplayItem[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsError, setLogsError] = useState("");
   const [search, setSearch] = useState("");
@@ -613,6 +813,7 @@ export default function Home() {
   const [policyDraftOpen, setPolicyDraftOpen] = useState(false);
   const [policyDraft, setPolicyDraft] = useState({
     name: "",
+    pattern: "",
     description: "",
     severity: "medium" as PolicyRule["severity"],
     scope: "Prompt",
@@ -634,6 +835,10 @@ export default function Home() {
     parameters: "{\n  \"requires_admin\": false\n}",
     stream: false,
   });
+  const securityConfigKey = `${settings.apiBase}|${settings.adminApiKey}|${authSession?.accessToken ?? ""}|${user?.id ?? ""}`;
+  const hasConsoleToken = isAuthSessionValid(authSession);
+  const hasAdminAccess = Boolean(hasConsoleToken || settings.adminApiKey.trim());
+  const hasGatewayAccess = Boolean(hasConsoleToken || settings.clientApiKey.trim() || settings.adminApiKey.trim());
 
   const addToast = useCallback((message: string, type: Toast["type"] = "info") => {
     const toast: Toast = { id: makeId("toast"), type, message };
@@ -659,6 +864,94 @@ export default function Home() {
       })
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   }, []);
+
+  const syncLocalSecurityConfig = useCallback((nextPolicies: PolicyRule[], nextTools: ToolPermission[]) => {
+    writeStorage(STORAGE_KEYS.policies, nextPolicies);
+    writeStorage(STORAGE_KEYS.tools, nextTools);
+  }, []);
+
+  const persistPoliciesToBackend = useCallback(
+    async (nextPolicies: PolicyRule[]) => {
+      const currentById = new Map(policies.map((policy) => [policy.id, policy] as const));
+      const nextById = new Map(nextPolicies.map((policy) => [policy.id, policy] as const));
+      const responseErrors: string[] = [];
+
+      for (const policy of nextPolicies) {
+        const payload = {
+          name: policy.name.trim(),
+          blacklist_keyword: (policy.pattern || policy.name).trim(),
+          description: policy.description.trim(),
+          severity: policy.severity,
+          scope: policy.scope.trim() || "Prompt",
+          enabled: policy.enabled,
+        };
+
+        const isPersisted = /^\d+$/.test(policy.id);
+        const endpoint = isPersisted
+          ? `${settings.apiBase.replace(/\/$/, "")}/api/v1/policies/${policy.id}`
+          : `${settings.apiBase.replace(/\/$/, "")}/api/v1/policies`;
+        const method = isPersisted ? "PUT" : "POST";
+        const response = await fetch(endpoint, {
+          method,
+          headers: buildHeaders(settings, "admin", true, authSession),
+          body: JSON.stringify(payload),
+        });
+        const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
+        if (!response.ok) {
+          responseErrors.push(detailText(data.detail) || `HTTP ${response.status}`);
+        }
+      }
+
+      for (const policy of policies) {
+        const wasPersisted = /^\d+$/.test(policy.id);
+        if (!wasPersisted || nextById.has(policy.id)) continue;
+        const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/policies/${policy.id}`, {
+          method: "DELETE",
+          headers: buildHeaders(settings, "admin", false, authSession),
+        });
+        const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
+        if (!response.ok) {
+          responseErrors.push(detailText(data.detail) || `HTTP ${response.status}`);
+        }
+      }
+
+      if (responseErrors.length > 0) {
+        const currentSnapshot = Array.from(currentById.values());
+        syncLocalSecurityConfig(currentSnapshot, tools);
+        throw new Error(responseErrors[0]);
+      }
+    },
+    [authSession, policies, settings, syncLocalSecurityConfig, tools]
+  );
+
+  const persistToolsToBackend = useCallback(
+    async (nextTools: ToolPermission[]) => {
+      const responseErrors: string[] = [];
+
+      for (const tool of nextTools) {
+        if (!/^\d+$/.test(tool.id)) continue;
+        const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/tool-policies/${tool.id}`, {
+          method: "PUT",
+          headers: buildHeaders(settings, "admin", true, authSession),
+          body: JSON.stringify({
+            tool_name: tool.name,
+            description: tool.description,
+            allowed: tool.allowed,
+            requires_admin_approval: Boolean(tool.requiresAdminApproval),
+          }),
+        });
+        const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
+        if (!response.ok) {
+          responseErrors.push(detailText(data.detail) || `HTTP ${response.status}`);
+        }
+      }
+
+      if (responseErrors.length > 0) {
+        throw new Error(responseErrors[0]);
+      }
+    },
+    [authSession, settings]
+  );
 
   const checkHealth = useCallback(async () => {
     setHealth({ status: "checking", message: "检测中" });
@@ -691,9 +984,9 @@ export default function Home() {
   const loadLogs = useCallback(async () => {
     const localLogs = readStorage<InterceptLog[]>(STORAGE_KEYS.localLogs, []);
 
-    if (!settings.adminApiKey.trim()) {
+    if (!hasAdminAccess) {
       setLogs(localLogs);
-      setLogsError("未配置 Admin API Key，当前仅显示本地演示日志。可在设置页填写后刷新。");
+      setLogsError("未登录管理员账号且未配置 Admin API Key，当前仅显示本地演示日志。");
       addToast("当前显示本地日志，未请求后端", "info");
       return;
     }
@@ -705,7 +998,7 @@ export default function Home() {
 
     try {
       const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/logs?limit=80`, {
-        headers: buildHeaders(settings, "admin"),
+        headers: buildHeaders(settings, "admin", false, authSession),
         signal: controller.signal,
         cache: "no-store",
       });
@@ -727,7 +1020,91 @@ export default function Home() {
       window.clearTimeout(timer);
       setLogsLoading(false);
     }
-  }, [addToast, mergeLogs, settings]);
+  }, [addToast, authSession, hasAdminAccess, mergeLogs, settings]);
+
+  const loadOperations = useCallback(async () => {
+    if (!hasAdminAccess) {
+      setApprovals([]);
+      setAlerts([]);
+      setReplays([]);
+      return;
+    }
+
+    try {
+      const [approvalResponse, alertResponse, replayResponse] = await Promise.all([
+        fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/approvals?status=pending`, {
+          headers: buildHeaders(settings, "admin", false, authSession),
+          cache: "no-store",
+        }),
+        fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/alerts`, {
+          headers: buildHeaders(settings, "admin", false, authSession),
+          cache: "no-store",
+        }),
+        fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/replays`, {
+          headers: buildHeaders(settings, "admin", false, authSession),
+          cache: "no-store",
+        }),
+      ]);
+
+      const approvalData = (await approvalResponse.json().catch(() => ({}))) as { items?: ApprovalItem[] };
+      const alertData = (await alertResponse.json().catch(() => ({}))) as { items?: AlertItem[] };
+      const replayData = (await replayResponse.json().catch(() => ({}))) as { items?: ReplayItem[] };
+
+      if (approvalResponse.ok) setApprovals(approvalData.items ?? []);
+      if (alertResponse.ok) setAlerts(alertData.items ?? []);
+      if (replayResponse.ok) setReplays(replayData.items ?? []);
+    } catch {
+      setApprovals([]);
+      setAlerts([]);
+      setReplays([]);
+    }
+  }, [authSession, hasAdminAccess, settings]);
+
+  const loadSecurityConfiguration = useCallback(async () => {
+    const localPolicies = readStorage<PolicyRule[]>(STORAGE_KEYS.policies, DEFAULT_POLICIES);
+    const localTools = readStorage<ToolPermission[]>(STORAGE_KEYS.tools, DEFAULT_TOOLS);
+
+    if (!hasAdminAccess) {
+      setPolicies(localPolicies);
+      setTools(localTools);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 7000);
+
+    try {
+      const [policyResponse, toolResponse] = await Promise.all([
+        fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/policies`, {
+          headers: buildHeaders(settings, "admin", false, authSession),
+          signal: controller.signal,
+          cache: "no-store",
+        }),
+        fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/tool-policies`, {
+          headers: buildHeaders(settings, "admin", false, authSession),
+          signal: controller.signal,
+          cache: "no-store",
+        }),
+      ]);
+
+      const policyData = (await policyResponse.json().catch(() => ({}))) as { items?: BackendPolicy[]; detail?: unknown };
+      const toolData = (await toolResponse.json().catch(() => ({}))) as { items?: BackendToolPolicy[]; detail?: unknown };
+      if (!policyResponse.ok) throw new Error(detailText(policyData.detail) || `HTTP ${policyResponse.status}`);
+      if (!toolResponse.ok) throw new Error(detailText(toolData.detail) || `HTTP ${toolResponse.status}`);
+
+      const nextPolicies = (policyData.items ?? []).map(mapBackendPolicy);
+      const nextTools = (toolData.items ?? []).map(mapBackendToolPolicy);
+      setPolicies(nextPolicies.length > 0 ? nextPolicies : localPolicies);
+      setTools(nextTools.length > 0 ? nextTools : localTools);
+      writeStorage(STORAGE_KEYS.policies, nextPolicies.length > 0 ? nextPolicies : localPolicies);
+      writeStorage(STORAGE_KEYS.tools, nextTools.length > 0 ? nextTools : localTools);
+    } catch {
+      setPolicies(localPolicies);
+      setTools(localTools);
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }, [authSession, hasAdminAccess, settings]);
 
   useEffect(() => {
     const bootTimer = window.setTimeout(() => {
@@ -735,7 +1112,22 @@ export default function Home() {
       setPolicies(readStorage<PolicyRule[]>(STORAGE_KEYS.policies, DEFAULT_POLICIES));
       setTools(readStorage<ToolPermission[]>(STORAGE_KEYS.tools, DEFAULT_TOOLS));
       setLogs(readStorage<InterceptLog[]>(STORAGE_KEYS.localLogs, []));
-      setUser(readStorage<SessionUser | null>(STORAGE_KEYS.session, null));
+      const storedSessionUser = readStorage<SessionUser | null>(STORAGE_KEYS.session, null);
+      const storedAuthSession = readStorage<AuthSession | null>(STORAGE_KEYS.authSession, null);
+      if (storedAuthSession && isAuthSessionValid(storedAuthSession)) {
+        const nextAuthSession: AuthSession = storedAuthSession;
+        setAuthSession(nextAuthSession);
+        setUser(nextAuthSession.user);
+      } else if (storedSessionUser?.id === "demo-admin") {
+        removeStorage(STORAGE_KEYS.authSession);
+        setAuthSession(null);
+        setUser(storedSessionUser);
+      } else {
+        removeStorage(STORAGE_KEYS.authSession);
+        removeStorage(STORAGE_KEYS.session);
+        setAuthSession(null);
+        setUser(null);
+      }
       setView(activeViewFromHash());
       setMounted(true);
     }, 0);
@@ -749,12 +1141,70 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (!mounted || !user) return;
+    window.setTimeout(() => {
+      void loadSecurityConfiguration();
+      void loadOperations();
+    }, 0);
+  }, [loadOperations, loadSecurityConfiguration, mounted, securityConfigKey, user]);
+
+  useEffect(() => {
+    if (!mounted || !hasConsoleToken) return;
+
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/auth/me`, {
+          headers: buildHeaders(settings, "client", false, authSession),
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        const data = (await response.json().catch(() => ({}))) as {
+          user?: { id: string; name: string; email: string; role: string; created_at: string };
+          detail?: unknown;
+        };
+        if (!response.ok || !data.user) {
+          throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+        }
+
+        const sessionUser: SessionUser = {
+          id: data.user.id,
+          name: data.user.name,
+          email: data.user.email,
+          role: data.user.role,
+          createdAt: data.user.created_at,
+        };
+        setUser(sessionUser);
+        writeStorage(STORAGE_KEYS.session, sessionUser);
+        writeStorage(STORAGE_KEYS.authSession, {
+          accessToken: authSession!.accessToken,
+          tokenType: authSession!.tokenType,
+          expiresAt: authSession!.expiresAt,
+          user: sessionUser,
+        });
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          return;
+        }
+        removeStorage(STORAGE_KEYS.authSession);
+        removeStorage(STORAGE_KEYS.session);
+        setAuthSession(null);
+        setUser(null);
+        addToast("登录状态已失效，请重新登录", "error");
+      }
+    })();
+
+    return () => controller.abort();
+  }, [addToast, authSession, hasConsoleToken, mounted, settings]);
+
+  useEffect(() => {
     if (!user || !settings.autoRefresh) return;
     const interval = window.setInterval(() => {
       void loadLogs();
+      void loadOperations();
     }, Math.max(10, settings.refreshInterval) * 1000);
     return () => window.clearInterval(interval);
-  }, [loadLogs, settings.autoRefresh, settings.refreshInterval, user]);
+  }, [loadLogs, loadOperations, settings.autoRefresh, settings.refreshInterval, user]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -847,7 +1297,7 @@ export default function Home() {
           log.action_taken,
           log.original_prompt,
           detailText(log.details.request_id),
-          detailText(log.details.reason),
+          logReasonText(log.details),
           detailText(log.details.matched_rules),
         ]
           .join(" ")
@@ -875,7 +1325,7 @@ export default function Home() {
     addToast("已生成演示拦截事件", "success");
   }, [addToast, mergeLogs, persistLocalLogs]);
 
-  const handleAuth = (event: FormEvent<HTMLFormElement>) => {
+  const handleAuth = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const email = authForm.email.trim().toLowerCase();
     const password = authForm.password;
@@ -884,8 +1334,6 @@ export default function Home() {
       addToast("请输入邮箱和密码", "error");
       return;
     }
-
-    const users = readStorage<StoredUser[]>(STORAGE_KEYS.users, []);
 
     if (authMode === "register") {
       if (!authForm.name.trim()) {
@@ -900,55 +1348,55 @@ export default function Home() {
         addToast("两次输入的密码不一致", "error");
         return;
       }
-      if (users.some((item) => item.email === email)) {
-        addToast("该邮箱已经注册", "error");
-        return;
+    }
+
+    try {
+      const endpoint =
+        authMode === "login"
+          ? `${settings.apiBase.replace(/\/$/, "")}/api/v1/auth/login`
+          : `${settings.apiBase.replace(/\/$/, "")}/api/v1/auth/register`;
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          authMode === "login"
+            ? { email, password }
+            : { name: authForm.name.trim(), email, password }
+        ),
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        access_token?: string;
+        token_type?: string;
+        expires_at?: number;
+        user?: { id: string; name: string; email: string; role: string; created_at: string };
+        detail?: unknown;
+      };
+      if (!response.ok || !data.access_token || !data.user) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
       }
 
-      const nextUser: StoredUser = {
-        id: makeId("user"),
-        name: authForm.name.trim(),
-        email,
-        passwordHash: fingerprint(password),
-        role: "admin",
-        createdAt: new Date().toISOString(),
-      };
       const sessionUser: SessionUser = {
-        id: nextUser.id,
-        name: nextUser.name,
-        email: nextUser.email,
-        role: nextUser.role,
-        createdAt: nextUser.createdAt,
+        id: data.user.id,
+        name: data.user.name,
+        email: data.user.email,
+        role: data.user.role,
+        createdAt: data.user.created_at,
       };
-      writeStorage(STORAGE_KEYS.users, [...users, nextUser]);
+      const nextAuthSession: AuthSession = {
+        accessToken: data.access_token,
+        tokenType: "bearer",
+        expiresAt: asNumber(data.expires_at),
+        user: sessionUser,
+      };
+      writeStorage(STORAGE_KEYS.authSession, nextAuthSession);
       writeStorage(STORAGE_KEYS.session, sessionUser);
-      if (logs.length === 0) {
-        const stamped = stampSampleLogs();
-        writeStorage(STORAGE_KEYS.localLogs, stamped);
-        setLogs(stamped);
-      }
+      setAuthSession(nextAuthSession);
       setUser(sessionUser);
       setAuthForm({ name: "", email: "", password: "", confirmPassword: "" });
-      addToast("注册成功，已进入控制台", "success");
-      return;
+      addToast(authMode === "login" ? "登录成功" : "注册成功，已进入控制台", "success");
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : authMode === "login" ? "登录失败" : "注册失败", "error");
     }
-
-    const existing = users.find((item) => item.email === email && item.passwordHash === fingerprint(password));
-    if (!existing) {
-      addToast("账号或密码不正确", "error");
-      return;
-    }
-
-    const sessionUser: SessionUser = {
-      id: existing.id,
-      name: existing.name,
-      email: existing.email,
-      role: existing.role,
-      createdAt: existing.createdAt,
-    };
-    writeStorage(STORAGE_KEYS.session, sessionUser);
-    setUser(sessionUser);
-    addToast("登录成功", "success");
   };
 
   const enterDemo = () => {
@@ -962,13 +1410,17 @@ export default function Home() {
     const stamped = stampSampleLogs();
     writeStorage(STORAGE_KEYS.session, demoUser);
     writeStorage(STORAGE_KEYS.localLogs, stamped);
+    removeStorage(STORAGE_KEYS.authSession);
+    setAuthSession(null);
     setUser(demoUser);
     setLogs(stamped);
     addToast("已使用演示身份进入", "success");
   };
 
   const logout = () => {
+    removeStorage(STORAGE_KEYS.authSession);
     removeStorage(STORAGE_KEYS.session);
+    setAuthSession(null);
     setUser(null);
     setGatewayResult(null);
     addToast("已退出登录", "info");
@@ -977,10 +1429,48 @@ export default function Home() {
   const savePolicies = () => {
     writeStorage(STORAGE_KEYS.policies, policies);
     writeStorage(STORAGE_KEYS.tools, tools);
+    if (hasAdminAccess) {
+      void (async () => {
+        try {
+          await persistPoliciesToBackend(policies);
+          await persistToolsToBackend(tools);
+          await loadSecurityConfiguration();
+          addToast("策略已同步到后端", "success");
+        } catch (error) {
+          addToast(error instanceof Error ? error.message : "策略同步失败", "error");
+        }
+      })();
+      return;
+    }
     addToast("策略配置已保存", "success");
   };
 
   const resetPolicies = () => {
+    if (hasAdminAccess) {
+      void (async () => {
+        try {
+          const [policyResponse, toolResponse] = await Promise.all([
+            fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/policies/reset`, {
+              method: "POST",
+              headers: buildHeaders(settings, "admin", false, authSession),
+            }),
+            fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/tool-policies/reset`, {
+              method: "POST",
+              headers: buildHeaders(settings, "admin", false, authSession),
+            }),
+          ]);
+          const policyData = (await policyResponse.json().catch(() => ({}))) as { detail?: unknown };
+          const toolData = (await toolResponse.json().catch(() => ({}))) as { detail?: unknown };
+          if (!policyResponse.ok) throw new Error(detailText(policyData.detail) || `HTTP ${policyResponse.status}`);
+          if (!toolResponse.ok) throw new Error(detailText(toolData.detail) || `HTTP ${toolResponse.status}`);
+          await loadSecurityConfiguration();
+          addToast("策略已恢复为后端默认配置", "success");
+        } catch (error) {
+          addToast(error instanceof Error ? error.message : "策略重置失败", "error");
+        }
+      })();
+      return;
+    }
     setPolicies(DEFAULT_POLICIES);
     setTools(DEFAULT_TOOLS);
     writeStorage(STORAGE_KEYS.policies, DEFAULT_POLICIES);
@@ -1002,10 +1492,24 @@ export default function Home() {
       enabled: true,
       severity: policyDraft.severity,
       scope: policyDraft.scope.trim() || "Prompt",
+      pattern: policyDraft.pattern.trim() || policyDraft.name.trim(),
       custom: true,
     };
-    setPolicies((current) => [nextPolicy, ...current]);
-    setPolicyDraft({ name: "", description: "", severity: "medium", scope: "Prompt" });
+    const nextPolicies = [nextPolicy, ...policies];
+    setPolicies(nextPolicies);
+    writeStorage(STORAGE_KEYS.policies, nextPolicies);
+    if (hasAdminAccess) {
+      void (async () => {
+        try {
+          await persistPoliciesToBackend(nextPolicies);
+          await loadSecurityConfiguration();
+          addToast("策略已添加并写入后端", "success");
+        } catch (error) {
+          addToast(error instanceof Error ? error.message : "新增策略失败", "error");
+        }
+      })();
+    }
+    setPolicyDraft({ name: "", pattern: "", description: "", severity: "medium", scope: "Prompt" });
     setPolicyDraftOpen(false);
     addToast("策略已添加，记得保存", "success");
   };
@@ -1014,6 +1518,23 @@ export default function Home() {
     const next = policies.filter((policy) => policy.id !== policyId);
     setPolicies(next);
     writeStorage(STORAGE_KEYS.policies, next);
+    if (hasAdminAccess && /^\d+$/.test(policyId)) {
+      void (async () => {
+        try {
+          const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/policies/${policyId}`, {
+            method: "DELETE",
+            headers: buildHeaders(settings, "admin", false, authSession),
+          });
+          const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
+          if (!response.ok) throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+          await loadSecurityConfiguration();
+          addToast("策略已从后端删除", "success");
+        } catch (error) {
+          addToast(error instanceof Error ? error.message : "删除策略失败", "error");
+        }
+      })();
+      return;
+    }
     addToast("策略已删除", "info");
   };
 
@@ -1043,12 +1564,64 @@ export default function Home() {
   };
 
   const clearLocalData = () => {
-    removeStorage(STORAGE_KEYS.users);
+    removeStorage(STORAGE_KEYS.authSession);
     removeStorage(STORAGE_KEYS.session);
     removeStorage(STORAGE_KEYS.localLogs);
+    setAuthSession(null);
     setLogs([]);
     setUser(null);
-    addToast("本地账号和演示数据已清除", "info");
+    addToast("本地会话和演示数据已清除", "info");
+  };
+
+  const reviewApproval = async (approvalId: number, status: "approved" | "rejected") => {
+    if (!hasAdminAccess) {
+      addToast("请先登录管理员账号或配置 Admin API Key", "error");
+      return;
+    }
+
+    try {
+      const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/approvals/${approvalId}/review`, {
+        method: "POST",
+        headers: buildHeaders(settings, "admin", true, authSession),
+        body: JSON.stringify({
+          status,
+          review_comment: status === "approved" ? "Approved from console" : "Rejected from console",
+        }),
+      });
+      const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
+      if (!response.ok) throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      await loadOperations();
+      addToast(status === "approved" ? "审批已通过" : "审批已拒绝", "success");
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "审批操作失败", "error");
+    }
+  };
+
+  const replaySelectedRequest = async (requestId: string) => {
+    if (!hasAdminAccess) {
+      addToast("请先登录管理员账号或配置 Admin API Key", "error");
+      return;
+    }
+
+    try {
+      const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/replays`, {
+        method: "POST",
+        headers: buildHeaders(settings, "admin", true, authSession),
+        body: JSON.stringify({ request_id: requestId }),
+      });
+      const data = (await response.json().catch(() => ({}))) as { item?: ReplayItem; detail?: unknown };
+      if (!response.ok) throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      await loadOperations();
+      setGatewayResult({
+        ok: data.item?.verdict === "allowed",
+        title: "请求回放已完成",
+        message: `回放结果：${data.item?.verdict === "allowed" ? "通过" : data.item?.verdict === "blocked" ? "拦截" : data.item?.verdict ?? "unknown"}`,
+        detail: data.item,
+      });
+      addToast("请求回放已完成", "success");
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "请求回放失败", "error");
+    }
   };
 
   const copyText = async (value: string, successMessage: string) => {
@@ -1119,7 +1692,7 @@ export default function Home() {
     const log: InterceptLog = {
       id: -Date.now(),
       timestamp: new Date().toISOString(),
-      threat_type: decision.layer === "tool_permission" ? "Unauthorized Tool Use" : "Prompt Injection",
+      threat_type: threatTypeFromDecision(decision),
       action_taken: decision.allowed ? "Allowed" : "Blocked",
       original_prompt: prompt || gatewayForm.externalContext || "Local preflight",
       details: {
@@ -1128,6 +1701,8 @@ export default function Home() {
         reason: decision.reason,
         risk_score: decision.riskScore,
         matched_rules: decision.matchedRules,
+        category: decision.category,
+        recommended_action: decision.recommendedAction,
         ...extra,
       },
     };
@@ -1156,9 +1731,8 @@ export default function Home() {
     }
 
     const decision = localInspect(gatewayForm.prompt, gatewayForm.externalContext, gatewayForm.toolName, gatewayForm.parameters);
-    const hasClientKey = settings.clientApiKey.trim() || settings.adminApiKey.trim();
 
-    if (!hasClientKey) {
+    if (!hasGatewayAccess) {
       const log = appendLocalDecisionLog(decision, gatewayForm.prompt, {
         local_preflight: true,
         external_context: gatewayForm.externalContext,
@@ -1168,8 +1742,8 @@ export default function Home() {
         ok: decision.allowed,
         title: decision.allowed ? "本地预检通过" : "本地预检已拦截",
         message: decision.allowed
-          ? "未配置 API Key，因此仅执行本地风险预检；配置 Key 后可请求后端网关。"
-          : "未配置 API Key，已使用前端预检模拟 Shadow Agent 的间接提示词注入拦截。",
+          ? "当前未登录且未配置 API Key，因此仅执行本地风险预检；登录后可请求后端网关。"
+          : "当前未登录且未配置 API Key，已使用前端预检模拟 Shadow Agent 的间接提示词注入拦截。",
         detail: log.details,
       });
       addToast(decision.allowed ? "本地预检通过" : "本地预检已拦截", decision.allowed ? "success" : "error");
@@ -1182,9 +1756,50 @@ export default function Home() {
     const timer = window.setTimeout(() => controller.abort(), 10000);
 
     try {
+      const analyzeResponse = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/analyze`, {
+        method: "POST",
+        headers: buildHeaders(settings, "client", true, authSession),
+        signal: controller.signal,
+        body: JSON.stringify({
+          prompt: gatewayForm.prompt || "请处理外部上下文",
+          external_context: gatewayForm.externalContext || null,
+          tool_name: gatewayForm.toolName || null,
+          parameters,
+        }),
+      });
+      const analyzeData = (await analyzeResponse.json().catch(() => ({}))) as AnalyzeResponse & { detail?: unknown };
+      if (!analyzeResponse.ok) {
+        throw new Error(detailText(analyzeData.detail) || `HTTP ${analyzeResponse.status}`);
+      }
+      if (analyzeData.decision === "blocked") {
+        const firstBlocked = analyzeData.blocked_checks?.[0] ?? {};
+        const blockedDecision: LocalDecision = {
+          allowed: false,
+          riskScore: asNumber(analyzeData.risk_score, decision.riskScore),
+          reason: friendlyDecisionReason(detailText(firstBlocked.reason), detailText(firstBlocked.category) || analyzeData.category),
+          matchedRules: Array.isArray(firstBlocked.matched_rules) ? firstBlocked.matched_rules.map(detailText) : decision.matchedRules,
+          layer: detailText(firstBlocked.name) || decision.layer,
+          category: detailText(firstBlocked.category) || analyzeData.category,
+          recommendedAction: analyzeData.recommended_action,
+        };
+        appendLocalDecisionLog(blockedDecision, gatewayForm.prompt, {
+          analyze_detail: analyzeData,
+          external_context: gatewayForm.externalContext,
+          tool_name: gatewayForm.toolName || undefined,
+        });
+        setGatewayResult({
+          ok: false,
+          title: "后端预检已拦截",
+          message: blockedDecision.reason,
+          detail: analyzeData,
+        });
+        addToast("后端预检已拦截", "error");
+        return;
+      }
+
       const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/chat/completions`, {
         method: "POST",
-        headers: buildHeaders(settings, "client", true),
+        headers: buildHeaders(settings, "client", true, authSession),
         signal: controller.signal,
         body: JSON.stringify({
           model: gatewayForm.model,
@@ -1201,7 +1816,7 @@ export default function Home() {
         const blockedDecision: LocalDecision = {
           allowed: false,
           riskScore: asNumber(detail.risk_score, decision.riskScore),
-          reason: detailText(detail.reason) || "后端网关已拒绝请求。",
+          reason: friendlyDecisionReason(detailText(detail.reason), detailText(detail.category)),
           matchedRules: Array.isArray(detail.matched_rules) ? detail.matched_rules.map(detailText) : decision.matchedRules,
           layer: detailText(detail.layer) || decision.layer,
         };
@@ -1258,14 +1873,14 @@ export default function Home() {
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(var(--page-grid)_1px,transparent_1px),linear-gradient(90deg,var(--page-grid)_1px,transparent_1px)] bg-[size:64px_64px] opacity-25" />
       <div className="relative mx-auto grid min-h-screen w-full max-w-6xl items-center gap-8 px-5 py-10 lg:grid-cols-[minmax(0,1fr)_440px]">
         <section>
-          <div className="inline-flex items-center gap-2 rounded-md border border-teal-200/20 bg-teal-300/10 px-3 py-1 text-sm text-teal-100 backdrop-blur-[18px]">
+          <div className="inline-flex items-center gap-2 rounded-md border border-teal-200/20 bg-teal-300/10 px-3 py-1 text-sm text-[var(--tone-accent-text)] backdrop-blur-[18px]">
             <Shield className="h-4 w-4" aria-hidden />
             Shadow Agent Runtime Security
           </div>
-          <h1 className="mt-5 max-w-3xl text-4xl font-semibold leading-tight text-white sm:text-6xl">
+          <h1 className="mt-5 max-w-3xl text-4xl font-semibold leading-tight text-[var(--text-primary)] sm:text-6xl">
             把不可信上下文挡在 Agent 执行链路之外
           </h1>
-          <p className="mt-5 max-w-2xl text-base leading-7 text-zinc-300">
+          <p className="mt-5 max-w-2xl text-base leading-7 text-[var(--text-secondary)]">
             控制台已经内置登录、注册、日志审计、策略配置、网关测试和本地预检。进入后可以直接点击各个模块验证交互。
           </p>
           <div className="mt-7 grid max-w-3xl gap-3 sm:grid-cols-3">
@@ -1275,8 +1890,8 @@ export default function Home() {
               ["审计留痕", "请求 ID 与规则命中追踪"],
             ].map(([title, body]) => (
               <div key={title} className={`${glassPanelSoftClass} p-4`}>
-                <div className="text-sm font-semibold text-white">{title}</div>
-                <div className="mt-1 text-xs leading-5 text-zinc-400">{body}</div>
+                <div className="text-sm font-semibold text-[var(--text-primary)]">{title}</div>
+                <div className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">{body}</div>
               </div>
             ))}
           </div>
@@ -1285,12 +1900,14 @@ export default function Home() {
         <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
           <PanelGlow />
           <div className="relative">
-            <div className="flex rounded-md border border-white/[0.08] bg-black/20 p-1">
+            <div className="flex rounded-md border border-white/[0.08] bg-[var(--surface-raised)] p-1">
               <button
                 type="button"
                 onClick={() => setAuthMode("login")}
                 className={`min-h-10 flex-1 rounded-md text-sm transition ${
-                  authMode === "login" ? "bg-teal-300 text-zinc-950" : "text-zinc-400 hover:bg-white/[0.06] hover:text-white"
+                  authMode === "login"
+                    ? "bg-teal-300 text-zinc-950 shadow-[0_0_22px_rgba(45,212,191,0.14)]"
+                    : "text-[var(--text-secondary)] hover:bg-white/[0.06] hover:text-[var(--text-primary)]"
                 }`}
               >
                 登录
@@ -1299,7 +1916,9 @@ export default function Home() {
                 type="button"
                 onClick={() => setAuthMode("register")}
                 className={`min-h-10 flex-1 rounded-md text-sm transition ${
-                  authMode === "register" ? "bg-teal-300 text-zinc-950" : "text-zinc-400 hover:bg-white/[0.06] hover:text-white"
+                  authMode === "register"
+                    ? "bg-teal-300 text-zinc-950 shadow-[0_0_22px_rgba(45,212,191,0.14)]"
+                    : "text-[var(--text-secondary)] hover:bg-white/[0.06] hover:text-[var(--text-primary)]"
                 }`}
               >
                 注册
@@ -1309,7 +1928,7 @@ export default function Home() {
             <form onSubmit={handleAuth} className="mt-5 space-y-4">
               {authMode === "register" ? (
                 <label className="block">
-                  <span className="mb-2 block text-sm text-zinc-300">姓名</span>
+                  <span className="mb-2 block text-sm text-[var(--text-secondary)]">姓名</span>
                   <input
                     value={authForm.name}
                     onChange={(event) => setAuthForm((current) => ({ ...current, name: event.target.value }))}
@@ -1319,7 +1938,7 @@ export default function Home() {
                 </label>
               ) : null}
               <label className="block">
-                <span className="mb-2 block text-sm text-zinc-300">邮箱</span>
+                <span className="mb-2 block text-sm text-[var(--text-secondary)]">邮箱</span>
                 <input
                   value={authForm.email}
                   onChange={(event) => setAuthForm((current) => ({ ...current, email: event.target.value }))}
@@ -1329,7 +1948,7 @@ export default function Home() {
                 />
               </label>
               <label className="block">
-                <span className="mb-2 block text-sm text-zinc-300">密码</span>
+                <span className="mb-2 block text-sm text-[var(--text-secondary)]">密码</span>
                 <input
                   value={authForm.password}
                   onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
@@ -1340,7 +1959,7 @@ export default function Home() {
               </label>
               {authMode === "register" ? (
                 <label className="block">
-                  <span className="mb-2 block text-sm text-zinc-300">确认密码</span>
+                  <span className="mb-2 block text-sm text-[var(--text-secondary)]">确认密码</span>
                   <input
                     value={authForm.confirmPassword}
                     onChange={(event) => setAuthForm((current) => ({ ...current, confirmPassword: event.target.value }))}
@@ -1361,7 +1980,7 @@ export default function Home() {
               使用演示数据进入
             </button>
 
-            <div className="mt-5 rounded-md border border-white/[0.08] bg-black/20 p-3">
+            <div className="mt-5 rounded-md border border-white/[0.08] bg-[var(--surface-raised)] p-3">
               <GlassInterceptLogCard log={SAMPLE_LOGS[0]} compact onSelect={enterDemo} />
             </div>
           </div>
@@ -1432,6 +2051,25 @@ export default function Home() {
           </div>
 
           <div className="space-y-4">
+            <section className={`${glassPanelSoftClass} ${glassPanelMotionClass} p-5`}>
+              <PanelGlow />
+              <h2 className="relative text-base font-semibold text-white">审计运营</h2>
+              <div className="relative mt-4 space-y-3 text-sm">
+                <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
+                  <span className="text-zinc-400">待审批</span>
+                  <span className="font-medium text-white">{approvals.length}</span>
+                </div>
+                <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
+                  <span className="text-zinc-400">告警事件</span>
+                  <span className="font-medium text-white">{alerts.length}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400">回放记录</span>
+                  <span className="font-medium text-white">{replays.length}</span>
+                </div>
+              </div>
+            </section>
+
             <section className={`${glassPanelSoftClass} ${glassPanelMotionClass} p-5`}>
               <PanelGlow />
               <div className="relative flex items-center justify-between">
@@ -1607,19 +2245,28 @@ export default function Home() {
             <PanelGlow />
             <div className="relative grid gap-3 md:grid-cols-2">
               <label>
-                <span className="mb-2 block text-sm text-zinc-300">策略名称</span>
+                <span className="mb-2 block text-sm text-[var(--text-secondary)]">策略名称</span>
                 <input value={policyDraft.name} onChange={(event) => setPolicyDraft((current) => ({ ...current, name: event.target.value }))} className={inputBase} placeholder="自定义审计规则" />
               </label>
               <label>
-                <span className="mb-2 block text-sm text-zinc-300">作用域</span>
+                <span className="mb-2 block text-sm text-[var(--text-secondary)]">作用域</span>
                 <input value={policyDraft.scope} onChange={(event) => setPolicyDraft((current) => ({ ...current, scope: event.target.value }))} className={inputBase} placeholder="Prompt / Tool / Audit" />
               </label>
               <label className="md:col-span-2">
-                <span className="mb-2 block text-sm text-zinc-300">描述</span>
+                <span className="mb-2 block text-sm text-[var(--text-secondary)]">Pattern / Regex</span>
+                <input
+                  value={policyDraft.pattern}
+                  onChange={(event) => setPolicyDraft((current) => ({ ...current, pattern: event.target.value }))}
+                  className={`${inputBase} font-mono`}
+                  placeholder="例如：\\b(api[_-]?key|token|secret)\\b"
+                />
+              </label>
+              <label className="md:col-span-2">
+                <span className="mb-2 block text-sm text-[var(--text-secondary)]">描述</span>
                 <input value={policyDraft.description} onChange={(event) => setPolicyDraft((current) => ({ ...current, description: event.target.value }))} className={inputBase} placeholder="这条规则要保护的边界" />
               </label>
               <label>
-                <span className="mb-2 block text-sm text-zinc-300">风险级别</span>
+                <span className="mb-2 block text-sm text-[var(--text-secondary)]">风险级别</span>
                 <GlassSelect
                   value={policyDraft.severity}
                   onChange={(next) => setPolicyDraft((current) => ({ ...current, severity: next as PolicyRule["severity"] }))}
@@ -1732,11 +2379,11 @@ export default function Home() {
         <PanelGlow />
         <div className="relative grid gap-4 md:grid-cols-2">
           <label>
-            <span className="mb-2 block text-sm text-zinc-300">模型</span>
+            <span className="mb-2 block text-sm text-[var(--text-secondary)]">模型</span>
             <input value={gatewayForm.model} onChange={(event) => setGatewayForm((current) => ({ ...current, model: event.target.value }))} className={inputBase} />
           </label>
           <label>
-            <span className="mb-2 block text-sm text-zinc-300">工具名</span>
+            <span className="mb-2 block text-sm text-[var(--text-secondary)]">工具名</span>
             <GlassSelect
               value={gatewayForm.toolName}
               onChange={(next) => setGatewayForm((current) => ({ ...current, toolName: next }))}
@@ -1758,12 +2405,12 @@ export default function Home() {
         </div>
 
         <label className="relative block">
-          <span className="mb-2 block text-sm text-zinc-300">用户 Prompt</span>
+          <span className="mb-2 block text-sm text-[var(--text-secondary)]">用户 Prompt</span>
           <textarea value={gatewayForm.prompt} onChange={(event) => setGatewayForm((current) => ({ ...current, prompt: event.target.value }))} className={`${inputBase} min-h-32 resize-y py-3 leading-6`} placeholder="输入用户请求" />
         </label>
 
         <label className="relative block">
-          <span className="mb-2 block text-sm text-zinc-300">外部上下文</span>
+          <span className="mb-2 block text-sm text-[var(--text-secondary)]">外部上下文</span>
           <textarea
             value={gatewayForm.externalContext}
             onChange={(event) => setGatewayForm((current) => ({ ...current, externalContext: event.target.value }))}
@@ -1773,7 +2420,7 @@ export default function Home() {
         </label>
 
         <label className="relative block">
-          <span className="mb-2 block text-sm text-zinc-300">工具参数 JSON</span>
+          <span className="mb-2 block text-sm text-[var(--text-secondary)]">工具参数 JSON</span>
           <textarea value={gatewayForm.parameters} onChange={(event) => setGatewayForm((current) => ({ ...current, parameters: event.target.value }))} className={`${inputBase} min-h-28 resize-y py-3 font-mono leading-6`} spellCheck={false} />
         </label>
 
@@ -1818,6 +2465,16 @@ export default function Home() {
                   {gatewayResult.title}
                 </div>
                 <p className="mt-2 text-sm leading-6 opacity-90">{gatewayResult.message}</p>
+                {gatewayResult.detail && typeof gatewayResult.detail === "object" && "risk_score" in gatewayResult.detail ? (
+                  <div
+                    className={`mt-3 inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-medium ${riskTone(
+                      asNumber((gatewayResult.detail as Record<string, unknown>).risk_score)
+                    )}`}
+                  >
+                    {riskLabel(asNumber((gatewayResult.detail as Record<string, unknown>).risk_score))} /{" "}
+                    {Math.round(asNumber((gatewayResult.detail as Record<string, unknown>).risk_score) * 100)}
+                  </div>
+                ) : null}
               </div>
               {gatewayResult.detail ? <pre className={`${glassPanelSoftClass} mt-4 max-h-[360px] overflow-auto p-4 text-xs leading-5 text-zinc-300`}>{JSON.stringify(gatewayResult.detail, null, 2)}</pre> : null}
             </div>
@@ -1850,9 +2507,9 @@ export default function Home() {
               <span className="font-medium text-zinc-200">{health.message}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-zinc-400">客户端 Key</span>
-              <span className={settings.clientApiKey || settings.adminApiKey ? "text-emerald-200" : "text-amber-200"}>
-                {settings.clientApiKey || settings.adminApiKey ? "已配置" : "未配置"}
+              <span className="text-zinc-400">鉴权状态</span>
+              <span className={hasGatewayAccess ? "text-emerald-200" : "text-amber-200"}>
+                {hasConsoleToken ? "已登录 Token" : settings.clientApiKey || settings.adminApiKey ? "API Key 可用" : "未配置"}
               </span>
             </div>
           </div>
@@ -1872,7 +2529,7 @@ export default function Home() {
         <div className="relative flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h2 className="text-base font-semibold text-white">接口配置</h2>
-            <p className="mt-1 text-sm text-zinc-400">API Key 仅保存在当前浏览器本地。</p>
+            <p className="mt-1 text-sm text-zinc-400">登录后会自动使用后台签发的 Token；API Key 仅作为兼容方式保存在当前浏览器本地。</p>
           </div>
           <button type="button" onClick={() => setKeysVisible((value) => !value)} className={buttonClass("secondary")}>
             {keysVisible ? <EyeOff className="h-4 w-4" aria-hidden /> : <Eye className="h-4 w-4" aria-hidden />}
@@ -1881,24 +2538,36 @@ export default function Home() {
         </div>
 
         <label className="relative block">
-          <span className="mb-2 block text-sm text-zinc-300">后端 API Base</span>
+          <span className="mb-2 block text-sm text-[var(--text-secondary)]">后端 API Base</span>
           <input value={settings.apiBase} onChange={(event) => setSettings((current) => ({ ...current, apiBase: event.target.value }))} className={inputBase} placeholder="http://localhost:8000" />
         </label>
 
         <div className="relative grid gap-4 md:grid-cols-2">
           <label className="block">
-            <span className="mb-2 block text-sm text-zinc-300">Admin API Key</span>
+            <span className="mb-2 block text-sm text-[var(--text-secondary)]">Admin API Key（兼容备用）</span>
             <input value={settings.adminApiKey} onChange={(event) => setSettings((current) => ({ ...current, adminApiKey: event.target.value }))} className={inputBase} type={keysVisible ? "text" : "password"} autoComplete="off" />
           </label>
           <label className="block">
-            <span className="mb-2 block text-sm text-zinc-300">Client API Key</span>
+            <span className="mb-2 block text-sm text-[var(--text-secondary)]">Client API Key（兼容备用）</span>
             <input value={settings.clientApiKey} onChange={(event) => setSettings((current) => ({ ...current, clientApiKey: event.target.value }))} className={inputBase} type={keysVisible ? "text" : "password"} autoComplete="off" />
           </label>
         </div>
 
+        <div className={`${glassPanelSoftClass} relative space-y-2 p-4 text-sm text-zinc-300`}>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-zinc-400">当前会话</span>
+            <span className={hasConsoleToken ? "text-emerald-200" : "text-zinc-200"}>
+              {hasConsoleToken ? "后台 Token 已生效" : "未登录 Token"}
+            </span>
+          </div>
+          <p className="text-xs leading-6 text-zinc-400">
+            如果你已经通过登录进入控制台，下面的 Key 可以留空。只有在需要兼容脚本调用或未登录联调时，才需要填写 API Key。
+          </p>
+        </div>
+
         <div className="relative grid gap-4 md:grid-cols-2">
           <label className="block">
-            <span className="mb-2 block text-sm text-zinc-300">刷新间隔（秒）</span>
+            <span className="mb-2 block text-sm text-[var(--text-secondary)]">刷新间隔（秒）</span>
             <input value={settings.refreshInterval} onChange={(event) => setSettings((current) => ({ ...current, refreshInterval: Number(event.target.value) }))} className={inputBase} min={10} type="number" />
           </label>
           <div className={`${glassPanelSoftClass} grid gap-3 p-4`}>
@@ -2031,8 +2700,8 @@ export default function Home() {
               <span className="text-zinc-200">{logs.filter((log) => log.id < 0).length}</span>
             </div>
             <div className="flex justify-between">
-              <span>注册账号</span>
-              <span className="text-zinc-200">{readStorage<StoredUser[]>(STORAGE_KEYS.users, []).length}</span>
+              <span>本地会话</span>
+              <span className="text-zinc-200">{hasConsoleToken ? "Token 登录" : user ? "演示模式" : "无"}</span>
             </div>
           </div>
           <button type="button" onClick={clearLocalData} className={`${buttonClass("danger")} relative mt-5 w-full`}>
@@ -2196,7 +2865,7 @@ export default function Home() {
                   ["风险评分", asNumber(selectedLog.details.risk_score).toFixed(2)],
                   ["命中层", detailText(selectedLog.details.layer)],
                   ["请求 ID", detailText(selectedLog.details.request_id)],
-                  ["原因", detailText(selectedLog.details.reason)],
+                  ["原因", logReasonText(selectedLog.details)],
                 ].map(([label, value]) => (
                   <div key={label} className={`${glassPanelSoftClass} p-3`}>
                     <div className="text-xs text-zinc-500">{label}</div>
@@ -2210,6 +2879,26 @@ export default function Home() {
               </div>
               <pre className={`${glassPanelSoftClass} mt-4 max-h-80 overflow-auto p-4 text-xs leading-5 text-zinc-300`}>{JSON.stringify(selectedLog.details, null, 2)}</pre>
               <div className="mt-4 flex flex-wrap justify-end gap-2">
+                {(() => {
+                  const requestId = detailText(selectedLog.details.request_id);
+                  const pendingApproval = approvals.find((item) => item.request_id === requestId && item.status === "pending");
+                  return pendingApproval ? (
+                    <>
+                      <button type="button" onClick={() => void reviewApproval(pendingApproval.id, "approved")} className={buttonClass("secondary")}>
+                        <Check className="h-4 w-4" aria-hidden />
+                        审批通过
+                      </button>
+                      <button type="button" onClick={() => void reviewApproval(pendingApproval.id, "rejected")} className={buttonClass("danger")}>
+                        <X className="h-4 w-4" aria-hidden />
+                        拒绝
+                      </button>
+                    </>
+                  ) : null;
+                })()}
+                <button type="button" onClick={() => void replaySelectedRequest(detailText(selectedLog.details.request_id))} className={buttonClass("secondary")}>
+                  <Play className="h-4 w-4" aria-hidden />
+                  回放检测
+                </button>
                 <button type="button" onClick={() => void copyText(detailText(selectedLog.details.request_id), "请求 ID 已复制")} className={buttonClass("secondary")}>
                   <Copy className="h-4 w-4" aria-hidden />
                   复制请求 ID

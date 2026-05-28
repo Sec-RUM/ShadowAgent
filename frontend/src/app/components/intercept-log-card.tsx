@@ -56,6 +56,54 @@ function detailText(value: unknown): string {
   return "";
 }
 
+function categoryLabel(category: string): string {
+  switch (category) {
+    case "prompt_injection":
+      return "提示词注入";
+    case "tool_permission":
+      return "未授权工具调用";
+    case "secret_exfiltration":
+      return "敏感信息外传";
+    case "sensitive_file_access":
+      return "敏感文件访问";
+    case "internal_network_access":
+      return "内网或元数据访问";
+    case "credential_access":
+      return "凭据访问";
+    case "command_execution":
+      return "危险命令执行";
+    case "destructive_action":
+      return "破坏性操作";
+    case "privilege_escalation":
+      return "权限提升";
+    case "security_evasion":
+      return "安全规避";
+    case "persistence":
+      return "持久化行为";
+    default:
+      return "";
+  }
+}
+
+function friendlyReason(reason: string, category: string): string {
+  switch (reason) {
+    case "dangerous_behavior_detected":
+      return categoryLabel(category) ? `${categoryLabel(category)}，请求已被阻断。` : "检测到高风险危险行为。";
+    case "prompt_injection_detected":
+      return "检测到提示词注入迹象。";
+    case "blacklisted_prompt_pattern_detected":
+      return "命中了黑名单提示词规则。";
+    case "tool_not_permitted":
+      return "当前工具不在允许名单中。";
+    case "admin_permission_required":
+      return "该操作需要管理员权限。";
+    case "admin_approval_required":
+      return "该操作需要管理员审批。";
+    default:
+      return reason;
+  }
+}
+
 function asNumber(value: unknown, fallback = 0): number {
   const next = Number(value);
   return Number.isFinite(next) ? next : fallback;
@@ -110,7 +158,7 @@ function riskMeta(score: number) {
 
 function buildTooltip(log: InterceptLogCardData, fallback: string): string {
   const details = log.details;
-  const reason = detailText(details.reason) || detailText(details.block_reason) || fallback;
+  const reason = friendlyReason(detailText(details.reason), detailText(details.category)) || detailText(details.block_reason) || fallback;
   const rules = detailText(details.matched_rules) || detailText(details.rule_name) || detailText(details.triggered_rule);
   const excerpt = detailText(details.source_excerpt) || detailText(details.evidence);
   const layer = detailText(details.layer);
@@ -200,7 +248,7 @@ export function GlassInterceptLogCard({
     >
       <div className={`pointer-events-none absolute inset-x-8 -top-px h-px bg-gradient-to-r ${meta.glow}`} />
       <div className="pointer-events-none absolute -inset-px rounded-md bg-[radial-gradient(circle_at_18%_0%,rgba(20,184,166,0.17),transparent_38%),radial-gradient(circle_at_96%_10%,rgba(244,63,94,0.12),transparent_34%)] opacity-70 transition group-hover:opacity-100" />
-      <div className="relative rounded-[7px] bg-[var(--log-card-inner)] px-4 py-4 ring-1 ring-white/[0.035] sm:px-5">
+      <div className="relative rounded-[7px] bg-[var(--log-card-inner)] px-4 py-4 ring-1 ring-[var(--panel-border-soft)] sm:px-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -208,23 +256,23 @@ export function GlassInterceptLogCard({
                 <ShieldAlert className="h-3.5 w-3.5" aria-hidden />
                 {log.threat_type || "Prompt Injection"}
               </span>
-              <span className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.045] px-2 py-1 font-mono text-[11px] text-zinc-300">
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.045] px-2 py-1 font-mono text-[11px] text-[var(--text-secondary)]">
                 <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
                 {layer}
               </span>
-              <span className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.035] px-2 py-1 text-[11px] text-zinc-400">
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.035] px-2 py-1 text-[11px] text-[var(--text-muted)]">
                 <Clock className="h-3.5 w-3.5" aria-hidden />
                 {formatTime(log.timestamp)}
               </span>
             </div>
 
-            <p className={`mt-3 max-w-4xl overflow-hidden text-ellipsis text-zinc-100 ${compact ? "line-clamp-2 text-sm leading-6" : "line-clamp-3 text-sm leading-6"}`}>
+            <p className={`mt-3 max-w-4xl overflow-hidden text-ellipsis text-[var(--text-primary)] ${compact ? "line-clamp-2 text-sm leading-6" : "line-clamp-3 text-sm leading-6"}`}>
               {log.original_prompt || "No prompt payload captured."}
             </p>
 
-            <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
-              <span className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-black/20 px-2.5 py-1 font-mono">
-                <Fingerprint className="h-3.5 w-3.5 text-teal-200" aria-hidden />
+            <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-[var(--surface-raised)] px-2.5 py-1 font-mono text-[var(--text-secondary)]">
+                <Fingerprint className="h-3.5 w-3.5 text-[var(--tone-accent-text)]" aria-hidden />
                 <span className="max-w-[15rem] truncate" title={requestId}>{requestId}</span>
               </span>
               <span className="inline-flex items-center gap-1.5 rounded-md border border-rose-200/18 bg-rose-500/[0.075] px-2.5 py-1 text-[var(--tone-danger-text)]">
@@ -238,7 +286,7 @@ export function GlassInterceptLogCard({
                     event.stopPropagation();
                     onCopyRequestId(requestId);
                   }}
-                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.04] px-2 text-zinc-300 transition hover:border-teal-200/25 hover:bg-teal-300/[0.08] hover:text-[var(--tone-accent-text)] focus:outline-none focus:ring-2 focus:ring-teal-200/40"
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.04] px-2 text-[var(--text-secondary)] transition hover:border-teal-200/25 hover:bg-teal-300/[0.08] hover:text-[var(--tone-accent-text)] focus:outline-none focus:ring-2 focus:ring-teal-200/40"
                   aria-label={`复制请求 ID ${requestId}`}
                   title="复制请求 ID"
                 >
