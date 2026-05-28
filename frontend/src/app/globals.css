@@ -99,10 +99,10 @@
     --surface-raised: rgb(0 0 0 / 0.2);
     --surface-elevated: rgb(255 255 255 / 0.045);
     --log-card-inner: rgb(9 13 18 / 0.72);
-    --tooltip-bg: rgb(12 17 23 / 0.95);
-    --tooltip-border: rgb(255 255 255 / 0.12);
+    --tooltip-bg: rgb(15 21 29 / 0.985);
+    --tooltip-border: rgb(148 163 184 / 0.3);
     --tooltip-fg: #e6edf5;
-    --tooltip-shadow: 0 22px 70px rgb(0 0 0 / 0.5), 0 0 26px rgb(20 184 166 / 0.12);
+    --tooltip-shadow: 0 26px 80px rgb(0 0 0 / 0.58), 0 0 28px rgb(20 184 166 / 0.14);
     --scroll-track: rgb(9 13 18 / 0.92);
     --scroll-thumb-a: rgb(45 212 191 / 0.42);
     --scroll-thumb-b: rgb(244 63 94 / 0.26);
@@ -153,10 +153,10 @@ html[data-theme="dark"] {
   --surface-raised: rgb(0 0 0 / 0.2);
   --surface-elevated: rgb(255 255 255 / 0.045);
   --log-card-inner: rgb(9 13 18 / 0.72);
-  --tooltip-bg: rgb(12 17 23 / 0.95);
-  --tooltip-border: rgb(255 255 255 / 0.12);
+  --tooltip-bg: rgb(15 21 29 / 0.985);
+  --tooltip-border: rgb(148 163 184 / 0.3);
   --tooltip-fg: #e6edf5;
-  --tooltip-shadow: 0 22px 70px rgb(0 0 0 / 0.5), 0 0 26px rgb(20 184 166 / 0.12);
+  --tooltip-shadow: 0 26px 80px rgb(0 0 0 / 0.58), 0 0 28px rgb(20 184 166 / 0.14);
   --scroll-track: rgb(9 13 18 / 0.92);
   --scroll-thumb-a: rgb(45 212 191 / 0.42);
   --scroll-thumb-b: rgb(244 63 94 / 0.26);
