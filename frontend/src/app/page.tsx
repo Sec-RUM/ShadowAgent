@@ -679,31 +679,123 @@ function stampSampleLogs() {
 }
 
 function localInspect(prompt: string, externalContext: string, toolName: string, parameters: string): LocalDecision {
-  const combined = [prompt, externalContext, toolName, parameters].join("\n");
-  const rules = [
-    { name: "ignore_previous_instructions", pattern: /ignore\s+(all\s+)?(previous|prior|above)\s+instructions?/i, score: 0.94 },
-    { name: "reveal_hidden_prompt", pattern: /(reveal|print|show|dump).{0,32}(system|developer|hidden).{0,16}(prompt|instruction|message)/i, score: 0.92 },
-    { name: "chinese_override_instruction", pattern: /忽略.{0,12}(以上|之前|前述|系统).{0,12}(指令|规则|要求)/i, score: 0.9 },
-    { name: "tool_escalation", pattern: /(execute_shell|read_file|admin|requires_admin|rm\s+-rf|powershell|cmd\.exe)/i, score: 0.86 },
-    { name: "data_exfiltration", pattern: /(api[_-]?key|token|secret|password|system prompt).{0,60}(webhook|send|upload|exfiltrate|外发|发送)/i, score: 0.91 },
+  type LocalRule = {
+    name: string;
+    pattern: RegExp;
+    score: number;
+    category: NonNullable<LocalDecision["category"]>;
+    reason: string;
+    externalReason?: string;
+  };
+
+  type MatchedLocalRule = Omit<LocalRule, "pattern"> & {
+    layer: string;
+  };
+
+  const rules: LocalRule[] = [
+    {
+      name: "ignore_previous_instructions",
+      pattern: /ignore\s+(all\s+)?(previous|prior|above)\s+instructions?/i,
+      score: 0.94,
+      category: "prompt_injection",
+      reason: "用户输入命中提示词注入风险规则。",
+      externalReason: "不可信外部上下文中发现覆盖指令，疑似间接提示词注入。",
+    },
+    {
+      name: "reveal_hidden_prompt",
+      pattern: /(reveal|print|show|dump).{0,32}(system|developer|hidden).{0,16}(prompt|instruction|message)/i,
+      score: 0.92,
+      category: "prompt_injection",
+      reason: "检测到试图泄露系统提示词或隐藏指令的请求。",
+      externalReason: "外部上下文中出现了泄露系统提示词的诱导内容，已视为高风险。",
+    },
+    {
+      name: "chinese_override_instruction",
+      pattern: /忽略.{0,12}(以上|之前|前述|系统).{0,12}(指令|规则|要求)/i,
+      score: 0.9,
+      category: "prompt_injection",
+      reason: "检测到覆盖系统规则的提示词注入语句。",
+      externalReason: "不可信外部上下文中发现覆盖系统规则的语句，疑似间接提示词注入。",
+    },
+    {
+      name: "tool_escalation",
+      pattern: /(execute_shell|read_file|run_as_admin|administrator|sudo|requires_admin[^,\n]{0,8}true|rm\s+-rf|powershell|cmd\.exe)/i,
+      score: 0.86,
+      category: "privilege_escalation",
+      reason: "检测到越权执行或高危工具升级意图。",
+    },
+    {
+      name: "data_exfiltration",
+      pattern: /(api[_-]?key|token|secret|password|system prompt).{0,60}(webhook|send|upload|exfiltrate|外发|发送)/i,
+      score: 0.91,
+      category: "secret_exfiltration",
+      reason: "检测到敏感信息外传意图。",
+      externalReason: "不可信外部上下文中出现敏感信息外传指令，已按高风险处理。",
+    },
+    {
+      name: "credential_disclosure_request",
+      pattern: /(give|tell|show|reveal|print|display|list|provide|return).{0,48}(api[_-\s]?key|access token|refresh token|bearer token|passwords?|credentials?|tokens?|secret(?: key)?|private key)|(api[_-\s]?key|access token|refresh token|bearer token|passwords?|credentials?|tokens?|secret(?: key)?|private key).{0,48}(give|tell|show|reveal|print|display|list|provide|return)/i,
+      score: 0.95,
+      category: "credential_access",
+      reason: "检测到索要密码、令牌或密钥等凭据的高风险请求。",
+      externalReason: "不可信外部上下文中出现索要凭据的内容，已按凭据访问风险拦截。",
+    },
+    {
+      name: "credential_disclosure_request_zh",
+      pattern: /(给我|告诉我|显示|展示|列出|提供|返回|打印|发我).{0,24}(管理员|超级管理员|所有用户|全部用户|全部账号|所有账号|其他用户|root|admin)?.{0,16}(密码|口令|凭据|账号密码|访问令牌|刷新令牌|令牌|API密钥|API key|密钥|秘钥|私钥)|(密码|口令|凭据|账号密码|访问令牌|刷新令牌|令牌|API密钥|API key|密钥|秘钥|私钥).{0,24}(给我|告诉我|显示|展示|列出|提供|返回|打印|发我)/i,
+      score: 0.95,
+      category: "credential_access",
+      reason: "检测到索要密码、令牌或密钥等凭据的高风险请求。",
+      externalReason: "不可信外部上下文中出现索要凭据的内容，已按凭据访问风险拦截。",
+    },
   ];
-  const matched = rules.filter((rule) => rule.pattern.test(combined));
-  const toolBlocked = Boolean(toolName) && ["execute_shell", "read_file"].includes(toolName) && /true|admin|delete|secret/i.test(parameters);
-  const score = Math.max(0.18, ...matched.map((rule) => rule.score), toolBlocked ? 0.87 : 0);
-  const externalHit = externalContext.trim().length > 0 && matched.length > 0;
+
+  const matched: MatchedLocalRule[] = rules.flatMap((rule) => {
+    const promptHit = rule.pattern.test(prompt);
+    const externalHit = rule.pattern.test(externalContext);
+    const toolHit = rule.pattern.test(toolName) || rule.pattern.test(parameters);
+
+    if (!promptHit && !externalHit && !toolHit) return [];
+
+    return [
+      {
+        name: rule.name,
+        score: rule.score,
+        category: rule.category,
+        reason: externalHit && !promptHit && rule.externalReason ? rule.externalReason : rule.reason,
+        layer: externalHit && !promptHit ? "untrusted_external_data" : toolHit && !promptHit && !externalHit ? "tool_permission" : "prompt",
+      },
+    ];
+  });
+
+  const toolBlocked =
+    Boolean(toolName) &&
+    ["execute_shell", "read_file"].includes(toolName) &&
+    /true|admin|delete|secret/i.test(parameters);
+
+  if (toolBlocked) {
+    matched.push({
+      name: "tool_permission_boundary",
+      score: 0.87,
+      category: "tool_permission",
+      reason: "工具调用参数触发权限边界，已在本地预检中阻断。",
+      layer: "tool_permission",
+    });
+  }
+
+  const topMatch = matched.reduce<MatchedLocalRule | null>(
+    (highest, current) => (!highest || current.score > highest.score ? current : highest),
+    null
+  );
 
   return {
-    allowed: matched.length === 0 && !toolBlocked,
-    riskScore: score,
-    reason: externalHit
-      ? "不可信外部上下文中发现覆盖指令或数据外传意图，疑似间接提示词注入。"
-      : toolBlocked
-        ? "工具调用参数触发权限边界，已在本地预检中阻断。"
-        : matched.length > 0
-          ? "用户输入命中提示词注入风险规则。"
-          : "未命中高风险提示词注入规则。",
-    matchedRules: [...matched.map((rule) => rule.name), ...(toolBlocked ? ["tool_permission_boundary"] : [])],
-    layer: externalHit ? "untrusted_external_data" : toolBlocked ? "tool_permission" : "prompt",
+    allowed: !topMatch,
+    riskScore: Math.max(0.18, ...matched.map((rule) => rule.score)),
+    reason: topMatch?.reason || "未命中高风险提示词注入或危险行为规则。",
+    matchedRules: matched.map((rule) => rule.name),
+    layer: topMatch?.layer || "prompt",
+    category: topMatch?.category,
+    recommendedAction: topMatch ? "block" : "allow",
   };
 }
 

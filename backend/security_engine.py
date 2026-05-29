@@ -105,6 +105,78 @@ EXFIL_ACTION_PATTERN = re.compile(
 EXFIL_DESTINATION_PATTERN = re.compile(
     r"(?i)\b(webhook|pastebin|gist|dropbox|s3|discord|slack|telegram|email|remote server|callback)\b"
 )
+HIGH_VALUE_CREDENTIAL_PATTERNS = [
+    re.compile(r"(?i)\bapi(?:[_\-\s]+)?key\b"),
+    re.compile(r"(?i)\baccess(?:[_\-\s]+)?token\b"),
+    re.compile(r"(?i)\brefresh(?:[_\-\s]+)?token\b"),
+    re.compile(r"(?i)\bbearer(?:[_\-\s]+)?token\b"),
+    re.compile(r"(?i)\bpasswords?\b"),
+    re.compile(r"(?i)\bcredentials?\b"),
+    re.compile(r"(?i)\bsecrets?\b"),
+    re.compile(r"(?i)\bsecret(?:[_\-\s]+)?key\b"),
+    re.compile(r"(?i)\bprivate(?:[_\-\s]+)?key\b"),
+    re.compile(r"(?i)\bsession(?:[_\-\s]+)?cookie\b"),
+    re.compile(r"(?i)\bauthorization(?:[_\-\s]+)?header\b"),
+    re.compile(r"密码|口令|凭据|账号密码|访问令牌|刷新令牌|令牌|api密钥|api key|密钥|秘钥|私钥|授权头|会话cookie"),
+]
+CREDENTIAL_DISCLOSURE_PATTERNS = [
+    (
+        "credential_disclosure_request_en",
+        re.compile(
+            r"(?is)\b(give|tell|show|reveal|print|display|list|provide|return|share|dump|expose)\b"
+            r".{0,48}"
+            r"\b(api(?:[_\-\s]+)?key|access(?:[_\-\s]+)?token|refresh(?:[_\-\s]+)?token|bearer(?:[_\-\s]+)?token|passwords?|credentials?|secrets?|secret(?:[_\-\s]+)?key|private(?:[_\-\s]+)?key|session(?:[_\-\s]+)?cookie|authorization(?:[_\-\s]+)?header)\b"
+        ),
+        0.95,
+    ),
+    (
+        "credential_disclosure_request_reverse_en",
+        re.compile(
+            r"(?is)\b(api(?:[_\-\s]+)?key|access(?:[_\-\s]+)?token|refresh(?:[_\-\s]+)?token|bearer(?:[_\-\s]+)?token|passwords?|credentials?|secrets?|secret(?:[_\-\s]+)?key|private(?:[_\-\s]+)?key|session(?:[_\-\s]+)?cookie|authorization(?:[_\-\s]+)?header)\b"
+            r".{0,48}"
+            r"\b(give|tell|show|reveal|print|display|list|provide|return|share|dump|expose)\b"
+        ),
+        0.94,
+    ),
+    (
+        "credential_harvest_scope_en",
+        re.compile(
+            r"(?is)\b(all|every|users?'?|customers?'?|employees?'?|admins?'?|administrators?|root)\b"
+            r".{0,32}"
+            r"\b(passwords?|credentials?|tokens?|api(?:[_\-\s]+)?keys?|secrets?)\b"
+        ),
+        0.95,
+    ),
+    (
+        "credential_disclosure_request_zh",
+        re.compile(
+            r"(?is)(给我|告诉我|显示|展示|列出|提供|返回|打印|发我|交给我|暴露|泄露)"
+            r".{0,24}"
+            r"(管理员|超级管理员|所有用户|全部用户|全部账号|所有账号|其他用户|root|admin)?"
+            r".{0,16}"
+            r"(密码|口令|凭据|账号密码|访问令牌|刷新令牌|令牌|api密钥|api key|密钥|秘钥|私钥|授权头|会话cookie)"
+        ),
+        0.95,
+    ),
+    (
+        "credential_disclosure_request_reverse_zh",
+        re.compile(
+            r"(?is)(密码|口令|凭据|账号密码|访问令牌|刷新令牌|令牌|api密钥|api key|密钥|秘钥|私钥|授权头|会话cookie)"
+            r".{0,24}"
+            r"(给我|告诉我|显示|展示|列出|提供|返回|打印|发我|交给我|暴露|泄露)"
+        ),
+        0.94,
+    ),
+    (
+        "credential_harvest_scope_zh",
+        re.compile(
+            r"(?is)(管理员|超级管理员|所有用户|全部用户|全部账号|所有账号|其他用户|root|admin)"
+            r".{0,18}"
+            r"(密码|口令|凭据|账号密码|访问令牌|令牌|api密钥|api key|密钥|秘钥|私钥)"
+        ),
+        0.94,
+    ),
+]
 ACCESS_INTENT_PATTERN = re.compile(
     r"(?i)\b(read|open|load|cat|copy|dump|query|request|fetch|call|visit|connect|upload|send|curl|wget)\b"
 )
@@ -624,6 +696,13 @@ def behavior_risk_check(
         )
     )
     matches.extend(
+        _match_credential_access(
+            normalized_tool_name,
+            flattened,
+            combined_text,
+        )
+    )
+    matches.extend(
         _match_secret_exfiltration(
             normalized_tool_name,
             flattened,
@@ -912,6 +991,39 @@ def _match_secret_exfiltration(
                 score=0.96 if _tool_can_access_network(tool_name) or _tool_can_execute_commands(tool_name) else 0.92,
                 evidence=" | ".join(evidence_parts)[:240],
                 reason="Sensitive data exfiltration attempt detected.",
+            )
+        )
+
+    return matches
+
+
+def _match_credential_access(
+    tool_name: str,
+    flattened: list[ParameterEntry],
+    combined_text: str,
+) -> list[ThreatMatch]:
+    matches: list[ThreatMatch] = []
+    candidate_texts = [combined_text]
+    candidate_texts.extend(entry.value_text for entry in flattened)
+
+    joined_text = "\n".join(text for text in candidate_texts if text)
+    if not joined_text:
+        return matches
+
+    if not any(pattern.search(joined_text) for pattern in HIGH_VALUE_CREDENTIAL_PATTERNS):
+        return matches
+
+    for rule_name, pattern, score in CREDENTIAL_DISCLOSURE_PATTERNS:
+        match = pattern.search(joined_text)
+        if not match:
+            continue
+        matches.append(
+            ThreatMatch(
+                rule_name=rule_name,
+                category="credential_access",
+                score=score,
+                evidence=match.group(0)[:240],
+                reason="Credential disclosure or harvest request detected.",
             )
         )
 
