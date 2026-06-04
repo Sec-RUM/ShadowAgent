@@ -269,6 +269,23 @@ html[data-theme="light"] .text-emerald-100 {
   color: var(--tone-success-text) !important;
 }
 
+html[data-theme="light"] .text-red-200 {
+  color: var(--tone-danger-text) !important;
+}
+
+html[data-theme="light"] .text-amber-200 {
+  color: var(--tone-warning-text) !important;
+}
+
+html[data-theme="light"] .text-cyan-200,
+html[data-theme="light"] .text-sky-200 {
+  color: var(--tone-info-text) !important;
+}
+
+html[data-theme="light"] .text-rose-200 {
+  color: var(--tone-danger-text) !important;
+}
+
 html[data-theme="light"] .text-cyan-50,
 html[data-theme="light"] .text-cyan-100,
 html[data-theme="light"] .text-sky-50,
