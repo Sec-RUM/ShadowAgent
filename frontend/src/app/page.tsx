@@ -44,13 +44,14 @@ import type { FormEvent, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatedInterceptLogList, GlassInterceptLogCard } from "./components/intercept-log-card";
 import { GlassSelect, type GlassSelectOption } from "./components/glass-select";
+import { buildTimeTooltip, formatBeijingTime, formatRelativeTime, parseDateValue } from "./time-utils";
 
 type IconComponent = React.ComponentType<{
   className?: string;
   "aria-hidden"?: boolean;
 }>;
 
-type ViewKey = "overview" | "logs" | "policies" | "gateway" | "settings" | "help";
+type ViewKey = "overview" | "logs" | "policies" | "keys" | "gateway" | "settings" | "help";
 
 type SessionUser = {
   id: string;
@@ -206,6 +207,30 @@ type ReplayItem = {
   category: string;
   details: Record<string, unknown>;
   created_at: string;
+};
+
+type ManagedApiKeyRole = "admin" | "security_admin" | "client" | "gateway";
+
+type ManagedApiKeyItem = {
+  id: number;
+  name: string;
+  role: ManagedApiKeyRole | string;
+  description: string;
+  key_prefix: string;
+  masked_key: string;
+  created_by: string;
+  is_active: boolean;
+  expires_at: string | null;
+  last_used_at: string | null;
+  last_used_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type ManagedApiKeyIssueState = {
+  action: "created" | "rotated";
+  apiKey: string;
+  item: ManagedApiKeyItem;
 };
 
 const STORAGE_KEYS = {
@@ -364,6 +389,13 @@ const VIEW_ITEMS: Array<{
     subtitle: "调整提示词注入防护规则、工具权限与审计边界。",
   },
   {
+    id: "keys",
+    label: "密钥中心",
+    icon: KeyRound,
+    title: "托管 API Key",
+    subtitle: "为每个用户或集成独立签发、轮换、停用与恢复密钥。",
+  },
+  {
     id: "gateway",
     label: "网关测试",
     icon: Play,
@@ -419,6 +451,13 @@ const THEME_OPTIONS = [
   { id: "system", label: "系统", description: "跟随设备外观", icon: Monitor },
   { id: "light", label: "浅色", description: "更通透、更温润", icon: SunMedium },
   { id: "dark", label: "深色", description: "更沉浸、更聚焦", icon: MoonStar },
+] as const;
+
+const MANAGED_KEY_ROLE_OPTIONS: GlassSelectOption[] = [
+  { value: "client", label: "Client", description: "适合普通调用方与业务接入方", icon: KeyRound },
+  { value: "gateway", label: "Gateway", description: "适合受限网关、代理层或中间服务", icon: Network },
+  { value: "security_admin", label: "Security Admin", description: "适合安全运营与策略管理人员", icon: ShieldCheck },
+  { value: "admin", label: "Admin", description: "完整后台管理权限，仅少量发放", icon: Shield },
 ] as const;
 
 function canUseStorage() {
@@ -482,17 +521,7 @@ function buttonClass(variant: "primary" | "secondary" | "ghost" | "danger" = "se
 }
 
 function formatTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "未知时间";
-
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(date);
+  return formatBeijingTime(value);
 }
 
 function asNumber(value: unknown, fallback = 0) {
@@ -516,6 +545,121 @@ function severityText(severity: PolicyRule["severity"]) {
   if (severity === "high") return "高";
   if (severity === "medium") return "中";
   return "低";
+}
+
+function managedKeyRoleLabel(role: string) {
+  switch (role) {
+    case "admin":
+      return "管理员";
+    case "security_admin":
+      return "安全管理员";
+    case "gateway":
+      return "网关";
+    case "client":
+      return "客户端";
+    default:
+      return role || "未知角色";
+  }
+}
+
+function isIpv4Address(value: string) {
+  return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(value);
+}
+
+function isPrivateIpv4(value: string) {
+  if (!isIpv4Address(value)) return false;
+  const parts = value.split(".").map(Number);
+  if (parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)) return false;
+  if (parts[0] === 10) return true;
+  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+  if (parts[0] === 192 && parts[1] === 168) return true;
+  return false;
+}
+
+function describeSource(value: string) {
+  const raw = (value || "").trim();
+  if (!raw || raw === "unknown" || raw === "unknown|unknown") {
+    return {
+      label: "未知来源",
+      detail: "后端暂时没有拿到可识别的调用来源。",
+    };
+  }
+
+  const [hostPart, sourcePart = "direct"] = raw.split("|");
+  const host = hostPart.trim();
+  const source = sourcePart.trim();
+  const via =
+    source === "x-forwarded-for"
+      ? "经代理转发"
+      : source === "x-real-ip"
+        ? "由上游网关透传"
+        : source === "forwarded"
+          ? "由标准 Forwarded 头传入"
+          : "由当前连接直接识别";
+
+  if (host === "127.0.0.1" || host === "::1" || host.toLowerCase() === "localhost") {
+    return {
+      label: "本机浏览器",
+      detail: `${host} · ${via}`,
+    };
+  }
+
+  if (host.startsWith("169.254.")) {
+    return {
+      label: "本机链路地址",
+      detail: `${host} · ${via}`,
+    };
+  }
+
+  if (isPrivateIpv4(host)) {
+    return {
+      label: "局域网设备",
+      detail: `${host} · ${via}`,
+    };
+  }
+
+  if (host.includes(":")) {
+    return {
+      label: "IPv6 来源",
+      detail: `${host} · ${via}`,
+    };
+  }
+
+  if (isIpv4Address(host)) {
+    return {
+      label: "公网或外部地址",
+      detail: `${host} · ${via}`,
+    };
+  }
+
+  return {
+    label: "主机来源",
+    detail: `${host} · ${via}`,
+  };
+}
+
+function managedKeyStatus(item: ManagedApiKeyItem) {
+  const expiresDate = parseDateValue(item.expires_at);
+  const expiresAt = expiresDate ? expiresDate.getTime() : Number.POSITIVE_INFINITY;
+  if (!item.is_active) {
+    return {
+      tone: "border-red-300/35 bg-red-500/10 text-red-100",
+      label: "已停用",
+      hint: "当前密钥已被后台停用，无法再调用受保护接口。",
+    };
+  }
+  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+    return {
+      tone: "border-amber-300/35 bg-amber-500/10 text-amber-100",
+      label: "已过期",
+      hint: "当前密钥已经过期，需要轮换后才会重新签发新密钥。",
+    };
+  }
+  return {
+    tone: "border-emerald-300/35 bg-emerald-500/10 text-emerald-100",
+    label: "生效中",
+    hint: "当前密钥可正常使用。",
+  };
 }
 
 function severityClass(severity: PolicyRule["severity"]) {
@@ -616,6 +760,10 @@ function buildHeaders(
 
 function isAuthSessionValid(session: AuthSession | null) {
   return Boolean(session?.accessToken && session.expiresAt * 1000 > Date.now());
+}
+
+function isAdminRole(role: string | undefined) {
+  return role === "admin" || role === "security_admin";
 }
 
 function normalizeSeverity(value: unknown): PolicyRule["severity"] {
@@ -895,6 +1043,19 @@ export default function Home() {
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [replays, setReplays] = useState<ReplayItem[]>([]);
+  const [managedKeys, setManagedKeys] = useState<ManagedApiKeyItem[]>([]);
+  const [managedKeysLoading, setManagedKeysLoading] = useState(false);
+  const [managedKeysError, setManagedKeysError] = useState("");
+  const [managedKeyDraftOpen, setManagedKeyDraftOpen] = useState(false);
+  const [managedKeyDraft, setManagedKeyDraft] = useState({
+    name: "",
+    role: "client" as ManagedApiKeyRole,
+    description: "",
+    expiresInDays: "30",
+  });
+  const [managedKeyIssueState, setManagedKeyIssueState] = useState<ManagedApiKeyIssueState | null>(null);
+  const [managedKeyBusyId, setManagedKeyBusyId] = useState<number | null>(null);
+  const [includeInactiveKeys, setIncludeInactiveKeys] = useState(true);
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsError, setLogsError] = useState("");
   const [search, setSearch] = useState("");
@@ -927,9 +1088,11 @@ export default function Home() {
     parameters: "{\n  \"requires_admin\": false\n}",
     stream: false,
   });
-  const securityConfigKey = `${settings.apiBase}|${settings.adminApiKey}|${authSession?.accessToken ?? ""}|${user?.id ?? ""}`;
+  const apiBaseUrl = settings.apiBase.replace(/\/$/, "");
+  const securityConfigKey = `${apiBaseUrl}|${settings.adminApiKey}|${authSession?.accessToken ?? ""}|${user?.id ?? ""}`;
   const hasConsoleToken = isAuthSessionValid(authSession);
-  const hasAdminAccess = Boolean(hasConsoleToken || settings.adminApiKey.trim());
+  const hasConsoleAdmin = Boolean(hasConsoleToken && isAdminRole(user?.role));
+  const hasAdminAccess = Boolean(hasConsoleAdmin || settings.adminApiKey.trim());
   const hasGatewayAccess = Boolean(hasConsoleToken || settings.clientApiKey.trim() || settings.adminApiKey.trim());
 
   const addToast = useCallback((message: string, type: Toast["type"] = "info") => {
@@ -1057,7 +1220,12 @@ export default function Home() {
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = (await response.json()) as Record<string, unknown>;
-      setHealth({ status: "online", message: detailText(data.service) || "online" });
+      const serviceLabel = detailText(data.service) || "online";
+      const proxyMode = typeof data.proxy_mode === "string" ? data.proxy_mode : "";
+      setHealth({
+        status: "online",
+        message: proxyMode ? `${serviceLabel} / ${proxyMode}` : serviceLabel,
+      });
       addToast("网关连接正常", "success");
     } catch (error) {
       const message =
@@ -1152,6 +1320,52 @@ export default function Home() {
     }
   }, [authSession, hasAdminAccess, settings]);
 
+  const loadManagedApiKeys = useCallback(
+    async (showFeedback = false) => {
+      if (!hasAdminAccess) {
+        setManagedKeys([]);
+        setManagedKeysError("");
+        return;
+      }
+
+      setManagedKeysLoading(true);
+      setManagedKeysError("");
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 7000);
+
+      try {
+        const response = await fetch(
+          `${apiBaseUrl}/api/v1/api-keys?include_inactive=${includeInactiveKeys ? "true" : "false"}`,
+          {
+            headers: buildHeaders(settings, "admin", false, authSession),
+            signal: controller.signal,
+            cache: "no-store",
+          }
+        );
+        const data = (await response.json().catch(() => ({}))) as {
+          items?: ManagedApiKeyItem[];
+          detail?: unknown;
+        };
+        if (!response.ok) throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+        setManagedKeys(data.items ?? []);
+        if (showFeedback) addToast("托管密钥列表已刷新", "success");
+      } catch (error) {
+        const message =
+          error instanceof Error && error.name === "AbortError"
+            ? "请求超时"
+            : error instanceof Error
+              ? error.message
+              : "无法获取托管密钥列表";
+        setManagedKeysError(message);
+        if (showFeedback) addToast(`密钥列表刷新失败：${message}`, "error");
+      } finally {
+        window.clearTimeout(timer);
+        setManagedKeysLoading(false);
+      }
+    },
+    [addToast, apiBaseUrl, authSession, hasAdminAccess, includeInactiveKeys, settings]
+  );
+
   const loadSecurityConfiguration = useCallback(async () => {
     const localPolicies = readStorage<PolicyRule[]>(STORAGE_KEYS.policies, DEFAULT_POLICIES);
     const localTools = readStorage<ToolPermission[]>(STORAGE_KEYS.tools, DEFAULT_TOOLS);
@@ -1237,8 +1451,9 @@ export default function Home() {
     window.setTimeout(() => {
       void loadSecurityConfiguration();
       void loadOperations();
+      void loadManagedApiKeys();
     }, 0);
-  }, [loadOperations, loadSecurityConfiguration, mounted, securityConfigKey, user]);
+  }, [loadManagedApiKeys, loadOperations, loadSecurityConfiguration, mounted, securityConfigKey, user]);
 
   useEffect(() => {
     if (!mounted || !hasConsoleToken) return;
@@ -1294,9 +1509,10 @@ export default function Home() {
     const interval = window.setInterval(() => {
       void loadLogs();
       void loadOperations();
+      void loadManagedApiKeys();
     }, Math.max(10, settings.refreshInterval) * 1000);
     return () => window.clearInterval(interval);
-  }, [loadLogs, loadOperations, settings.autoRefresh, settings.refreshInterval, user]);
+  }, [loadLogs, loadManagedApiKeys, loadOperations, settings.autoRefresh, settings.refreshInterval, user]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1340,6 +1556,18 @@ export default function Home() {
       { label: "启用策略", value: `${enabledPolicies}/${policies.length}`, icon: ShieldCheck, tone: "text-emerald-200" },
     ];
   }, [logs, policies]);
+
+  const managedKeyStats = useMemo(() => {
+    const active = managedKeys.filter((item) => managedKeyStatus(item).label === "生效中").length;
+    const paused = managedKeys.filter((item) => managedKeyStatus(item).label === "已停用").length;
+    const expired = managedKeys.filter((item) => managedKeyStatus(item).label === "已过期").length;
+    return {
+      total: managedKeys.length,
+      active,
+      paused,
+      expired,
+    };
+  }, [managedKeys]);
 
   const threatTypes = useMemo(() => Array.from(new Set(logs.map((log) => log.threat_type))).filter(Boolean), [logs]);
 
@@ -1485,7 +1713,14 @@ export default function Home() {
       setAuthSession(nextAuthSession);
       setUser(sessionUser);
       setAuthForm({ name: "", email: "", password: "", confirmPassword: "" });
-      addToast(authMode === "login" ? "登录成功" : "注册成功，已进入控制台", "success");
+      addToast(
+        authMode === "login"
+          ? "登录成功"
+          : data.user.role === "admin" || data.user.role === "security_admin"
+            ? "注册成功，已进入管理员控制台"
+            : "注册成功，当前为普通网关账号",
+        "success"
+      );
     } catch (error) {
       addToast(error instanceof Error ? error.message : authMode === "login" ? "登录失败" : "注册失败", "error");
     }
@@ -1506,6 +1741,8 @@ export default function Home() {
     setAuthSession(null);
     setUser(demoUser);
     setLogs(stamped);
+    setManagedKeys([]);
+    setManagedKeyIssueState(null);
     addToast("已使用演示身份进入", "success");
   };
 
@@ -1515,6 +1752,8 @@ export default function Home() {
     setAuthSession(null);
     setUser(null);
     setGatewayResult(null);
+    setManagedKeys([]);
+    setManagedKeyIssueState(null);
     addToast("已退出登录", "info");
   };
 
@@ -1661,8 +1900,141 @@ export default function Home() {
     removeStorage(STORAGE_KEYS.localLogs);
     setAuthSession(null);
     setLogs([]);
+    setManagedKeys([]);
+    setManagedKeyIssueState(null);
     setUser(null);
     addToast("本地会话和演示数据已清除", "info");
+  };
+
+  const applyIssuedKeyToSettings = (item: ManagedApiKeyItem, apiKey: string) => {
+    const nextSettings: AppSettings = isAdminRole(item.role)
+      ? { ...settings, adminApiKey: apiKey }
+      : { ...settings, clientApiKey: apiKey };
+    setSettings(nextSettings);
+    writeStorage(STORAGE_KEYS.settings, nextSettings);
+    addToast(isAdminRole(item.role) ? "已写入当前 Admin API Key" : "已写入当前 Client API Key", "success");
+  };
+
+  const createManagedKey = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!hasAdminAccess) {
+      addToast("请先登录管理员账号或配置 Admin API Key", "error");
+      return;
+    }
+    if (!managedKeyDraft.name.trim()) {
+      addToast("请填写密钥名称", "error");
+      return;
+    }
+
+    const expiresValue = managedKeyDraft.expiresInDays.trim();
+    const expiresInDays = expiresValue ? Number(expiresValue) : undefined;
+    if (expiresValue && (expiresInDays === undefined || !Number.isFinite(expiresInDays) || expiresInDays < 1)) {
+      addToast("过期天数必须是大于 0 的数字", "error");
+      return;
+    }
+
+    setManagedKeyBusyId(0);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/api-keys`, {
+        method: "POST",
+        headers: buildHeaders(settings, "admin", true, authSession),
+        body: JSON.stringify({
+          name: managedKeyDraft.name.trim(),
+          role: managedKeyDraft.role,
+          description: managedKeyDraft.description.trim(),
+          expires_in_days: expiresInDays ? Math.round(expiresInDays) : undefined,
+        }),
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        item?: ManagedApiKeyItem;
+        api_key?: string;
+        detail?: unknown;
+      };
+      if (!response.ok || !data.item || !data.api_key) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }
+
+      setManagedKeyIssueState({
+        action: "created",
+        apiKey: data.api_key,
+        item: data.item,
+      });
+      setManagedKeyDraft({
+        name: "",
+        role: "client",
+        description: "",
+        expiresInDays: managedKeyDraft.expiresInDays || "30",
+      });
+      setManagedKeyDraftOpen(false);
+      await loadManagedApiKeys();
+      addToast("托管密钥已创建", "success");
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "创建托管密钥失败", "error");
+    } finally {
+      setManagedKeyBusyId(null);
+    }
+  };
+
+  const rotateManagedKey = async (item: ManagedApiKeyItem) => {
+    if (!hasAdminAccess) {
+      addToast("请先登录管理员账号或配置 Admin API Key", "error");
+      return;
+    }
+
+    setManagedKeyBusyId(item.id);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/api-keys/${item.id}/rotate`, {
+        method: "POST",
+        headers: buildHeaders(settings, "admin", true, authSession),
+        body: JSON.stringify({}),
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        item?: ManagedApiKeyItem;
+        api_key?: string;
+        detail?: unknown;
+      };
+      if (!response.ok || !data.item || !data.api_key) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }
+
+      setManagedKeyIssueState({
+        action: "rotated",
+        apiKey: data.api_key,
+        item: data.item,
+      });
+      await loadManagedApiKeys();
+      addToast("托管密钥已轮换，旧密钥立即失效", "success");
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "轮换托管密钥失败", "error");
+    } finally {
+      setManagedKeyBusyId(null);
+    }
+  };
+
+  const updateManagedKeyLifecycle = async (item: ManagedApiKeyItem, action: "revoke" | "activate") => {
+    if (!hasAdminAccess) {
+      addToast("请先登录管理员账号或配置 Admin API Key", "error");
+      return;
+    }
+
+    setManagedKeyBusyId(item.id);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/api-keys/${item.id}/${action}`, {
+        method: "POST",
+        headers: buildHeaders(settings, "admin", false, authSession),
+      });
+      const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
+      if (!response.ok) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }
+
+      await loadManagedApiKeys();
+      addToast(action === "revoke" ? "托管密钥已停用" : "托管密钥已恢复", "success");
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : action === "revoke" ? "停用密钥失败" : "恢复密钥失败", "error");
+    } finally {
+      setManagedKeyBusyId(null);
+    }
   };
 
   const reviewApproval = async (approvalId: number, status: "approved" | "rejected") => {
@@ -1720,6 +2092,19 @@ export default function Home() {
     try {
       if (navigator.clipboard) {
         await navigator.clipboard.writeText(value);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = value;
+        textarea.setAttribute("readonly", "true");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand("copy");
+        document.body.removeChild(textarea);
+        if (!copied) {
+          throw new Error("copy_failed");
+        }
       }
       addToast(successMessage, "success");
     } catch {
@@ -2164,6 +2549,38 @@ export default function Home() {
 
             <section className={`${glassPanelSoftClass} ${glassPanelMotionClass} p-5`}>
               <PanelGlow />
+              <div className="relative flex items-center justify-between gap-3">
+                <h2 className="text-base font-semibold text-white">鉴权资产</h2>
+                <span className="rounded-md border border-white/[0.08] bg-white/[0.06] px-2 py-1 text-xs text-zinc-300">
+                  {hasAdminAccess ? "后台已连接" : "待接入"}
+                </span>
+              </div>
+              <div className="relative mt-4 space-y-3 text-sm">
+                <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
+                  <span className="text-zinc-400">托管密钥总数</span>
+                  <span className="font-medium text-white">{managedKeyStats.total}</span>
+                </div>
+                <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
+                  <span className="text-zinc-400">生效中</span>
+                  <span className="font-medium text-emerald-200">{managedKeyStats.active}</span>
+                </div>
+                <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
+                  <span className="text-zinc-400">已停用</span>
+                  <span className="font-medium text-red-100">{managedKeyStats.paused}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400">已过期</span>
+                  <span className="font-medium text-amber-100">{managedKeyStats.expired}</span>
+                </div>
+              </div>
+              <button type="button" onClick={() => navigateTo("keys")} className={`${buttonClass("secondary")} relative mt-5 w-full`}>
+                <KeyRound className="h-4 w-4" aria-hidden />
+                打开密钥中心
+              </button>
+            </section>
+
+            <section className={`${glassPanelSoftClass} ${glassPanelMotionClass} p-5`}>
+              <PanelGlow />
               <div className="relative flex items-center justify-between">
                 <h2 className="text-base font-semibold text-white">运行状态</h2>
                 <span
@@ -2217,6 +2634,7 @@ export default function Home() {
                 {[
                   { label: "运行网关测试", icon: Play, onClick: () => navigateTo("gateway"), variant: "primary" as const },
                   { label: "调整策略", icon: SlidersHorizontal, onClick: () => navigateTo("policies"), variant: "secondary" as const },
+                  { label: "管理托管密钥", icon: KeyRound, onClick: () => navigateTo("keys"), variant: "secondary" as const },
                   { label: "生成演示事件", icon: Plus, onClick: seedLogs, variant: "secondary" as const },
                 ].map((item) => (
                   <button key={item.label} type="button" onClick={item.onClick} className={`${buttonClass(item.variant)} justify-between`}>
@@ -2465,6 +2883,339 @@ export default function Home() {
     </div>
   );
 
+  const renderManagedKeys = () => (
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+      <section className={`${glassPanelClass} relative space-y-4 p-5`}>
+        <PanelGlow />
+        <div className="relative flex flex-col gap-3 border-b border-white/[0.07] pb-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-white">托管密钥列表</h2>
+            <p className="mt-1 text-sm text-zinc-400">每个调用方都应拥有独立密钥，便于单独轮换、停用和追踪最近使用情况。</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => void loadManagedApiKeys(true)} className={buttonClass("secondary")} disabled={managedKeysLoading || !hasAdminAccess}>
+              <RefreshCcw className={`h-4 w-4 ${managedKeysLoading ? "animate-spin" : ""}`} aria-hidden />
+              刷新列表
+            </button>
+            <button type="button" onClick={() => setManagedKeyDraftOpen((value) => !value)} className={buttonClass("primary")} disabled={!hasAdminAccess}>
+              <Plus className="h-4 w-4" aria-hidden />
+              {managedKeyDraftOpen ? "收起创建表单" : "签发新密钥"}
+            </button>
+          </div>
+        </div>
+
+        <div className="relative flex flex-col gap-3 rounded-md border border-white/[0.07] bg-white/[0.03] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-sm text-zinc-300">
+            <span className="font-medium text-white">推荐路径：</span>
+            管理员登录后台后，在这里创建每个用户或服务自己的密钥，不再继续共用一个环境变量里的总钥匙。
+          </div>
+          <Switch
+            label="切换是否显示停用密钥"
+            checked={includeInactiveKeys}
+            onChange={(value) => setIncludeInactiveKeys(value)}
+          />
+        </div>
+
+        {!hasAdminAccess ? (
+          <div className="relative p-5">
+            <EmptyState icon={Shield} title="当前无后台管理权限">
+              <p className="mt-3 text-sm leading-6 text-zinc-400">
+                先使用管理员账号登录，或在设置页填入兼容的 Admin API Key，随后这里才会连接后端的托管密钥接口。
+              </p>
+              <button type="button" onClick={() => navigateTo("settings")} className={`${buttonClass("primary")} mt-4`}>
+                <Settings className="h-4 w-4" aria-hidden />
+                去设置鉴权
+              </button>
+            </EmptyState>
+          </div>
+        ) : (
+          <>
+            {managedKeyDraftOpen ? (
+              <form onSubmit={createManagedKey} className={`${glassPanelSoftClass} relative grid gap-4 p-4`}>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="block">
+                    <span className="mb-2 block text-sm text-[var(--text-secondary)]">密钥名称</span>
+                    <input
+                      value={managedKeyDraft.name}
+                      onChange={(event) => setManagedKeyDraft((current) => ({ ...current, name: event.target.value }))}
+                      className={inputBase}
+                      placeholder="例如：小组演示客户端 / 生产网关 A"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-2 block text-sm text-[var(--text-secondary)]">角色</span>
+                    <GlassSelect
+                      value={managedKeyDraft.role}
+                      onChange={(next) => setManagedKeyDraft((current) => ({ ...current, role: next as ManagedApiKeyRole }))}
+                      options={MANAGED_KEY_ROLE_OPTIONS}
+                      ariaLabel="选择托管密钥角色"
+                    />
+                  </label>
+                </div>
+
+                <label className="block">
+                  <span className="mb-2 block text-sm text-[var(--text-secondary)]">说明备注</span>
+                  <input
+                    value={managedKeyDraft.description}
+                    onChange={(event) => setManagedKeyDraft((current) => ({ ...current, description: event.target.value }))}
+                    className={inputBase}
+                    placeholder="记录用途、负责人或接入系统，便于后续排查和轮换"
+                  />
+                </label>
+
+                <div className="grid gap-4 md:grid-cols-[180px_minmax(0,1fr)]">
+                  <label className="block">
+                    <span className="mb-2 block text-sm text-[var(--text-secondary)]">过期天数</span>
+                    <input
+                      value={managedKeyDraft.expiresInDays}
+                      onChange={(event) => setManagedKeyDraft((current) => ({ ...current, expiresInDays: event.target.value }))}
+                      className={inputBase}
+                      min={1}
+                      type="number"
+                      placeholder="30"
+                    />
+                  </label>
+                  <div className={`${glassPanelSoftClass} p-4 text-sm text-zinc-300`}>
+                    <p className="font-medium text-white">签发建议</p>
+                    <p className="mt-2 leading-6 text-zinc-400">
+                      给个人或脚本单独发密钥，优先使用 `client` 或 `gateway`。只有确实要管理后台、审批或策略时，才发 `security_admin` / `admin`。
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button type="submit" className={buttonClass("primary")} disabled={managedKeyBusyId === 0}>
+                    <KeyRound className="h-4 w-4" aria-hidden />
+                    {managedKeyBusyId === 0 ? "签发中..." : "签发并显示明文"}
+                  </button>
+                  <button type="button" onClick={() => setManagedKeyDraftOpen(false)} className={buttonClass("secondary")}>
+                    收起
+                  </button>
+                </div>
+              </form>
+            ) : null}
+
+            {managedKeysError ? (
+              <div className="relative rounded-md border border-red-300/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+                密钥列表加载失败：{managedKeysError}
+              </div>
+            ) : null}
+
+            {managedKeys.length === 0 && !managedKeysLoading ? (
+              <div className="relative p-5">
+                <EmptyState icon={KeyRound} title="还没有托管密钥">
+                  <p className="mt-3 text-sm leading-6 text-zinc-400">先签发第一把独立密钥，后面每个接入方都按用途和角色分别管理。</p>
+                </EmptyState>
+              </div>
+            ) : (
+              <div className="grid gap-4">
+                {managedKeys.map((item) => {
+                  const status = managedKeyStatus(item);
+                  const busy = managedKeyBusyId === item.id;
+                  const hasFreshSecret = managedKeyIssueState?.item.id === item.id;
+                  const sourceInfo = describeSource(item.last_used_by);
+
+                  return (
+                    <motion.article key={item.id} whileHover={{ y: -2 }} className={`${glassPanelClass} ${glassPanelMotionClass} overflow-hidden p-5`}>
+                      <PanelGlow />
+                      <div className="relative flex flex-col gap-4">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="truncate text-base font-semibold text-white">{item.name}</h3>
+                              <span className={`rounded-md border px-2 py-1 text-xs ${status.tone}`}>{status.label}</span>
+                              <span className="rounded-md border border-white/[0.08] bg-white/[0.06] px-2 py-1 text-xs text-zinc-300">
+                                {managedKeyRoleLabel(item.role)}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-sm leading-6 text-zinc-400">{item.description || "未填写备注，可在名称或说明中记录负责人、用途与环境。"}</p>
+                          </div>
+                          <div className="space-y-2 text-right text-xs text-zinc-400">
+                            <div title={buildTimeTooltip(item.created_at)}>创建于 {formatTime(item.created_at)} CST</div>
+                            <div>签发人 {item.created_by || "-"}</div>
+                          </div>
+                        </div>
+
+                        {hasFreshSecret ? (
+                          <div className="rounded-md border border-teal-200/25 bg-teal-300/[0.08] px-4 py-3 text-sm text-teal-50">
+                            这把密钥的最新明文仍在右侧展示区域中，离开页面后不会再从后台返回，请先复制并妥善保存。
+                          </div>
+                        ) : null}
+
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                          <div className={`${glassPanelSoftClass} p-3`}>
+                            <div className="text-xs text-zinc-500">密钥前缀</div>
+                            <div className="mt-2 break-all font-mono text-sm text-white">{item.masked_key}</div>
+                          </div>
+                          <div className={`${glassPanelSoftClass} p-3`}>
+                            <div className="text-xs text-zinc-500">到期时间</div>
+                            <div className="mt-2 text-sm text-white" title={item.expires_at ? buildTimeTooltip(item.expires_at) : undefined}>
+                              {item.expires_at ? `${formatTime(item.expires_at)} CST` : "未设置过期"}
+                            </div>
+                            <div className="mt-1 text-xs text-zinc-500">{item.expires_at ? formatRelativeTime(item.expires_at) : "建议为生产密钥设置有效期"}</div>
+                          </div>
+                          <div className={`${glassPanelSoftClass} p-3`}>
+                            <div className="text-xs text-zinc-500">最近使用</div>
+                            <div className="mt-2 text-sm text-white" title={item.last_used_at ? buildTimeTooltip(item.last_used_at) : undefined}>
+                              {item.last_used_at ? `${formatTime(item.last_used_at)} CST` : "尚未使用"}
+                            </div>
+                            <div className="mt-1 text-xs text-zinc-300" title={sourceInfo.detail}>
+                              {item.last_used_at ? `${formatRelativeTime(item.last_used_at)} · ${sourceInfo.label}` : "首次调用后这里会显示访问来源"}
+                            </div>
+                          </div>
+                          <div className={`${glassPanelSoftClass} p-3`}>
+                            <div className="text-xs text-zinc-500">当前状态</div>
+                            <div className="mt-2 text-sm text-white">{status.label}</div>
+                            <div className="mt-1 text-xs text-zinc-500">{status.hint}</div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void copyText(item.key_prefix, "密钥前缀已复制")}
+                            className={buttonClass("secondary")}
+                          >
+                            <Clipboard className="h-4 w-4" aria-hidden />
+                            复制前缀
+                          </button>
+                          <button type="button" onClick={() => void rotateManagedKey(item)} className={buttonClass("secondary")} disabled={busy}>
+                            <RefreshCcw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} aria-hidden />
+                            轮换
+                          </button>
+                          {item.is_active ? (
+                            <button type="button" onClick={() => void updateManagedKeyLifecycle(item, "revoke")} className={buttonClass("danger")} disabled={busy}>
+                              <X className="h-4 w-4" aria-hidden />
+                              停用
+                            </button>
+                          ) : (
+                            <button type="button" onClick={() => void updateManagedKeyLifecycle(item, "activate")} className={buttonClass("secondary")} disabled={busy}>
+                              <CheckCircle2 className="h-4 w-4" aria-hidden />
+                              恢复
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </motion.article>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+      </section>
+
+      <aside className="space-y-4">
+        <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
+          <PanelGlow />
+          <div className="relative flex items-center justify-between gap-3">
+            <h2 className="text-base font-semibold text-white">最新明文密钥</h2>
+            <span className="rounded-md border border-amber-300/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-100">只返回一次</span>
+          </div>
+          {managedKeyIssueState ? (
+            <div className="relative mt-4 space-y-4">
+              <div className={`${glassPanelSoftClass} p-4`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium text-white">
+                      {managedKeyIssueState.action === "created" ? "刚创建的新密钥" : "刚轮换出的新密钥"}
+                    </div>
+                    <div className="mt-1 text-xs text-zinc-500">
+                      {managedKeyIssueState.item.name} · {managedKeyRoleLabel(managedKeyIssueState.item.role)}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setManagedKeyIssueState(null)}
+                    className="flex h-9 w-9 items-center justify-center rounded-md text-zinc-400 hover:bg-white/[0.08] hover:text-white focus:outline-none focus:ring-2 focus:ring-teal-300/60"
+                    aria-label="清除最新明文密钥展示"
+                  >
+                    <X className="h-4 w-4" aria-hidden />
+                  </button>
+                </div>
+                <div className="mt-4 rounded-md border border-white/[0.08] bg-black/20 p-3 font-mono text-xs leading-6 break-all text-teal-50">
+                  {managedKeyIssueState.apiKey}
+                </div>
+                <p className="mt-3 text-xs leading-6 text-zinc-400">
+                  后台出于安全原因不会再次返回这串明文。请现在就复制，或直接写入右侧的兼容 API Key 设置中供联调使用。
+                </p>
+              </div>
+
+              <div className="grid gap-2">
+                <button
+                  type="button"
+                  onClick={() => void copyText(managedKeyIssueState.apiKey, "明文密钥已复制")}
+                  className={buttonClass("primary")}
+                >
+                  <Copy className="h-4 w-4" aria-hidden />
+                  复制明文密钥
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyIssuedKeyToSettings(managedKeyIssueState.item, managedKeyIssueState.apiKey)}
+                  className={buttonClass("secondary")}
+                >
+                  <KeyRound className="h-4 w-4" aria-hidden />
+                  {isAdminRole(managedKeyIssueState.item.role) ? "写入当前 Admin API Key" : "写入当前 Client API Key"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="relative mt-4">
+              <EmptyState icon={Copy} title="尚未产生新密钥">
+                <p className="mt-3 text-sm leading-6 text-zinc-400">
+                  当你创建或轮换一把托管密钥后，它的明文只会在这里显示一次，适合当场复制给接入方或填入兼容设置。
+                </p>
+              </EmptyState>
+            </div>
+          )}
+        </section>
+
+        <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
+          <PanelGlow />
+          <h2 className="relative text-base font-semibold text-white">发放建议</h2>
+          <div className="relative mt-4 space-y-3 text-sm text-zinc-400">
+            <div className={`${glassPanelSoftClass} p-3`}>
+              <div className="font-medium text-white">个人调试</div>
+              <div className="mt-1 leading-6">优先发 `client`，并设置 7 到 30 天有效期。</div>
+            </div>
+            <div className={`${glassPanelSoftClass} p-3`}>
+              <div className="font-medium text-white">服务接入</div>
+              <div className="mt-1 leading-6">给每个网关、脚本或后端任务单独发一把密钥，避免泄漏后需要全局换钥。</div>
+            </div>
+            <div className={`${glassPanelSoftClass} p-3`}>
+              <div className="font-medium text-white">后台管理</div>
+              <div className="mt-1 leading-6">`admin` 与 `security_admin` 只给少量运营或安全成员，优先通过登录 Token 使用后台。</div>
+            </div>
+          </div>
+        </section>
+
+        <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
+          <PanelGlow />
+          <h2 className="relative text-base font-semibold text-white">当前兼容模式</h2>
+          <div className="relative mt-4 space-y-3 text-sm text-zinc-400">
+            <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
+              <span>后台 Token</span>
+              <span className={hasConsoleToken ? "text-emerald-200" : "text-zinc-200"}>{hasConsoleToken ? "已生效" : "未登录"}</span>
+            </div>
+            <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
+              <span>Admin API Key</span>
+              <span className={settings.adminApiKey ? "text-emerald-200" : "text-zinc-200"}>{settings.adminApiKey ? "已填" : "留空"}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>Client API Key</span>
+              <span className={settings.clientApiKey ? "text-emerald-200" : "text-zinc-200"}>{settings.clientApiKey ? "已填" : "留空"}</span>
+            </div>
+          </div>
+          <button type="button" onClick={() => navigateTo("settings")} className={`${buttonClass("secondary")} relative mt-5 w-full`}>
+            <Settings className="h-4 w-4" aria-hidden />
+            打开设置页
+          </button>
+        </section>
+      </aside>
+    </div>
+  );
+
   const renderGateway = () => (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
       <form onSubmit={submitGatewayTest} className={`${glassPanelClass} relative space-y-4 p-5`}>
@@ -2657,6 +3408,19 @@ export default function Home() {
           </p>
         </div>
 
+        <div className={`${glassPanelSoftClass} relative flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between`}>
+          <div>
+            <div className="text-sm font-medium text-white">主路径已切换为托管密钥</div>
+            <p className="mt-1 text-xs leading-6 text-zinc-400">
+              推荐先登录后台，再去“密钥中心”为每个用户或服务签发独立 Key。这里保留的 Admin / Client Key 仅作为兼容备用。
+            </p>
+          </div>
+          <button type="button" onClick={() => navigateTo("keys")} className={buttonClass("secondary")}>
+            <KeyRound className="h-4 w-4" aria-hidden />
+            打开密钥中心
+          </button>
+        </div>
+
         <div className="relative grid gap-4 md:grid-cols-2">
           <label className="block">
             <span className="mb-2 block text-sm text-[var(--text-secondary)]">刷新间隔（秒）</span>
@@ -2809,7 +3573,7 @@ export default function Home() {
     <div className="grid gap-5 xl:grid-cols-3">
       {[
         { icon: Network, title: "后端接口", lines: ["GET /health", "GET /api/v1/logs", "POST /api/v1/chat/completions"], action: "检测连接", onClick: () => void checkHealth() },
-        { icon: KeyRound, title: "鉴权方式", lines: ["X-API-Key", "Admin / Client", "本地预检兜底"], action: "配置 Key", onClick: () => navigateTo("settings") },
+        { icon: KeyRound, title: "鉴权方式", lines: ["Bearer Token", "托管 API Key", "兼容 Key 兜底"], action: "打开密钥中心", onClick: () => navigateTo("keys") },
         { icon: Bell, title: "运营动作", lines: ["日志筛选", "策略切换", "网关测试"], action: "开始测试", onClick: () => navigateTo("gateway") },
       ].map((item) => (
         <motion.section key={item.title} whileHover={{ y: -3 }} className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
@@ -2834,6 +3598,7 @@ export default function Home() {
   const renderContent = () => {
     if (view === "logs") return renderLogs();
     if (view === "policies") return renderPolicies();
+    if (view === "keys") return renderManagedKeys();
     if (view === "gateway") return renderGateway();
     if (view === "settings") return renderSettings();
     if (view === "help") return renderHelp();
@@ -2943,7 +3708,9 @@ export default function Home() {
             <div className="flex items-start justify-between gap-4 border-b border-white/[0.07] px-5 py-4">
               <div>
                 <h2 className="text-lg font-semibold text-white">日志详情</h2>
-                <p className="mt-1 text-sm text-zinc-400">{formatTime(selectedLog.timestamp)}</p>
+                <p className="mt-1 text-sm text-zinc-400" title={buildTimeTooltip(selectedLog.timestamp)}>
+                  {formatTime(selectedLog.timestamp)} CST
+                </p>
               </div>
               <button type="button" onClick={() => setSelectedLog(null)} className="flex h-9 w-9 items-center justify-center rounded-md text-zinc-400 hover:bg-white/[0.08] hover:text-white focus:outline-none focus:ring-2 focus:ring-teal-300/60" aria-label="关闭日志详情">
                 <X className="h-5 w-5" aria-hidden />

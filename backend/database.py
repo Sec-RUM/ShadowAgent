@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from threading import Lock
 from typing import Generator
@@ -10,8 +11,23 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
-DATABASE_PATH = Path(__file__).resolve().parent / "shadow_agent.db"
-DATABASE_URL = f"sqlite:///{DATABASE_PATH.as_posix()}"
+def _configured_database_url() -> str:
+    explicit_url = os.getenv("SHADOW_AGENT_DATABASE_URL", "").strip()
+    if explicit_url:
+        return explicit_url
+
+    configured_path = os.getenv("SHADOW_AGENT_DATABASE_PATH", "").strip()
+    if configured_path:
+        database_path = Path(configured_path)
+        if not database_path.is_absolute():
+            database_path = Path(__file__).resolve().parent / database_path
+    else:
+        database_path = Path(__file__).resolve().parent / "shadow_agent.db"
+
+    return f"sqlite:///{database_path.resolve().as_posix()}"
+
+
+DATABASE_URL = _configured_database_url()
 
 
 class Base(DeclarativeBase):

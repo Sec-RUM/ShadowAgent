@@ -6,6 +6,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -13,11 +14,15 @@ import secrets
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.security.utils import get_authorization_scheme_param
+
+from database import SessionLocal
+from models import ManagedApiKey
 
 
 ADMIN_ROLES = {"admin", "security_admin"}
@@ -41,6 +46,7 @@ SENSITIVE_TEXT_PATTERNS = [
 ]
 REQUEST_ID_PATTERN = re.compile(r"[^a-zA-Z0-9_.:-]")
 PASSWORD_HASH_ITERATIONS = 120_000
+MANAGED_API_KEY_PREFIX = "sak"
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +99,13 @@ def _jwt_secret() -> str | None:
     return hashlib.sha256(f"{admin_key}|{client_key}|shadow-agent-jwt".encode("utf-8")).hexdigest()
 
 
+def _api_key_pepper() -> str | None:
+    configured = _env_secret("SHADOW_AGENT_API_KEY_PEPPER")
+    if configured:
+        return configured
+    return _jwt_secret()
+
+
 def _unauthorized(message: str = "Authentication required.") -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -115,7 +128,20 @@ def _auth_not_configured() -> HTTPException:
             "error": "auth_not_configured",
             "message": (
                 "Set SHADOW_AGENT_ADMIN_API_KEY, SHADOW_AGENT_CLIENT_API_KEY, "
-                "or SHADOW_AGENT_JWT_SECRET before using protected endpoints."
+                "SHADOW_AGENT_JWT_SECRET, or create managed API keys before using protected endpoints."
+            ),
+        },
+    )
+
+
+def _api_key_pepper_not_configured() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "error": "api_key_pepper_not_configured",
+            "message": (
+                "Set SHADOW_AGENT_API_KEY_PEPPER or SHADOW_AGENT_JWT_SECRET before "
+                "creating or verifying managed API keys."
             ),
         },
     )
@@ -162,6 +188,89 @@ def verify_password(password: str, stored_hash: str) -> bool:
         iterations,
     )
     return hmac.compare_digest(derived.hex(), expected_hash)
+
+
+def _hash_managed_api_key(raw_key: str) -> str:
+    pepper = _api_key_pepper()
+    if not pepper:
+        raise _api_key_pepper_not_configured()
+    return hashlib.sha256(f"{pepper}:{raw_key}".encode("utf-8")).hexdigest()
+
+
+def _normalize_source_host(raw_value: str) -> str:
+    value = raw_value.strip().strip("\"")
+    if not value or value.lower() == "unknown":
+        return ""
+
+    bracket_match = re.match(r"^\[([^\]]+)\](?::\d+)?$", value)
+    if bracket_match:
+        candidate = bracket_match.group(1).strip()
+        try:
+            ipaddress.ip_address(candidate)
+            return candidate
+        except ValueError:
+            return candidate
+
+    try:
+        ipaddress.ip_address(value)
+        return value
+    except ValueError:
+        pass
+
+    if value.count(":") == 1:
+        host_candidate, port_candidate = value.rsplit(":", 1)
+        if port_candidate.isdigit():
+            try:
+                ipaddress.ip_address(host_candidate)
+                return host_candidate
+            except ValueError:
+                return host_candidate.strip()
+
+    return value
+
+
+def _request_source_label(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    forwarded = request.headers.get("forwarded", "")
+    real_ip = request.headers.get("x-real-ip", "")
+
+    candidates: list[tuple[str, str]] = []
+    if forwarded_for:
+        first_forwarded = forwarded_for.split(",", 1)[0].strip()
+        if first_forwarded:
+            candidates.append((first_forwarded, "x-forwarded-for"))
+
+    if forwarded:
+        match = re.search(r"for=(?:\"?\[?)([^;,\]\" ]+)", forwarded, flags=re.IGNORECASE)
+        if match:
+            candidates.append((match.group(1).strip(), "forwarded"))
+
+    if real_ip:
+        candidates.append((real_ip.strip(), "x-real-ip"))
+
+    if request.client and request.client.host:
+        candidates.append((request.client.host.strip(), "direct"))
+
+    for raw_value, source in candidates:
+        normalized = _normalize_source_host(raw_value)
+        if not normalized:
+            continue
+        try:
+            ipaddress.ip_address(normalized)
+            return f"{normalized}|{source}"
+        except ValueError:
+            if normalized.lower() == "unknown":
+                continue
+            return f"{normalized}|{source}"
+
+    return "unknown|unknown"
+
+
+def generate_managed_api_key(role: str) -> tuple[str, str, str]:
+    key_prefix = f"{MANAGED_API_KEY_PREFIX}_{role[:3].lower()}_{secrets.token_hex(4)}"
+    key_secret = secrets.token_urlsafe(32)
+    raw_key = f"{key_prefix}.{key_secret}"
+    return raw_key, key_prefix, _hash_managed_api_key(raw_key)
 
 
 def create_jwt(
@@ -257,6 +366,10 @@ def _verify_api_key(request: Request) -> Principal | None:
     if not presented:
         return None
 
+    managed_api_key = _verify_managed_api_key(request, presented)
+    if managed_api_key is not None:
+        return managed_api_key
+
     admin_key = _env_secret("SHADOW_AGENT_ADMIN_API_KEY")
     client_key = _env_secret("SHADOW_AGENT_CLIENT_API_KEY")
 
@@ -266,6 +379,58 @@ def _verify_api_key(request: Request) -> Principal | None:
         return Principal(subject="api-key-client", role="client", auth_method="api_key")
 
     raise _unauthorized("Invalid API key.")
+
+
+def _verify_managed_api_key(request: Request, presented: str) -> Principal | None:
+    if "." not in presented:
+        return None
+
+    key_prefix = presented.split(".", 1)[0].strip()
+    if not key_prefix.startswith(f"{MANAGED_API_KEY_PREFIX}_"):
+        return None
+
+    db = SessionLocal()
+    try:
+        api_key = (
+            db.query(ManagedApiKey)
+            .filter(ManagedApiKey.key_prefix == key_prefix)
+            .one_or_none()
+        )
+        if api_key is None:
+            return None
+        if not api_key.is_active:
+            raise _unauthorized("Managed API key is revoked.")
+        if api_key.expires_at is not None and api_key.expires_at <= datetime.utcnow():
+            raise _unauthorized("Managed API key has expired.")
+        if not hmac.compare_digest(api_key.key_hash, _hash_managed_api_key(presented)):
+            raise _unauthorized("Invalid API key.")
+
+        api_key.last_used_at = datetime.utcnow()
+        api_key.last_used_by = _request_source_label(request)
+        db.commit()
+        return Principal(
+            subject=f"managed-api-key:{api_key.id}",
+            role=api_key.role,
+            auth_method="managed_api_key",
+        )
+    finally:
+        db.close()
+
+
+def _managed_api_keys_configured() -> bool:
+    db = SessionLocal()
+    try:
+        item = (
+            db.query(ManagedApiKey.id)
+            .filter(ManagedApiKey.is_active.is_(True))
+            .limit(1)
+            .one_or_none()
+        )
+        return item is not None
+    except Exception:
+        return False
+    finally:
+        db.close()
 
 
 def _authenticate(request: Request) -> Principal:
@@ -288,7 +453,7 @@ def _authenticate(request: Request) -> Principal:
             "SHADOW_AGENT_CLIENT_API_KEY",
             "SHADOW_AGENT_JWT_SECRET",
         )
-    ):
+    ) or _managed_api_keys_configured():
         raise _unauthorized()
     raise _auth_not_configured()
 

@@ -71,3 +71,7 @@ playwright-report/
 *.sqlite
 *.sqlite3
 *.db
+
+# Local-only Shadow Agent artifacts
+tempCodeRunnerFile.exe
+backend/codex-public-keys.env

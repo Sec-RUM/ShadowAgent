@@ -196,3 +196,31 @@ class ConsoleUser(Base):
         onupdate=datetime.utcnow,
         nullable=False,
     )
+
+
+class ManagedApiKey(Base):
+    __tablename__ = "managed_api_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(32), default="client", nullable=False, index=True)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    key_prefix: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    key_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_used_by: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+        index=True,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )

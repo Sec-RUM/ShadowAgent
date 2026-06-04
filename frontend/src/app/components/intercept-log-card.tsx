@@ -3,6 +3,7 @@
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import { AlertTriangle, Clock, Copy, Fingerprint, ShieldAlert, Sparkles } from "lucide-react";
 import type { KeyboardEvent } from "react";
+import { buildTimeTooltip, formatBeijingTime } from "../time-utils";
 
 export type InterceptLogCardData = {
   id: number;
@@ -107,20 +108,6 @@ function friendlyReason(reason: string, category: string): string {
 function asNumber(value: unknown, fallback = 0): number {
   const next = Number(value);
   return Number.isFinite(next) ? next : fallback;
-}
-
-function formatTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(date);
 }
 
 function riskMeta(score: number) {
@@ -262,7 +249,7 @@ export function GlassInterceptLogCard({
               </span>
               <span className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.035] px-2 py-1 text-[11px] text-[var(--text-muted)]">
                 <Clock className="h-3.5 w-3.5" aria-hidden />
-                {formatTime(log.timestamp)}
+                <span title={buildTimeTooltip(log.timestamp)}>{formatBeijingTime(log.timestamp)} CST</span>
               </span>
             </div>
 

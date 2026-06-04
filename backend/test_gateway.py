@@ -7,11 +7,18 @@ Run from the repository root:
 from __future__ import annotations
 
 import os
+import tempfile
+import uuid
 
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("SHADOW_AGENT_ADMIN_API_KEY", "test-admin-key")
 os.environ.setdefault("SHADOW_AGENT_CLIENT_API_KEY", "test-client-key")
+os.environ.setdefault("SHADOW_AGENT_ALLOW_SIMULATED_RESPONSES", "true")
+os.environ["SHADOW_AGENT_DATABASE_PATH"] = os.path.join(
+    tempfile.gettempdir(),
+    f"shadow-agent-smoke-{uuid.uuid4().hex}.db",
+)
 
 from main import app
 
