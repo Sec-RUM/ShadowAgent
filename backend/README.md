@@ -26,6 +26,8 @@ SHADOW_AGENT_ADMIN_API_KEY=test-admin-key
 SHADOW_AGENT_CLIENT_API_KEY=test-client-key
 SHADOW_AGENT_JWT_SECRET=replace-with-a-random-string-at-least-32-characters
 SHADOW_AGENT_API_KEY_PEPPER=replace-with-a-separate-random-string-for-managed-api-keys
+SHADOW_AGENT_CONSOLE_BOOTSTRAP_TOKEN=replace-with-a-long-random-bootstrap-token
+SHADOW_AGENT_ALLOW_OPEN_CONSOLE_BOOTSTRAP=false
 SHADOW_AGENT_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 SHADOW_AGENT_UPSTREAM_BASE_URL=https://api.openai.com
 SHADOW_AGENT_UPSTREAM_API_KEY=replace-with-upstream-provider-key
@@ -46,6 +48,23 @@ Managed API keys are hashed with `SHADOW_AGENT_API_KEY_PEPPER`, so production
 deployments should set that value separately from the JWT secret.
 Set `SHADOW_AGENT_ALLOWED_ORIGINS` to the public dashboard origin when exposing
 the service across networks.
+
+Before the first console admin can register, the backend should either:
+
+- set `SHADOW_AGENT_CONSOLE_BOOTSTRAP_TOKEN` and send it as `X-Shadow-Agent-Bootstrap-Token`
+- or, for local demo-only setup, explicitly set `SHADOW_AGENT_ALLOW_OPEN_CONSOLE_BOOTSTRAP=true`
+
+After the first admin exists, self-service registration is **closed by default**.
+To let additional users register, choose one of:
+
+- local/open demo: set `SHADOW_AGENT_ALLOW_OPEN_REGISTRATION=true`
+- invite-only: set `SHADOW_AGENT_CONSOLE_INVITE_TOKEN` and share it out-of-band;
+  new users must send it as `X-Shadow-Agent-Invite-Token` when calling
+  `/api/v1/auth/register`
+
+If neither is configured, subsequent registrations return `403 registration_disabled`.
+The live registration policy is exposed by `GET /api/v1/auth/bootstrap-status` via
+`open_registration_enabled` and `invite_token_configured`.
 
 ## Real Upstream Proxy
 
@@ -79,13 +98,15 @@ Instead:
 
 1. Set `SHADOW_AGENT_JWT_SECRET`
 2. Set `SHADOW_AGENT_API_KEY_PEPPER`
-3. Register the first console account so it becomes `admin`
-4. Log into the admin console
-5. Create per-user or per-system managed keys through:
+3. Set `SHADOW_AGENT_CONSOLE_BOOTSTRAP_TOKEN`
+4. Register the first console account with `X-Shadow-Agent-Bootstrap-Token` so it becomes `admin`
+5. Log into the admin console
+6. Create per-user or per-system managed keys through:
    - `GET /api/v1/api-keys`
    - `POST /api/v1/api-keys`
    - `POST /api/v1/api-keys/{id}/rotate`
    - `POST /api/v1/api-keys/{id}/revoke`
+   - `DELETE /api/v1/api-keys/{id}`
    - `POST /api/v1/api-keys/{id}/activate`
 
 Managed keys support:
@@ -101,9 +122,13 @@ the masked prefix.
 
 ## Console Role Policy
 
-- The first registered console user becomes `admin` by default
+- The first registered console user becomes `admin` by default only after the bootstrap gate is satisfied
 - Later registrations default to `client`
 - You can override that behavior with:
+  - `SHADOW_AGENT_CONSOLE_BOOTSTRAP_TOKEN`
+  - `SHADOW_AGENT_ALLOW_OPEN_CONSOLE_BOOTSTRAP`
+  - `SHADOW_AGENT_ALLOW_OPEN_REGISTRATION`
+  - `SHADOW_AGENT_CONSOLE_INVITE_TOKEN`
   - `SHADOW_AGENT_FIRST_USER_ROLE`
   - `SHADOW_AGENT_CONSOLE_DEFAULT_ROLE`
 

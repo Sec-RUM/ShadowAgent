@@ -20,6 +20,7 @@ os.environ.setdefault("SHADOW_AGENT_CLIENT_API_KEY", "test-client-key")
 os.environ.setdefault("SHADOW_AGENT_ALLOW_SIMULATED_RESPONSES", "true")
 os.environ.setdefault("SHADOW_AGENT_JWT_SECRET", "test-jwt-secret-value-32-characters-minimum")
 os.environ.setdefault("SHADOW_AGENT_API_KEY_PEPPER", "test-api-key-pepper-value-32-characters")
+os.environ.setdefault("SHADOW_AGENT_CONSOLE_BOOTSTRAP_TOKEN", "integration-bootstrap-token")
 os.environ["SHADOW_AGENT_DATABASE_PATH"] = os.path.join(
     tempfile.gettempdir(),
     f"shadow-agent-integration-{uuid.uuid4().hex}.db",
@@ -101,6 +102,14 @@ def assert_status(name: str, actual: int, expected: int) -> None:
 
 def auth_headers(token: str) -> dict[str, str]:
     return {"authorization": f"Bearer {token}"}
+
+
+def bootstrap_headers(token: str) -> dict[str, str]:
+    return {"x-shadow-agent-bootstrap-token": token}
+
+
+def invite_headers(token: str) -> dict[str, str]:
+    return {"x-shadow-agent-invite-token": token}
 
 
 def api_key_headers(raw_key: str) -> dict[str, str]:
@@ -199,6 +208,32 @@ if __name__ == "__main__":
     try:
         register_email = f"integration-console-{uuid.uuid4().hex[:8]}@example.com"
         register_password = "shadow-agent-pass"
+        bootstrap_token = os.environ["SHADOW_AGENT_CONSOLE_BOOTSTRAP_TOKEN"]
+        bootstrap_status_before = client.get("/api/v1/auth/bootstrap-status")
+        assert_status("auth_bootstrap_status_before", bootstrap_status_before.status_code, 200)
+        bootstrap_status_before_body = bootstrap_status_before.json()
+        if not bootstrap_status_before_body.get("bootstrap_required"):
+            raise AssertionError("Fresh integration database should report bootstrap_required before the first admin exists")
+        if not bootstrap_status_before_body.get("bootstrap_token_configured"):
+            raise AssertionError("Bootstrap status should reflect the configured bootstrap token")
+        if bootstrap_status_before_body.get("open_registration_enabled"):
+            raise AssertionError("Open registration should be disabled by default")
+        if bootstrap_status_before_body.get("invite_token_configured"):
+            raise AssertionError("No invite token should be configured before this test sets one")
+
+        blocked_register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "name": "Blocked Bootstrap Attempt",
+                "email": register_email,
+                "password": register_password,
+            },
+        )
+        assert_status("auth_register_requires_bootstrap", blocked_register_response.status_code, 403)
+        blocked_register_body = blocked_register_response.json()
+        if blocked_register_body.get("detail", {}).get("error") != "bootstrap_token_required":
+            raise AssertionError("First console registration should require the bootstrap token")
+
         register_response = client.post(
             "/api/v1/auth/register",
             json={
@@ -206,6 +241,7 @@ if __name__ == "__main__":
                 "email": register_email,
                 "password": register_password,
             },
+            headers=bootstrap_headers(bootstrap_token),
         )
         assert_status("auth_register", register_response.status_code, 200)
         register_body = register_response.json()
@@ -215,14 +251,42 @@ if __name__ == "__main__":
             raise AssertionError("First console registration should provision admin role for dashboard access")
         console_token = register_body["access_token"]
 
+        bootstrap_status_after = client.get("/api/v1/auth/bootstrap-status")
+        assert_status("auth_bootstrap_status_after", bootstrap_status_after.status_code, 200)
+        bootstrap_status_after_body = bootstrap_status_after.json()
+        if bootstrap_status_after_body.get("bootstrap_required"):
+            raise AssertionError("Bootstrap status should be cleared after the first admin registration completes")
+
         second_register_email = f"integration-console-{uuid.uuid4().hex[:8]}-client@example.com"
+        second_register_payload = {
+            "name": "Integration Console Client",
+            "email": second_register_email,
+            "password": register_password,
+        }
+
+        blocked_second_register_response = client.post(
+            "/api/v1/auth/register",
+            json=second_register_payload,
+        )
+        assert_status("auth_register_second_user_disabled", blocked_second_register_response.status_code, 403)
+        if blocked_second_register_response.json().get("detail", {}).get("error") != "registration_disabled":
+            raise AssertionError("Open registration should reject new users when no invite token is configured")
+
+        os.environ["SHADOW_AGENT_CONSOLE_INVITE_TOKEN"] = "integration-invite-token"
+
+        wrong_invite_response = client.post(
+            "/api/v1/auth/register",
+            json=second_register_payload,
+            headers=invite_headers("wrong-invite-token"),
+        )
+        assert_status("auth_register_wrong_invite", wrong_invite_response.status_code, 403)
+        if wrong_invite_response.json().get("detail", {}).get("error") != "invite_token_required":
+            raise AssertionError("A wrong invite token should be rejected as invite_token_required")
+
         second_register_response = client.post(
             "/api/v1/auth/register",
-            json={
-                "name": "Integration Console Client",
-                "email": second_register_email,
-                "password": register_password,
-            },
+            json=second_register_payload,
+            headers=invite_headers(os.environ["SHADOW_AGENT_CONSOLE_INVITE_TOKEN"]),
         )
         assert_status("auth_register_second_user", second_register_response.status_code, 200)
         second_register_body = second_register_response.json()
@@ -295,6 +359,7 @@ if __name__ == "__main__":
         )
         assert_status("managed_client_key_create", managed_client_create_response.status_code, 200)
         managed_client_create_body = managed_client_create_response.json()
+        managed_client_key_id = managed_client_create_body["item"]["id"]
         managed_client_key = managed_client_create_body["api_key"]
         if not managed_client_key.startswith("sak_cli_"):
             raise AssertionError("Managed client API key should use the sak_cli_ prefix")
@@ -389,6 +454,30 @@ if __name__ == "__main__":
         assert_status("managed_keys_list", managed_keys_response.status_code, 200)
         if len(managed_keys_response.json()["items"]) < 2:
             raise AssertionError("Managed API key list should include created keys")
+
+        managed_client_delete_response = client.delete(
+            f"/api/v1/api-keys/{managed_client_key_id}",
+            headers=console_admin_headers,
+        )
+        assert_status("managed_client_key_delete", managed_client_delete_response.status_code, 200)
+        deleted_body = managed_client_delete_response.json()
+        if deleted_body.get("deleted", {}).get("id") != managed_client_key_id:
+            raise AssertionError("Managed API key delete should return the deleted key summary")
+
+        deleted_managed_client_analyze_response = client.post(
+            "/api/v1/analyze",
+            headers=api_key_headers(managed_client_key),
+            json={"prompt": "safe diagnostic", "external_context": "<context>benign</context>"},
+        )
+        assert_status("deleted_managed_client_key_rejected", deleted_managed_client_analyze_response.status_code, 401)
+
+        managed_keys_after_delete_response = client.get(
+            "/api/v1/api-keys",
+            headers=console_admin_headers,
+        )
+        assert_status("managed_keys_after_delete", managed_keys_after_delete_response.status_code, 200)
+        if any(item["id"] == managed_client_key_id for item in managed_keys_after_delete_response.json()["items"]):
+            raise AssertionError("Deleted managed API key should not appear in the key list anymore")
 
         normal_status, normal_body = post_completion("normal", normal_payload)
         injection_status, _ = post_completion(

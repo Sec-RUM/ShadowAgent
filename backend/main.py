@@ -7,6 +7,7 @@ import logging
 import os
 import time
 import uuid
+import hmac
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -267,6 +268,16 @@ class AuthSessionResponse(BaseModel):
     user: AuthUserResponse
 
 
+class ConsoleBootstrapStatusResponse(BaseModel):
+    initialized: bool
+    bootstrap_required: bool
+    bootstrap_token_configured: bool
+    demo_override_enabled: bool
+    open_registration_enabled: bool
+    invite_token_configured: bool
+    recommended_role: str
+
+
 class ManagedApiKeyResponse(BaseModel):
     id: int
     name: str
@@ -332,6 +343,47 @@ def _console_registration_role(db: Session) -> str:
     if console_user_count == 0:
         return _normalize_console_role(_env_text("SHADOW_AGENT_FIRST_USER_ROLE"), "admin")
     return _normalize_console_role(_env_text("SHADOW_AGENT_CONSOLE_DEFAULT_ROLE"), "client")
+
+
+def _console_bootstrap_token() -> str:
+    return _env_text("SHADOW_AGENT_CONSOLE_BOOTSTRAP_TOKEN")
+
+
+def _allow_open_console_bootstrap() -> bool:
+    raw_value = _env_text("SHADOW_AGENT_ALLOW_OPEN_CONSOLE_BOOTSTRAP").lower()
+    return raw_value in {"1", "true", "yes", "on"}
+
+
+def _allow_open_registration() -> bool:
+    raw_value = _env_text("SHADOW_AGENT_ALLOW_OPEN_REGISTRATION").lower()
+    return raw_value in {"1", "true", "yes", "on"}
+
+
+def _console_invite_token() -> str:
+    return _env_text("SHADOW_AGENT_CONSOLE_INVITE_TOKEN")
+
+
+def _console_bootstrap_required(db: Session) -> bool:
+    return db.query(ConsoleUser.id).count() == 0
+
+
+def _console_bootstrap_status(db: Session) -> dict[str, Any]:
+    bootstrap_required = _console_bootstrap_required(db)
+    bootstrap_token = _console_bootstrap_token()
+    demo_override_enabled = _allow_open_console_bootstrap()
+    recommended_role = _console_registration_role(db) if bootstrap_required else _normalize_console_role(
+        _env_text("SHADOW_AGENT_CONSOLE_DEFAULT_ROLE"),
+        "client",
+    )
+    return ConsoleBootstrapStatusResponse(
+        initialized=not bootstrap_required,
+        bootstrap_required=bootstrap_required,
+        bootstrap_token_configured=bool(bootstrap_token),
+        demo_override_enabled=demo_override_enabled,
+        open_registration_enabled=_allow_open_registration(),
+        invite_token_configured=bool(_console_invite_token()),
+        recommended_role=recommended_role,
+    ).model_dump()
 
 
 def _upstream_chat_completions_url() -> str:
@@ -1095,9 +1147,17 @@ async def health() -> dict[str, Any]:
     }
 
 
+@app.get("/api/v1/auth/bootstrap-status")
+async def get_console_bootstrap_status(
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return _console_bootstrap_status(db)
+
+
 @app.post("/api/v1/auth/register")
 async def register_console_user(
     payload: AuthRegisterRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     email = _normalized_email(payload.email)
@@ -1108,7 +1168,74 @@ async def register_console_user(
             detail={"error": "email_already_registered", "message": "This email is already registered."},
         )
 
+    bootstrap_required = _console_bootstrap_required(db)
     role = _console_registration_role(db)
+    if bootstrap_required:
+        bootstrap_token = _console_bootstrap_token()
+        provided_bootstrap_token = (
+            request.headers.get("x-shadow-agent-bootstrap-token")
+            or request.headers.get("x-bootstrap-token")
+            or ""
+        ).strip()
+        if bootstrap_token:
+            if not hmac.compare_digest(provided_bootstrap_token, bootstrap_token):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "bootstrap_token_required",
+                        "message": (
+                            "First console admin registration requires the configured bootstrap token. "
+                            "Provide it in X-Shadow-Agent-Bootstrap-Token."
+                        ),
+                    },
+                )
+        elif not _allow_open_console_bootstrap():
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "bootstrap_setup_required",
+                    "message": (
+                        "Console bootstrap is locked. Configure SHADOW_AGENT_CONSOLE_BOOTSTRAP_TOKEN "
+                        "or explicitly enable SHADOW_AGENT_ALLOW_OPEN_CONSOLE_BOOTSTRAP=true for local demo-only setup."
+                    ),
+                },
+            )
+    else:
+        # After the first admin exists, open self-registration is locked down by
+        # default. Operators either opt back in explicitly for local demos, or
+        # provision a shared invite token that new users must present.
+        if not _allow_open_registration():
+            invite_token = _console_invite_token()
+            provided_invite_token = (
+                request.headers.get("x-shadow-agent-invite-token")
+                or request.headers.get("x-invite-token")
+                or ""
+            ).strip()
+            if not invite_token:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "registration_disabled",
+                        "message": (
+                            "Open registration is disabled. Configure "
+                            "SHADOW_AGENT_ALLOW_OPEN_REGISTRATION=true for local demos, or set "
+                            "SHADOW_AGENT_CONSOLE_INVITE_TOKEN and require new users to provide "
+                            "it in X-Shadow-Agent-Invite-Token."
+                        ),
+                    },
+                )
+            if not hmac.compare_digest(provided_invite_token, invite_token):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "invite_token_required",
+                        "message": (
+                            "Registration requires a valid invite token. "
+                            "Provide it in X-Shadow-Agent-Invite-Token."
+                        ),
+                    },
+                )
+
     user = ConsoleUser(
         name=payload.name.strip(),
         email=email,
@@ -1289,6 +1416,31 @@ async def activate_managed_api_key(
     db.commit()
     db.refresh(item)
     return {"item": _serialize_managed_api_key(item)}
+
+
+@app.delete("/api/v1/api-keys/{api_key_id}")
+async def delete_managed_api_key(
+    api_key_id: int,
+    principal: Principal = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    item = db.query(ManagedApiKey).filter(ManagedApiKey.id == api_key_id).one_or_none()
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "api_key_not_found", "message": "Managed API key does not exist."},
+        )
+
+    deleted_summary = {
+        "id": item.id,
+        "name": item.name,
+        "role": item.role,
+        "key_prefix": item.key_prefix,
+        "is_active": False,
+    }
+    db.delete(item)
+    db.commit()
+    return {"deleted": deleted_summary}
 
 
 @app.get("/api/v1/logs")

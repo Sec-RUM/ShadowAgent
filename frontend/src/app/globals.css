@@ -186,6 +186,24 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+p,
+span,
+label,
+h1,
+h2,
+h3,
+h4 {
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
 * {
   box-sizing: border-box;
 }

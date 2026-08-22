@@ -4,7 +4,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.136-009688?logo=fastapi)
 ![SQLite](https://img.shields.io/badge/SQLite-Log%20Persistence-003B57?logo=sqlite)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
-![License](https://img.shields.io/badge/License-TBD-lightgrey)
+![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)
 
 影子智能体是面向大语言模型 Agent 运行时的中间层安全沙箱。项目重点防御外部插件、检索内容、第三方 API 返回值引入的间接提示词注入 (Indirect Prompt Injection)，以及模型在工具调用链路中的越权访问风险。
 
@@ -118,7 +118,12 @@ ShadowAgent
 - OpenAI 兼容风格的 FastAPI 网关入口。
 - 指令/数据解耦、提示词注入检测、工具权限检查骨架。
 - SQLite + SQLAlchemy 拦截日志持久化。
+- 控制台账号体系：首次 bootstrap 管理员 + 邀请制/开关控制的后续注册 + 托管 API Key。
 - 面向安全运营的 Next.js 管理大屏骨架。
+
+## 安全
+
+发现安全漏洞请查看 [SECURITY.md](./SECURITY.md)，通过私有渠道报告，不要公开披露细节。
 
 ## 路线规划
 

@@ -3,6 +3,7 @@
 import {
   Activity,
   AlertTriangle,
+  Bot,
   Bell,
   CheckCircle2,
   ChevronRight,
@@ -20,6 +21,7 @@ import {
   LayoutDashboard,
   LogIn,
   LogOut,
+  MessageSquare,
   Network,
   Monitor,
   Play,
@@ -39,6 +41,7 @@ import {
   MoonStar,
   Check,
   ChevronDown,
+  Send,
 } from "lucide-react";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import type { FormEvent, ReactNode } from "react";
@@ -52,7 +55,7 @@ type IconComponent = React.ComponentType<{
   "aria-hidden"?: boolean;
 }>;
 
-type ViewKey = "overview" | "logs" | "policies" | "keys" | "gateway" | "settings" | "help";
+type ViewKey = "chat" | "overview" | "logs" | "policies" | "keys" | "gateway" | "settings" | "help";
 
 type SessionUser = {
   id: string;
@@ -67,6 +70,16 @@ type AuthSession = {
   expiresAt: number;
   tokenType: "bearer";
   user: SessionUser;
+};
+
+type BootstrapStatus = {
+  initialized: boolean;
+  bootstrap_required: boolean;
+  bootstrap_token_configured: boolean;
+  demo_override_enabled: boolean;
+  open_registration_enabled: boolean;
+  invite_token_configured: boolean;
+  recommended_role: string;
 };
 
 type InterceptLog = {
@@ -121,6 +134,12 @@ type GatewayResult = {
   title: string;
   message: string;
   detail?: unknown;
+};
+
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
 };
 
 type GatewayFormState = {
@@ -243,6 +262,22 @@ type ManagedApiKeyIssueState = {
   item: ManagedApiKeyItem;
 };
 
+type RoleShowcaseId = "admin" | "client" | "gateway";
+
+type RoleShowcaseDefinition = {
+  id: RoleShowcaseId;
+  label: string;
+  badge: string;
+  description: string;
+  icon: IconComponent;
+  tone: string;
+  authHint: string;
+  judgeFocus: string;
+  suitableFor: string;
+  allowed: string[];
+  restricted: string[];
+};
+
 type DemoScenarioId =
   | "safe-summary"
   | "rag-injection"
@@ -325,6 +360,14 @@ const DEFAULT_GATEWAY_FORM: GatewayFormState = {
   parameters: "{\n  \"requires_admin\": false\n}",
   stream: false,
 };
+
+const DEFAULT_CHAT_MODEL = process.env.NEXT_PUBLIC_SHADOW_AGENT_DEFAULT_MODEL ?? "deepseek-chat";
+
+const CHAT_MODEL_OPTIONS: GlassSelectOption[] = [
+  { value: "deepseek-chat", label: "DeepSeek Chat" },
+  { value: "deepseek-reasoner", label: "DeepSeek Reasoner" },
+  { value: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },
+];
 
 const DEFAULT_VALIDATION_SCENARIO_ID: DemoScenarioId = "plugin-exfiltration";
 const MAX_VALIDATION_RUNS = 6;
@@ -536,13 +579,23 @@ const VIEW_ITEMS: Array<{
   icon: IconComponent;
   title: string;
   subtitle: string;
+  audience: "all" | "admin";
 }> = [
+  {
+    id: "chat",
+    label: "模型对话",
+    icon: MessageSquare,
+    title: "模型对话",
+    subtitle: "通过 Shadow Agent 安全审计后使用已配置的大模型。",
+    audience: "all",
+  },
   {
     id: "overview",
     label: "总览",
     icon: LayoutDashboard,
     title: "安全态势总览",
     subtitle: "运行时拦截、策略状态与网关连通性的统一驾驶舱。",
+    audience: "admin",
   },
   {
     id: "logs",
@@ -550,6 +603,7 @@ const VIEW_ITEMS: Array<{
     icon: FileText,
     title: "拦截日志",
     subtitle: "筛选、查看并复制每一次被阻断的风险事件。",
+    audience: "admin",
   },
   {
     id: "policies",
@@ -557,13 +611,15 @@ const VIEW_ITEMS: Array<{
     icon: SlidersHorizontal,
     title: "策略配置",
     subtitle: "调整提示词注入防护规则、工具权限与审计边界。",
+    audience: "admin",
   },
   {
     id: "keys",
     label: "密钥中心",
     icon: KeyRound,
     title: "托管 API Key",
-    subtitle: "为每个用户或集成独立签发、轮换、停用与恢复密钥。",
+    subtitle: "为每个用户或集成独立签发、轮换、停用、删除与恢复密钥。",
+    audience: "admin",
   },
   {
     id: "gateway",
@@ -571,6 +627,7 @@ const VIEW_ITEMS: Array<{
     icon: Play,
     title: "网关测试",
     subtitle: "模拟真实 Chat Completions 请求，验证 Prompt 与外部上下文是否会被拦截。",
+    audience: "admin",
   },
   {
     id: "settings",
@@ -578,6 +635,7 @@ const VIEW_ITEMS: Array<{
     icon: Settings,
     title: "控制台设置",
     subtitle: "配置后端地址、API Key、刷新策略与本地偏好。",
+    audience: "all",
   },
   {
     id: "help",
@@ -585,11 +643,12 @@ const VIEW_ITEMS: Array<{
     icon: HelpCircle,
     title: "运行参考",
     subtitle: "常用接口、鉴权方式与推荐操作路径。",
+    audience: "all",
   },
 ];
 
 const buttonBase =
-  "inline-flex min-h-10 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium transition duration-200 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-teal-300/60 disabled:cursor-not-allowed disabled:opacity-55";
+  "inline-flex min-h-10 max-w-full items-center justify-center gap-2 rounded-md px-3 text-sm font-medium whitespace-normal break-words transition duration-200 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-teal-300/60 disabled:cursor-not-allowed disabled:opacity-55";
 
 const inputBase =
   "min-h-10 w-full rounded-md border border-white/[0.1] bg-white/[0.055] px-3 text-sm text-zinc-100 outline-none backdrop-blur-[18px] transition placeholder:text-zinc-500 hover:border-white/[0.16] focus:border-teal-300/70 focus:bg-white/[0.075] focus:ring-2 focus:ring-teal-300/20";
@@ -628,6 +687,56 @@ const MANAGED_KEY_ROLE_OPTIONS: GlassSelectOption[] = [
   { value: "gateway", label: "Gateway", description: "适合受限网关、代理层或中间服务", icon: Network },
   { value: "security_admin", label: "Security Admin", description: "适合安全运营与策略管理人员", icon: ShieldCheck },
   { value: "admin", label: "Admin", description: "完整后台管理权限，仅少量发放", icon: Shield },
+] as const;
+
+const ROLE_SHOWCASE_DEFINITIONS: RoleShowcaseDefinition[] = [
+  {
+    id: "admin",
+    label: "Admin",
+    badge: "全链路运营",
+    description: "用于演示审批、策略、密钥和证据导出，适合评委查看完整闭环。",
+    icon: ShieldCheck,
+    tone: "border-rose-300/30 bg-rose-500/10 text-rose-100",
+    authHint: "控制台管理员登录，或签发 admin / security_admin 托管密钥。",
+    judgeFocus: "看“攻击进入后如何被识别、拦截、留痕并复盘”的完整运营链路。",
+    suitableFor: "答辩演示、SOC 运维、安全管理员、策略维护人员。",
+    allowed: ["运行 /api/v1/analyze 与 /api/v1/chat/completions", "查看日志、审批、告警与回放", "签发、停用、删除托管密钥与调整策略"],
+    restricted: ["不建议直接发给普通业务脚本", "不适合作为长期共享的接入身份"],
+  },
+  {
+    id: "client",
+    label: "Client",
+    badge: "业务调用",
+    description: "面向普通业务接入方，只保留安全网关调用能力，避免接触后台运营面。",
+    icon: KeyRound,
+    tone: "border-emerald-300/30 bg-emerald-500/10 text-emerald-100",
+    authHint: "登录后的普通用户 Token，或独立签发的 client 托管密钥。",
+    judgeFocus: "看“正常业务可通过、危险请求被阻断”，同时避免误开放管理权限。",
+    suitableFor: "业务系统、测试同学、普通 Agent 调用方。",
+    allowed: ["运行 /api/v1/analyze 与 /api/v1/chat/completions", "载入验证场景并查看当前响应", "以最小权限完成常规业务请求"],
+    restricted: ["不能查看日志、审批、告警与回放", "不能改策略，也不能管理托管密钥"],
+  },
+  {
+    id: "gateway",
+    label: "Gateway",
+    badge: "代理入口",
+    description: "适合作为统一代理层或中间服务身份，在转发前先完成安全审计。",
+    icon: Network,
+    tone: "border-cyan-300/30 bg-cyan-500/10 text-cyan-100",
+    authHint: "独立签发的 gateway 托管密钥，适合服务到服务调用。",
+    judgeFocus: "看“代理层先拦截后转发”，并把来源标记和证据链沉淀下来。",
+    suitableFor: "API Gateway、代理层、中间件、统一接入服务。",
+    allowed: ["运行 /api/v1/analyze 与 /api/v1/chat/completions", "作为代理层统一承接高频调用", "把场景验证复用为入口安全回归"],
+    restricted: ["不能查看日志、审批、告警与回放", "不能改策略，也不能管理托管密钥"],
+  },
+];
+
+const ROLE_PERMISSION_MATRIX = [
+  { capability: "网关预检 /api/v1/analyze", admin: true, client: true, gateway: true },
+  { capability: "真实网关调用 /api/v1/chat/completions", admin: true, client: true, gateway: true },
+  { capability: "日志与证据查看", admin: true, client: false, gateway: false },
+  { capability: "审批 / 告警 / 回放", admin: true, client: false, gateway: false },
+  { capability: "策略与密钥治理", admin: true, client: false, gateway: false },
 ] as const;
 
 function canUseStorage() {
@@ -681,9 +790,9 @@ function isViewKey(value: string): value is ViewKey {
 }
 
 function activeViewFromHash() {
-  if (typeof window === "undefined") return "overview";
+  if (typeof window === "undefined") return "chat";
   const hash = window.location.hash.replace("#", "");
-  return isViewKey(hash) ? hash : "overview";
+  return isViewKey(hash) ? hash : "chat";
 }
 
 function buttonClass(variant: "primary" | "secondary" | "ghost" | "danger" = "secondary") {
@@ -852,7 +961,59 @@ function detailText(value: unknown) {
   if (typeof value === "string") return value;
   if (value === null || value === undefined) return "-";
   if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (typeof record.message === "string" && record.message.trim()) {
+      return record.message;
+    }
+    if (typeof record.error === "string" && record.error.trim()) {
+      return record.error;
+    }
+  }
   return JSON.stringify(value);
+}
+
+function extractChatContent(value: unknown) {
+  if (!value || typeof value !== "object") return "";
+  const choices = (value as Record<string, unknown>).choices;
+  if (!Array.isArray(choices) || !choices[0] || typeof choices[0] !== "object") return "";
+
+  const message = (choices[0] as Record<string, unknown>).message;
+  if (!message || typeof message !== "object") return "";
+  const content = (message as Record<string, unknown>).content;
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object") return detailText((part as Record<string, unknown>).text);
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  return "";
+}
+
+function sanitizeSettingsForStorage(settings: AppSettings): AppSettings {
+  return {
+    ...settings,
+    adminApiKey: "",
+    clientApiKey: "",
+  };
+}
+
+function sanitizeStoredSessionUser(value: SessionUser | null): SessionUser | null {
+  if (!value) return null;
+  if (value.id === "demo-admin") return value;
+  return null;
+}
+
+function roleAccessSourceLabel(hasToken: boolean, hasApiKey: boolean) {
+  if (hasToken) return "Console Token";
+  if (hasApiKey) return "托管 / 兼容 Key";
+  return "未接入";
 }
 
 function categoryLabel(category: string | undefined) {
@@ -926,11 +1087,12 @@ function buildHeaders(
   const apiKey =
     intent === "admin"
       ? settings.adminApiKey.trim()
-      : settings.clientApiKey.trim() || settings.adminApiKey.trim();
+      : settings.clientApiKey.trim();
+  const bearerToken = isAuthSessionValid(authSession) ? authSession?.accessToken ?? "" : "";
 
   if (json) headers["Content-Type"] = "application/json";
-  if (authSession?.accessToken) {
-    headers.Authorization = `Bearer ${authSession.accessToken}`;
+  if (bearerToken) {
+    headers.Authorization = `Bearer ${bearerToken}`;
   } else if (apiKey) {
     headers["X-API-Key"] = apiKey;
   }
@@ -1214,11 +1376,12 @@ function ThemePreview({
 
 export default function Home() {
   const [mounted, setMounted] = useState(false);
-  const [view, setView] = useState<ViewKey>("overview");
+  const [view, setView] = useState<ViewKey>("chat");
   const [user, setUser] = useState<SessionUser | null>(null);
   const [authSession, setAuthSession] = useState<AuthSession | null>(null);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
-  const [authForm, setAuthForm] = useState({ name: "", email: "", password: "", confirmPassword: "" });
+  const [authForm, setAuthForm] = useState({ name: "", email: "", password: "", confirmPassword: "", bootstrapToken: "", inviteToken: "" });
+  const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatus | null>(null);
   const [logs, setLogs] = useState<InterceptLog[]>([]);
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
@@ -1261,16 +1424,25 @@ export default function Home() {
   const [gatewayLoading, setGatewayLoading] = useState(false);
   const [gatewayResult, setGatewayResult] = useState<GatewayResult | null>(null);
   const [gatewayForm, setGatewayForm] = useState<GatewayFormState>(DEFAULT_GATEWAY_FORM);
+  const [chatModel, setChatModel] = useState(DEFAULT_CHAT_MODEL);
+  const [chatInput, setChatInput] = useState("");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState("");
   const [selectedScenarioId, setSelectedScenarioId] = useState<DemoScenarioId>(DEFAULT_VALIDATION_SCENARIO_ID);
   const [validationRunning, setValidationRunning] = useState(false);
   const [validationResults, setValidationResults] = useState<ValidationSuiteItem[]>(createInitialValidationResults);
   const [validationHistory, setValidationHistory] = useState<ValidationRunRecord[]>([]);
+  const [roleShowcase, setRoleShowcase] = useState<RoleShowcaseId>("admin");
   const apiBaseUrl = settings.apiBase.replace(/\/$/, "");
   const securityConfigKey = `${apiBaseUrl}|${settings.adminApiKey}|${authSession?.accessToken ?? ""}|${user?.id ?? ""}`;
   const hasConsoleToken = isAuthSessionValid(authSession);
   const hasConsoleAdmin = Boolean(hasConsoleToken && isAdminRole(user?.role));
   const hasAdminAccess = Boolean(hasConsoleAdmin || settings.adminApiKey.trim());
-  const hasGatewayAccess = Boolean(hasConsoleToken || settings.clientApiKey.trim() || settings.adminApiKey.trim());
+  const hasGatewayAccess = Boolean(hasConsoleToken || settings.clientApiKey.trim());
+  const visibleViewItems = VIEW_ITEMS.filter((item) => item.audience === "all" || hasAdminAccess);
+  const requestedViewItem = VIEW_ITEMS.find((item) => item.id === view);
+  const effectiveView: ViewKey = requestedViewItem?.audience === "admin" && !hasAdminAccess ? "chat" : view;
 
   const addToast = useCallback((message: string, type: Toast["type"] = "info") => {
     const toast: Toast = { id: makeId("toast"), type, message };
@@ -1279,6 +1451,26 @@ export default function Home() {
       setToasts((current) => current.filter((item) => item.id !== toast.id));
     }, 3200);
   }, []);
+
+  const loadBootstrapStatus = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        const response = await fetch(`${apiBaseUrl}/api/v1/auth/bootstrap-status`, {
+          signal,
+          cache: "no-store",
+        });
+        const data = (await response.json().catch(() => null)) as BootstrapStatus | null;
+        if (!response.ok || !data) {
+          setBootstrapStatus(null);
+          return;
+        }
+        setBootstrapStatus(data);
+      } catch {
+        setBootstrapStatus(null);
+      }
+    },
+    [apiBaseUrl]
+  );
 
   const persistLocalLogs = useCallback((next: InterceptLog[]) => {
     const localOnly = next.filter((log) => log.id < 0).slice(0, 80);
@@ -1591,7 +1783,7 @@ export default function Home() {
 
   useEffect(() => {
     const bootTimer = window.setTimeout(() => {
-      setSettings(readStorage<AppSettings>(STORAGE_KEYS.settings, DEFAULT_SETTINGS));
+      setSettings(sanitizeSettingsForStorage(readStorage<AppSettings>(STORAGE_KEYS.settings, DEFAULT_SETTINGS)));
       setPolicies(readStorage<PolicyRule[]>(STORAGE_KEYS.policies, DEFAULT_POLICIES));
       setTools(readStorage<ToolPermission[]>(STORAGE_KEYS.tools, DEFAULT_TOOLS));
       setLogs(readStorage<InterceptLog[]>(STORAGE_KEYS.localLogs, []));
@@ -1604,13 +1796,9 @@ export default function Home() {
       if (nextValidationRuns[0] && DEMO_SCENARIOS.some((scenario) => scenario.id === nextValidationRuns[0].scenarioId)) {
         setSelectedScenarioId(nextValidationRuns[0].scenarioId);
       }
-      const storedSessionUser = readStorage<SessionUser | null>(STORAGE_KEYS.session, null);
-      const storedAuthSession = readStorage<AuthSession | null>(STORAGE_KEYS.authSession, null);
-      if (storedAuthSession && isAuthSessionValid(storedAuthSession)) {
-        const nextAuthSession: AuthSession = storedAuthSession;
-        setAuthSession(nextAuthSession);
-        setUser(nextAuthSession.user);
-      } else if (storedSessionUser?.id === "demo-admin") {
+      const storedSessionUser = sanitizeStoredSessionUser(readStorage<SessionUser | null>(STORAGE_KEYS.session, null));
+      removeStorage(STORAGE_KEYS.authSession);
+      if (storedSessionUser?.id === "demo-admin") {
         removeStorage(STORAGE_KEYS.authSession);
         setAuthSession(null);
         setUser(storedSessionUser);
@@ -1631,6 +1819,18 @@ export default function Home() {
       window.removeEventListener("hashchange", onHashChange);
     };
   }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void loadBootstrapStatus(controller.signal);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [apiBaseUrl, loadBootstrapStatus, mounted]);
 
   useEffect(() => {
     if (!mounted || !user) return;
@@ -1668,13 +1868,6 @@ export default function Home() {
           createdAt: data.user.created_at,
         };
         setUser(sessionUser);
-        writeStorage(STORAGE_KEYS.session, sessionUser);
-        writeStorage(STORAGE_KEYS.authSession, {
-          accessToken: authSession!.accessToken,
-          tokenType: authSession!.tokenType,
-          expiresAt: authSession!.expiresAt,
-          user: sessionUser,
-        });
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") {
           return;
@@ -1727,7 +1920,7 @@ export default function Home() {
     return () => media.removeListener(handleChange);
   }, [settings.themeMode]);
 
-  const activeView = VIEW_ITEMS.find((item) => item.id === view) ?? VIEW_ITEMS[0];
+  const activeView = VIEW_ITEMS.find((item) => item.id === effectiveView) ?? VIEW_ITEMS[0];
 
   const metrics = useMemo(() => {
     const totalBlocked = logs.length;
@@ -1799,6 +1992,147 @@ export default function Home() {
     };
   }, [managedKeys]);
 
+  const roleShowcaseDefinition = useMemo(
+    () => ROLE_SHOWCASE_DEFINITIONS.find((item) => item.id === roleShowcase) ?? ROLE_SHOWCASE_DEFINITIONS[0],
+    [roleShowcase]
+  );
+
+  const roleShowcaseStatus = useMemo(() => {
+    return {
+      admin: {
+        enabled: hasConsoleAdmin || Boolean(settings.adminApiKey.trim()),
+        source: roleAccessSourceLabel(hasConsoleAdmin, Boolean(settings.adminApiKey.trim())),
+      },
+      client: {
+        enabled: hasConsoleToken || Boolean(settings.clientApiKey.trim()),
+        source: roleAccessSourceLabel(hasConsoleToken, Boolean(settings.clientApiKey.trim())),
+      },
+      gateway: {
+        enabled: Boolean(
+          managedKeys.some((item) => item.role === "gateway" && managedKeyStatus(item).label === "生效中") ||
+            settings.clientApiKey.trim()
+        ),
+        source:
+          managedKeys.some((item) => item.role === "gateway" && managedKeyStatus(item).label === "生效中")
+            ? "Gateway 托管 Key"
+            : roleAccessSourceLabel(false, Boolean(settings.clientApiKey.trim())),
+      },
+    };
+  }, [hasConsoleAdmin, hasConsoleToken, managedKeys, settings.adminApiKey, settings.clientApiKey]);
+
+  const recentLogs = useMemo(() => logs.slice(0, 5), [logs]);
+  const latestBlockedLog = recentLogs[0] ?? null;
+
+  const evidenceBundle = useMemo(() => {
+    const selectedStatus = roleShowcaseStatus[roleShowcase];
+    const linkedRequestId = latestBlockedLog ? detailText(latestBlockedLog.details.request_id) : "";
+    const relatedApproval = linkedRequestId ? approvals.find((item) => item.request_id === linkedRequestId) ?? null : null;
+    const relatedAlerts = linkedRequestId ? alerts.filter((item) => item.request_id === linkedRequestId) : [];
+    const relatedReplay = linkedRequestId ? replays.find((item) => item.source_request_id === linkedRequestId) ?? null : null;
+    const matchedScenario =
+      DEMO_SCENARIOS.find(
+        (scenario) =>
+          scenario.id === selectedScenarioId ||
+          scenario.prompt === gatewayForm.prompt ||
+          scenario.externalContext === gatewayForm.externalContext
+      ) ?? selectedScenario;
+
+    return {
+      exportedAt: new Date().toISOString(),
+      bundleType: "shadow-agent-demo-evidence",
+      summary: {
+        roleShowcase: roleShowcaseDefinition.label,
+        roleStatus: selectedStatus.enabled ? "ready" : "not_connected",
+        selectedScenario: matchedScenario.label,
+        expectedOutcome: matchedScenario.expectedOutcome,
+        gatewayMode: hasGatewayAccess ? "backend" : "local",
+        latestGatewayVerdict: gatewayResult?.ok === true ? "allowed" : gatewayResult?.ok === false ? "blocked_or_error" : "pending",
+        validationReadiness,
+        validationSummary,
+      },
+      roleShowcase: {
+        activeRole: roleShowcaseDefinition.id,
+        label: roleShowcaseDefinition.label,
+        badge: roleShowcaseDefinition.badge,
+        description: roleShowcaseDefinition.description,
+        authHint: roleShowcaseDefinition.authHint,
+        judgeFocus: roleShowcaseDefinition.judgeFocus,
+        suitableFor: roleShowcaseDefinition.suitableFor,
+        currentSource: selectedStatus.source,
+        currentConnected: selectedStatus.enabled,
+        matrix: ROLE_PERMISSION_MATRIX,
+      },
+      scenarioInput: {
+        selectedScenarioId: matchedScenario.id,
+        label: matchedScenario.label,
+        summary: matchedScenario.summary,
+        attackSurface: matchedScenario.attackSurface,
+        operatorHint: matchedScenario.operatorHint,
+        prompt: gatewayForm.prompt || matchedScenario.prompt,
+        externalContext: gatewayForm.externalContext || matchedScenario.externalContext,
+        toolName: gatewayForm.toolName || matchedScenario.toolName,
+        parameters: gatewayForm.parameters || matchedScenario.parameters,
+      },
+      gatewayResult: gatewayResult
+        ? {
+            ok: gatewayResult.ok,
+            title: gatewayResult.title,
+            message: gatewayResult.message,
+            detail: gatewayResult.detail,
+          }
+        : null,
+      latestEvidenceChain: latestBlockedLog
+        ? {
+            requestId: linkedRequestId,
+            log: latestBlockedLog,
+            approval: relatedApproval,
+            alerts: relatedAlerts,
+            replay: relatedReplay,
+          }
+        : null,
+      validation: {
+        currentResults: validationResults,
+        currentSummary: validationSummary,
+        recentRuns: validationHistory,
+      },
+      managedKeys: {
+        summary: managedKeyStats,
+        items: managedKeys.map((item) => ({
+          ...item,
+          status: managedKeyStatus(item).label,
+        })),
+      },
+      policies: policies.filter((policy) => policy.enabled),
+      tools,
+      recentLogs,
+    };
+  }, [
+    alerts,
+    approvals,
+    gatewayForm.externalContext,
+    gatewayForm.parameters,
+    gatewayForm.prompt,
+    gatewayForm.toolName,
+    gatewayResult,
+    hasGatewayAccess,
+    latestBlockedLog,
+    managedKeyStats,
+    managedKeys,
+    policies,
+    recentLogs,
+    replays,
+    roleShowcase,
+    roleShowcaseDefinition,
+    roleShowcaseStatus,
+    selectedScenario,
+    selectedScenarioId,
+    tools,
+    validationHistory,
+    validationReadiness,
+    validationResults,
+    validationSummary,
+  ]);
+
   const threatTypes = useMemo(() => Array.from(new Set(logs.map((log) => log.threat_type))).filter(Boolean), [logs]);
 
   const riskFilterOptions = useMemo<GlassSelectOption[]>(
@@ -1830,6 +2164,14 @@ export default function Home() {
     [tools],
   );
 
+  const chatModelOptions = useMemo<GlassSelectOption[]>(
+    () =>
+      CHAT_MODEL_OPTIONS.some((option) => option.value === chatModel)
+        ? CHAT_MODEL_OPTIONS
+        : [{ value: chatModel, label: chatModel }, ...CHAT_MODEL_OPTIONS],
+    [chatModel],
+  );
+
   const filteredLogs = useMemo(() => {
     const query = search.trim().toLowerCase();
     return logs.filter((log) => {
@@ -1858,12 +2200,17 @@ export default function Home() {
     });
   }, [logs, riskFilter, search, threatFilter]);
 
-  const navigateTo = (target: ViewKey) => {
-    setView(target);
-    if (typeof window !== "undefined") {
-      window.history.replaceState(null, "", `#${target}`);
-    }
-  };
+  const navigateTo = useCallback(
+    (target: ViewKey) => {
+      const targetItem = VIEW_ITEMS.find((item) => item.id === target);
+      const nextTarget = targetItem?.audience === "admin" && !hasAdminAccess ? "chat" : target;
+      setView(nextTarget);
+      if (typeof window !== "undefined") {
+        window.history.replaceState(null, "", `#${nextTarget}`);
+      }
+    },
+    [hasAdminAccess]
+  );
 
   const seedLogs = useCallback(() => {
     const stamped = stampSampleLogs();
@@ -1899,7 +2246,7 @@ export default function Home() {
     loadScenarioIntoGateway(DEFAULT_VALIDATION_SCENARIO_ID);
     navigateTo("gateway");
     addToast("默认验证场景已就绪，可以直接发送检测", "success");
-  }, [addToast, loadScenarioIntoGateway, seedLogs]);
+  }, [addToast, loadScenarioIntoGateway, navigateTo, seedLogs]);
 
   const handleAuth = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1931,9 +2278,15 @@ export default function Home() {
         authMode === "login"
           ? `${settings.apiBase.replace(/\/$/, "")}/api/v1/auth/login`
           : `${settings.apiBase.replace(/\/$/, "")}/api/v1/auth/register`;
+      const bootstrapToken = authForm.bootstrapToken.trim();
+      const inviteToken = authForm.inviteToken.trim();
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(authMode === "register" && bootstrapToken ? { "X-Shadow-Agent-Bootstrap-Token": bootstrapToken } : {}),
+          ...(authMode === "register" && inviteToken ? { "X-Shadow-Agent-Invite-Token": inviteToken } : {}),
+        },
         body: JSON.stringify(
           authMode === "login"
             ? { email, password }
@@ -1964,11 +2317,12 @@ export default function Home() {
         expiresAt: asNumber(data.expires_at),
         user: sessionUser,
       };
-      writeStorage(STORAGE_KEYS.authSession, nextAuthSession);
-      writeStorage(STORAGE_KEYS.session, sessionUser);
       setAuthSession(nextAuthSession);
       setUser(sessionUser);
-      setAuthForm({ name: "", email: "", password: "", confirmPassword: "" });
+      removeStorage(STORAGE_KEYS.authSession);
+      removeStorage(STORAGE_KEYS.session);
+      setAuthForm({ name: "", email: "", password: "", confirmPassword: "", bootstrapToken: "", inviteToken: "" });
+      void loadBootstrapStatus();
       addToast(
         authMode === "login"
           ? "登录成功"
@@ -2132,8 +2486,13 @@ export default function Home() {
       refreshInterval: Math.max(10, Number(settings.refreshInterval) || 30),
     };
     setSettings(normalized);
-    writeStorage(STORAGE_KEYS.settings, normalized);
-    addToast("设置已保存", "success");
+    writeStorage(STORAGE_KEYS.settings, sanitizeSettingsForStorage(normalized));
+    addToast(
+      normalized.adminApiKey.trim() || normalized.clientApiKey.trim()
+        ? "设置已保存，敏感 Key 仅保留在当前浏览器会话"
+        : "设置已保存",
+      "success"
+    );
   };
 
   const resetSettings = () => {
@@ -2153,9 +2512,11 @@ export default function Home() {
   const clearLocalData = () => {
     removeStorage(STORAGE_KEYS.authSession);
     removeStorage(STORAGE_KEYS.session);
+    removeStorage(STORAGE_KEYS.settings);
     removeStorage(STORAGE_KEYS.localLogs);
     removeStorage(STORAGE_KEYS.validationRuns);
     setAuthSession(null);
+    setSettings(DEFAULT_SETTINGS);
     setLogs([]);
     setManagedKeys([]);
     setManagedKeyIssueState(null);
@@ -2164,7 +2525,9 @@ export default function Home() {
     setSelectedScenarioId(DEFAULT_VALIDATION_SCENARIO_ID);
     setGatewayResult(null);
     setValidationRunning(false);
+    setBootstrapStatus(null);
     setUser(null);
+    void loadBootstrapStatus();
     addToast("本地会话和验证数据已清除", "info");
   };
 
@@ -2173,8 +2536,12 @@ export default function Home() {
       ? { ...settings, adminApiKey: apiKey }
       : { ...settings, clientApiKey: apiKey };
     setSettings(nextSettings);
-    writeStorage(STORAGE_KEYS.settings, nextSettings);
-    addToast(isAdminRole(item.role) ? "已写入当前 Admin API Key" : "已写入当前 Client API Key", "success");
+    addToast(
+      isAdminRole(item.role)
+        ? "已写入当前会话的 Admin API Key，不会持久化到本地存储"
+        : "已写入当前会话的 Client API Key，不会持久化到本地存储",
+      "success"
+    );
   };
 
   const createManagedKey = async (event: FormEvent<HTMLFormElement>) => {
@@ -2273,31 +2640,85 @@ export default function Home() {
     }
   };
 
-  const updateManagedKeyLifecycle = async (item: ManagedApiKeyItem, action: "revoke" | "activate") => {
-    if (!hasAdminAccess) {
-      addToast("请先登录管理员账号或配置 Admin API Key", "error");
-      return;
-    }
+  const removeDeletedKeyFromSession = useCallback(
+    (item: ManagedApiKeyItem) => {
+      const keyPrefixWithSeparator = `${item.key_prefix}.`;
+      setSettings((current) => ({
+        ...current,
+        adminApiKey:
+          isAdminRole(item.role) && current.adminApiKey.startsWith(keyPrefixWithSeparator)
+            ? ""
+            : current.adminApiKey,
+        clientApiKey:
+          !isAdminRole(item.role) && current.clientApiKey.startsWith(keyPrefixWithSeparator)
+            ? ""
+            : current.clientApiKey,
+      }));
+      if (managedKeyIssueState?.item.id === item.id) {
+        setManagedKeyIssueState(null);
+      }
+    },
+    [managedKeyIssueState]
+  );
 
-    setManagedKeyBusyId(item.id);
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/api-keys/${item.id}/${action}`, {
-        method: "POST",
-        headers: buildHeaders(settings, "admin", false, authSession),
-      });
-      const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
-      if (!response.ok) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+  const updateManagedKeyLifecycle = useCallback(
+    async (item: ManagedApiKeyItem, action: "revoke" | "activate" | "delete") => {
+      if (!hasAdminAccess) {
+        addToast("请先登录管理员账号或配置 Admin API Key", "error");
+        return;
       }
 
-      await loadManagedApiKeys();
-      addToast(action === "revoke" ? "托管密钥已停用" : "托管密钥已恢复", "success");
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : action === "revoke" ? "停用密钥失败" : "恢复密钥失败", "error");
-    } finally {
-      setManagedKeyBusyId(null);
-    }
-  };
+      if (action === "delete") {
+        const confirmed = window.confirm(`确定删除密钥“${item.name}”吗？删除后该密钥会立即失效，且不会再出现在列表中。`);
+        if (!confirmed) {
+          return;
+        }
+      }
+
+      setManagedKeyBusyId(item.id);
+      try {
+        const endpoint =
+          action === "delete"
+            ? `${apiBaseUrl}/api/v1/api-keys/${item.id}`
+            : `${apiBaseUrl}/api/v1/api-keys/${item.id}/${action}`;
+        const response = await fetch(endpoint, {
+          method: action === "delete" ? "DELETE" : "POST",
+          headers: buildHeaders(settings, "admin", false, authSession),
+        });
+        const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
+        if (!response.ok) {
+          throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+        }
+
+        if (action === "delete") {
+          removeDeletedKeyFromSession(item);
+        }
+        await loadManagedApiKeys();
+        addToast(
+          action === "revoke"
+            ? "托管密钥已停用"
+            : action === "activate"
+              ? "托管密钥已恢复"
+              : "托管密钥已删除并立即失效",
+          "success"
+        );
+      } catch (error) {
+        addToast(
+          error instanceof Error
+            ? error.message
+            : action === "revoke"
+              ? "停用密钥失败"
+              : action === "activate"
+                ? "恢复密钥失败"
+                : "删除密钥失败",
+          "error"
+        );
+      } finally {
+        setManagedKeyBusyId(null);
+      }
+    },
+    [addToast, apiBaseUrl, authSession, hasAdminAccess, loadManagedApiKeys, removeDeletedKeyFromSession, settings]
+  );
 
   const reviewApproval = async (approvalId: number, status: "approved" | "rejected") => {
     if (!hasAdminAccess) {
@@ -2419,6 +2840,11 @@ export default function Home() {
     validationResults,
     validationSummary,
   ]);
+
+  const downloadEvidenceBundle = useCallback(() => {
+    downloadJsonFile(`shadow-agent-demo-evidence-${new Date().toISOString().slice(0, 10)}.json`, evidenceBundle);
+    addToast("证据包已导出", "success");
+  }, [addToast, evidenceBundle]);
 
   const loadGatewaySample = (kind: "safe" | "risky") => {
     if (kind === "safe") {
@@ -2714,6 +3140,62 @@ export default function Home() {
     }
   };
 
+  const submitChat = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const prompt = chatInput.trim();
+
+    if (!hasGatewayAccess) {
+      setChatError("当前账号没有模型调用权限，请先登录或配置 Client / Gateway API Key。\nDeepSeek Key 不需要填写在这里。\n");
+      return;
+    }
+    if (!prompt || chatLoading) return;
+
+    const userMessage: ChatMessage = { id: makeId("chat-user"), role: "user", content: prompt };
+    const requestMessages = [...chatMessages, userMessage].map(({ role, content }) => ({ role, content }));
+    setChatMessages((current) => [...current, userMessage]);
+    setChatInput("");
+    setChatError("");
+    setChatLoading(true);
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 60_000);
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/chat/completions`, {
+        method: "POST",
+        headers: buildHeaders(settings, "client", true, authSession),
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: chatModel,
+          messages: requestMessages,
+          stream: false,
+        }),
+      });
+      const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) {
+        const detail = data.detail && typeof data.detail === "object" ? data.detail : data;
+        throw new Error(detailText(detail) || `HTTP ${response.status}`);
+      }
+
+      const content = extractChatContent(data);
+      if (!content) throw new Error("模型返回了空内容，请检查模型配置和上游响应。 ");
+      setChatMessages((current) => [...current, { id: makeId("chat-assistant"), role: "assistant", content }]);
+      addToast("模型已回复", "success");
+    } catch (error) {
+      const message =
+        error instanceof Error && error.name === "AbortError"
+          ? "请求超时，请检查后端和上游模型连接。"
+          : error instanceof Error
+            ? error.message
+            : "模型请求失败。";
+      setChatError(message);
+      addToast(`模型请求失败：${message}`, "error");
+    } finally {
+      window.clearTimeout(timer);
+      setChatLoading(false);
+    }
+  };
+
   const renderToasts = () => (
     <div className="fixed right-4 top-4 z-50 grid w-[min(360px,calc(100vw-2rem))] gap-2">
       <AnimatePresence>
@@ -2742,7 +3224,7 @@ export default function Home() {
     <main className="relative min-h-screen overflow-hidden bg-background text-foreground">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,var(--page-glow-a),transparent_32rem),radial-gradient(circle_at_86%_16%,var(--page-glow-b),transparent_32rem),linear-gradient(135deg,rgba(255,255,255,0.04),transparent_40%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(var(--page-grid)_1px,transparent_1px),linear-gradient(90deg,var(--page-grid)_1px,transparent_1px)] bg-[size:64px_64px] opacity-25" />
-      <div className="relative mx-auto grid min-h-screen w-full max-w-6xl items-center gap-8 px-5 py-10 lg:grid-cols-[minmax(0,1fr)_440px]">
+      <div className="relative mx-auto grid min-h-screen w-full max-w-6xl items-center gap-8 px-5 py-10 xl:grid-cols-[minmax(0,1fr)_minmax(320px,440px)]">
         <section>
           <div className="inline-flex items-center gap-2 rounded-md border border-teal-200/20 bg-teal-300/10 px-3 py-1 text-sm text-[var(--tone-accent-text)] backdrop-blur-[18px]">
             <Shield className="h-4 w-4" aria-hidden />
@@ -2752,7 +3234,7 @@ export default function Home() {
             把不可信上下文挡在 Agent 执行链路之外
           </h1>
           <p className="mt-5 max-w-2xl text-base leading-7 text-[var(--text-secondary)]">
-            控制台已经内置登录、注册、日志审计、策略配置、网关测试和本地预检。进入后可以直接点击各个模块验证交互。
+            登录后可以直接进入模型对话；管理员账号还可以使用日志审计、策略配置、密钥治理和网关安全测试。首次初始化管理员时，需要提供后端配置的 bootstrap token。
           </p>
           <div className="mt-7 grid max-w-3xl gap-3 sm:grid-cols-3">
             {[
@@ -2795,6 +3277,22 @@ export default function Home() {
                 注册
               </button>
             </div>
+
+            {authMode === "register" ? (
+              <div className={`${glassPanelSoftClass} mt-4 px-3 py-3 text-xs leading-6 text-[var(--text-secondary)]`}>
+                {bootstrapStatus?.bootstrap_required
+                  ? bootstrapStatus.bootstrap_token_configured
+                    ? "当前后端还没有管理员账号。请在注册时填写 bootstrap token，完成首个管理员初始化。"
+                    : bootstrapStatus.demo_override_enabled
+                      ? "当前后端还没有管理员账号，但已开启本地 demo 直通模式，可直接完成首个管理员注册。"
+                      : "当前后端还没有管理员账号，且尚未配置 bootstrap token。请先在后端环境变量中设置 SHADOW_AGENT_CONSOLE_BOOTSTRAP_TOKEN。"
+                  : bootstrapStatus?.open_registration_enabled
+                    ? "注册已开放，新账号将默认获得 client 角色。"
+                    : bootstrapStatus?.invite_token_configured
+                      ? "注册为邀请制，请在下方填写管理员提供的邀请码。"
+                      : "注册已关闭。请联系管理员获取邀请码，或由管理员签发托管 API Key。"}
+              </div>
+            ) : null}
 
             <form onSubmit={handleAuth} className="mt-5 space-y-4">
               {authMode === "register" ? (
@@ -2840,6 +3338,30 @@ export default function Home() {
                   />
                 </label>
               ) : null}
+              {authMode === "register" && bootstrapStatus?.bootstrap_required ? (
+                <label className="block">
+                  <span className="mb-2 block text-sm text-[var(--text-secondary)]">Bootstrap Token（首次管理员初始化）</span>
+                  <input
+                    value={authForm.bootstrapToken}
+                    onChange={(event) => setAuthForm((current) => ({ ...current, bootstrapToken: event.target.value }))}
+                    className={inputBase}
+                    type="password"
+                    autoComplete="off"
+                  />
+                </label>
+              ) : null}
+              {authMode === "register" && !bootstrapStatus?.bootstrap_required && bootstrapStatus?.invite_token_configured ? (
+                <label className="block">
+                  <span className="mb-2 block text-sm text-[var(--text-secondary)]">邀请码（由管理员提供）</span>
+                  <input
+                    value={authForm.inviteToken}
+                    onChange={(event) => setAuthForm((current) => ({ ...current, inviteToken: event.target.value }))}
+                    className={inputBase}
+                    type="password"
+                    autoComplete="off"
+                  />
+                </label>
+              ) : null}
               <button type="submit" className={`${buttonClass("primary")} w-full`}>
                 {authMode === "login" ? <LogIn className="h-4 w-4" aria-hidden /> : <UserPlus className="h-4 w-4" aria-hidden />}
                 {authMode === "login" ? "进入控制台" : "创建账号并进入"}
@@ -2862,16 +3384,16 @@ export default function Home() {
   );
 
   const renderOverview = () => {
-    const recentLogs = logs.slice(0, 5);
     const enabledPolicies = policies.filter((policy) => policy.enabled).length;
     const allowedTools = tools.filter((tool) => tool.allowed).length;
+    const RoleShowcaseIcon = roleShowcaseDefinition.icon;
 
     return (
       <div className="space-y-5">
         <section className={`${glassPanelClass} relative overflow-hidden p-6`}>
           <PanelGlow />
           <div className="absolute inset-y-0 right-0 hidden w-[38%] bg-[radial-gradient(circle_at_top,rgba(45,212,191,0.18),transparent_52%),radial-gradient(circle_at_bottom,rgba(251,113,133,0.16),transparent_50%)] lg:block" />
-          <div className="relative grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_360px]">
+          <div className="relative grid gap-6 2xl:grid-cols-[minmax(0,1.35fr)_minmax(300px,360px)]">
             <div className="space-y-5">
               <div className="inline-flex items-center gap-2 rounded-full border border-teal-200/20 bg-teal-300/10 px-3 py-1 text-xs font-medium text-[var(--tone-accent-text)]">
                 <Sparkles className="h-3.5 w-3.5" aria-hidden />
@@ -2888,7 +3410,7 @@ export default function Home() {
                 </p>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-3 lg:grid-cols-3">
                 {[
                   {
                     title: "为什么有差异化",
@@ -2991,21 +3513,25 @@ export default function Home() {
           ))}
         </section>
 
-        <section className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+        <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,360px)]">
           <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
             <PanelGlow />
-            <div className="relative flex items-center justify-between gap-3">
-              <div>
+            <div className="relative flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
                 <h2 className="text-base font-semibold text-white">验证链路</h2>
                 <p className="mt-1 text-sm text-zinc-400">用一个高风险样例检查攻击输入、风险识别、处置动作和证据链是否完整闭环。</p>
               </div>
-              <button type="button" onClick={() => loadScenarioIntoGateway(selectedScenario.id)} className={buttonClass("secondary")}>
+              <button
+                type="button"
+                onClick={() => loadScenarioIntoGateway(selectedScenario.id)}
+                className={`${buttonClass("secondary")} w-full sm:w-auto sm:shrink-0`}
+              >
                 <Copy className="h-4 w-4" aria-hidden />
                 载入场景
               </button>
             </div>
 
-            <div className="relative mt-5 grid gap-3 md:grid-cols-4">
+            <div className="relative mt-5 grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
               {[
                 {
                   title: "1. 注入载荷",
@@ -3036,14 +3562,14 @@ export default function Home() {
             </div>
           </section>
 
-          <section className={`${glassPanelClass} relative p-5`}>
+          <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
             <PanelGlow />
-            <div className="relative flex items-center justify-between">
-              <div>
+            <div className="relative flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
                 <h2 className="text-base font-semibold text-white">验证场景库</h2>
                 <p className="mt-1 text-sm text-zinc-400">覆盖正常流量、检索投毒、工具越权、插件外传与内网探测。</p>
               </div>
-              <span className="rounded-full border border-white/[0.08] bg-white/[0.05] px-3 py-1 text-xs text-zinc-300">
+              <span className="self-start whitespace-nowrap rounded-full border border-white/[0.08] bg-white/[0.05] px-3 py-1 text-xs text-zinc-300 sm:self-auto">
                 {DEMO_SCENARIOS.length} 个场景
               </span>
             </div>
@@ -3056,14 +3582,14 @@ export default function Home() {
                     key={scenario.id}
                     type="button"
                     onClick={() => loadScenarioIntoGateway(scenario.id)}
-                    className={`flex w-full items-start justify-between gap-3 rounded-md border px-4 py-3 text-left transition ${
+                    className={`flex w-full flex-col gap-3 rounded-md border px-4 py-3 text-left transition md:flex-row md:items-start md:justify-between ${
                       selected
                         ? "border-teal-200/24 bg-teal-300/[0.08] shadow-[0_0_28px_rgba(45,212,191,0.1)]"
                         : "border-white/[0.08] bg-white/[0.035] hover:border-white/[0.14] hover:bg-white/[0.06]"
                     }`}
                   >
                     <span className="min-w-0">
-                      <span className="flex items-center gap-2 text-sm font-semibold text-white">
+                      <span className="flex min-w-0 items-center gap-2 text-sm font-semibold text-white">
                         <span className="flex h-6 w-6 items-center justify-center rounded-full border border-white/[0.08] bg-white/[0.05] text-[11px] text-zinc-300">
                           {index + 1}
                         </span>
@@ -3071,7 +3597,7 @@ export default function Home() {
                       </span>
                       <span className="mt-2 block text-xs leading-5 text-zinc-400">{scenario.summary}</span>
                     </span>
-                    <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] ${severityClass(scenario.severity)}`}>
+                    <span className={`self-start shrink-0 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] md:self-auto ${severityClass(scenario.severity)}`}>
                       {scenario.expectedOutcome === "blocked" ? "应拦截" : "应放行"}
                     </span>
                   </button>
@@ -3081,7 +3607,131 @@ export default function Home() {
           </section>
         </section>
 
-        <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <section className={`${glassPanelClass} relative p-5`}>
+          <PanelGlow />
+          <div className="relative flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-white">角色切换演示台</h2>
+              <p className="mt-1 text-sm text-zinc-400">把 Admin、Client、Gateway 放到同一块面板里，评委一眼就能看出权限边界。</p>
+            </div>
+            <button type="button" onClick={() => navigateTo("keys")} className={`${buttonClass("secondary")} w-full sm:w-auto xl:shrink-0`}>
+              <KeyRound className="h-4 w-4" aria-hidden />
+              去签发密钥
+            </button>
+          </div>
+
+            <div className="relative mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {ROLE_SHOWCASE_DEFINITIONS.map((item) => {
+                const Icon = item.icon;
+              const selected = roleShowcase === item.id;
+              const status = roleShowcaseStatus[item.id];
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setRoleShowcase(item.id)}
+                  className={`min-w-0 rounded-md border px-4 py-4 text-left transition ${
+                    selected
+                      ? "border-teal-200/24 bg-teal-300/[0.08] shadow-[0_0_28px_rgba(45,212,191,0.1)]"
+                      : "border-white/[0.08] bg-white/[0.035] hover:border-white/[0.14] hover:bg-white/[0.06]"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <span className="inline-flex min-w-0 items-center gap-2 text-sm font-semibold text-white">
+                      <Icon className="h-4 w-4 text-teal-200" aria-hidden />
+                      {item.label}
+                    </span>
+                      <span className={`shrink-0 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] ${status.enabled ? "border-emerald-300/30 bg-emerald-500/10 text-emerald-100" : "border-white/[0.08] bg-white/[0.05] text-zinc-300"}`}>
+                        {status.enabled ? "已接入" : "未接入"}
+                      </span>
+                    </div>
+                    <div className="mt-2 break-words text-xs leading-6 text-zinc-400">{item.badge} · {status.source}</div>
+                  </button>
+                );
+              })}
+          </div>
+
+            <div className="relative mt-4 grid gap-4">
+              <div className={`${glassPanelSoftClass} min-w-0 p-4`}>
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                  <div className="min-w-0">
+                    <div className={`inline-flex max-w-full self-start whitespace-nowrap rounded-full border px-3 py-1 text-xs ${roleShowcaseDefinition.tone}`}>
+                      <RoleShowcaseIcon className="h-3.5 w-3.5" aria-hidden />
+                      {roleShowcaseDefinition.badge}
+                    </div>
+                  <h3 className="mt-3 text-lg font-semibold text-white">{roleShowcaseDefinition.label}</h3>
+                  <p className="mt-2 text-sm leading-6 text-zinc-400">{roleShowcaseDefinition.description}</p>
+                </div>
+                <span className={`shrink-0 self-start whitespace-nowrap rounded-md border px-2.5 py-1 text-xs ${roleShowcaseStatus[roleShowcase].enabled ? "border-emerald-300/30 bg-emerald-500/10 text-emerald-100" : "border-amber-300/30 bg-amber-500/10 text-amber-100"}`}>
+                  {roleShowcaseStatus[roleShowcase].enabled ? "可直接演示" : "建议先接入"}
+                </span>
+              </div>
+
+                <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                  <div className="rounded-md border border-white/[0.08] bg-white/[0.04] p-3 text-sm">
+                    <div className="text-xs text-zinc-500">接入方式</div>
+                    <div className="mt-2 break-words text-zinc-100">{roleShowcaseDefinition.authHint}</div>
+                  </div>
+                  <div className="rounded-md border border-white/[0.08] bg-white/[0.04] p-3 text-sm">
+                    <div className="text-xs text-zinc-500">评委关注点</div>
+                    <div className="mt-2 break-words text-zinc-100">{roleShowcaseDefinition.judgeFocus}</div>
+                  </div>
+                </div>
+
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                <div className="rounded-md border border-emerald-300/20 bg-emerald-500/10 p-3">
+                  <div className="text-sm font-medium text-emerald-100">能做什么</div>
+                  <div className="mt-2 space-y-2 text-xs leading-6 text-emerald-50/90">
+                    {roleShowcaseDefinition.allowed.map((line) => (
+                      <div key={line}>• {line}</div>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-md border border-rose-300/20 bg-rose-500/10 p-3">
+                  <div className="text-sm font-medium text-rose-100">被限制什么</div>
+                  <div className="mt-2 space-y-2 text-xs leading-6 text-rose-50/90">
+                    {roleShowcaseDefinition.restricted.map((line) => (
+                      <div key={line}>• {line}</div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+              <div className={`${glassPanelSoftClass} min-w-0 p-4`}>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <h3 className="text-sm font-semibold text-white">权限矩阵</h3>
+                  <button type="button" onClick={downloadEvidenceBundle} className={`${buttonClass("secondary")} w-full sm:w-auto`}>
+                    <Save className="h-4 w-4" aria-hidden />
+                  导出演示证据包
+                </button>
+              </div>
+                <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                  {ROLE_PERMISSION_MATRIX.map((row) => (
+                    <div key={row.capability} className="rounded-md border border-white/[0.08] bg-white/[0.04] px-3 py-3 text-xs">
+                      <div className="break-words leading-6 text-zinc-300">{row.capability}</div>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                        {[
+                          { label: "Admin", enabled: row.admin },
+                        { label: "Client", enabled: row.client },
+                        { label: "Gateway", enabled: row.gateway },
+                      ].map((cell) => (
+                        <div key={cell.label} className={`rounded-md px-2 py-2 text-center whitespace-nowrap ${cell.enabled ? "bg-emerald-500/10 text-emerald-100" : "bg-white/[0.04] text-zinc-500"}`}>
+                          {cell.label}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 rounded-md border border-white/[0.08] bg-white/[0.04] px-3 py-3 text-xs leading-6 text-zinc-400">
+                推荐话术：先用 `client/gateway` 跑正常和高风险场景，证明“业务可用但权限克制”；再切到 `admin`，展示日志、审批、回放与证据包导出闭环。
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
           <div className={`${glassPanelClass} relative overflow-visible`}>
             <PanelGlow />
             <div className="relative flex flex-col gap-3 border-b border-white/[0.07] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -3208,7 +3858,7 @@ export default function Home() {
                     onChange={(value) => {
                       const next = { ...settings, autoRefresh: value };
                       setSettings(next);
-                      writeStorage(STORAGE_KEYS.settings, next);
+                      writeStorage(STORAGE_KEYS.settings, sanitizeSettingsForStorage(next));
                     }}
                   />
                 </div>
@@ -3249,7 +3899,7 @@ export default function Home() {
     <div className="space-y-5">
       <section className={`${glassPanelClass} relative p-4`}>
         <PanelGlow />
-        <div className="relative grid gap-3 lg:grid-cols-[minmax(220px,1fr)_180px_180px_auto]">
+        <div className="relative grid gap-3 xl:grid-cols-[minmax(220px,1fr)_minmax(150px,180px)_minmax(150px,180px)_auto]">
           <label className="relative block">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" aria-hidden />
             <input value={search} onChange={(event) => setSearch(event.target.value)} className={`${inputBase} pl-10`} placeholder="搜索请求 ID、风险类型、原始输入" />
@@ -3318,7 +3968,7 @@ export default function Home() {
   );
 
   const renderPolicies = () => (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
       <section className="space-y-4">
         <div className={`${glassPanelClass} ${glassPanelMotionClass} p-4 sm:flex sm:items-center sm:justify-between`}>
           <PanelGlow />
@@ -3476,11 +4126,11 @@ export default function Home() {
   );
 
   const renderManagedKeys = () => (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
       <section className={`${glassPanelClass} relative space-y-4 p-5`}>
         <PanelGlow />
         <div className="relative flex flex-col gap-3 border-b border-white/[0.07] pb-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
+          <div className="min-w-0">
             <h2 className="text-base font-semibold text-white">托管密钥列表</h2>
             <p className="mt-1 text-sm text-zinc-400">每个调用方都应拥有独立密钥，便于单独轮换、停用和追踪最近使用情况。</p>
           </div>
@@ -3622,7 +4272,7 @@ export default function Home() {
                             </div>
                             <p className="mt-2 text-sm leading-6 text-zinc-400">{item.description || "未填写备注，可在名称或说明中记录负责人、用途与环境。"}</p>
                           </div>
-                          <div className="space-y-2 text-right text-xs text-zinc-400">
+                          <div className="space-y-2 text-left text-xs text-zinc-400 md:text-right">
                             <div title={buildTimeTooltip(item.created_at)}>创建于 {formatTime(item.created_at)} CST</div>
                             <div>签发人 {item.created_by || "-"}</div>
                           </div>
@@ -3686,6 +4336,10 @@ export default function Home() {
                               恢复
                             </button>
                           )}
+                          <button type="button" onClick={() => void updateManagedKeyLifecycle(item, "delete")} className={buttonClass("danger")} disabled={busy}>
+                            <Trash2 className="h-4 w-4" aria-hidden />
+                            删除
+                          </button>
                         </div>
                       </div>
                     </motion.article>
@@ -3700,19 +4354,21 @@ export default function Home() {
       <aside className="space-y-4">
         <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
           <PanelGlow />
-          <div className="relative flex items-center justify-between gap-3">
-            <h2 className="text-base font-semibold text-white">最新明文密钥</h2>
-            <span className="rounded-md border border-amber-300/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-100">只返回一次</span>
+          <div className="relative flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <h2 className="min-w-0 text-base font-semibold text-white">最新明文密钥</h2>
+            <span className="self-start whitespace-nowrap rounded-md border border-amber-300/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-100 sm:self-auto">
+              只返回一次
+            </span>
           </div>
           {managedKeyIssueState ? (
             <div className="relative mt-4 space-y-4">
               <div className={`${glassPanelSoftClass} p-4`}>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
                     <div className="text-sm font-medium text-white">
                       {managedKeyIssueState.action === "created" ? "刚创建的新密钥" : "刚轮换出的新密钥"}
                     </div>
-                    <div className="mt-1 text-xs text-zinc-500">
+                    <div className="mt-1 break-words text-xs text-zinc-500">
                       {managedKeyIssueState.item.name} · {managedKeyRoleLabel(managedKeyIssueState.item.role)}
                     </div>
                   </div>
@@ -3748,7 +4404,7 @@ export default function Home() {
                   className={buttonClass("secondary")}
                 >
                   <KeyRound className="h-4 w-4" aria-hidden />
-                  {isAdminRole(managedKeyIssueState.item.role) ? "写入当前 Admin API Key" : "写入当前 Client API Key"}
+                  {isAdminRole(managedKeyIssueState.item.role) ? "写入当前会话的 Admin API Key" : "写入当前会话的 Client API Key"}
                 </button>
               </div>
             </div>
@@ -3756,7 +4412,7 @@ export default function Home() {
             <div className="relative mt-4">
               <EmptyState icon={Copy} title="尚未产生新密钥">
                 <p className="mt-3 text-sm leading-6 text-zinc-400">
-                  当你创建或轮换一把托管密钥后，它的明文只会在这里显示一次，适合当场复制给接入方或填入兼容设置。
+                  当你创建或轮换一把托管密钥后，它的明文只会在这里显示一次，适合当场复制给接入方或写入当前会话的兼容设置。
                 </p>
               </EmptyState>
             </div>
@@ -3795,7 +4451,7 @@ export default function Home() {
               <span className={settings.adminApiKey ? "text-emerald-200" : "text-zinc-200"}>{settings.adminApiKey ? "已填" : "留空"}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span>Client API Key</span>
+              <span>Client / Gateway API Key</span>
               <span className={settings.clientApiKey ? "text-emerald-200" : "text-zinc-200"}>{settings.clientApiKey ? "已填" : "留空"}</span>
             </div>
           </div>
@@ -3808,21 +4464,164 @@ export default function Home() {
     </div>
   );
 
+  const renderChat = () => (
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+      <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
+        <PanelGlow />
+        <div className="relative flex min-h-[620px] flex-col">
+          <div className="flex flex-col gap-4 border-b border-[var(--divider)] pb-5 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2 text-sm font-medium text-[var(--tone-accent-text)]">
+                <MessageSquare className="h-4 w-4" aria-hidden />
+                安全对话入口
+              </div>
+              <h2 className="mt-2 text-xl font-semibold text-[var(--text-primary)]">开始与模型对话</h2>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">
+                每条消息都会先经过 Shadow Agent 审计，再转发给已配置的模型。你的上游 API Key 不会出现在这里。
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setChatMessages([]);
+                setChatInput("");
+                setChatError("");
+              }}
+              disabled={!chatMessages.length && !chatInput}
+              className={buttonClass("secondary")}
+            >
+              <Trash2 className="h-4 w-4" aria-hidden />
+              新建对话
+            </button>
+          </div>
+
+          <div className="relative mt-5 min-h-[360px] flex-1 overflow-y-auto rounded-md border border-[var(--panel-border-soft)] bg-[var(--surface-raised)] p-4" aria-live="polite">
+            {!chatMessages.length && !chatLoading ? (
+              <div className="flex min-h-[330px] flex-col items-center justify-center px-5 text-center">
+                <div className="flex h-14 w-14 items-center justify-center rounded-md border border-teal-300/25 bg-teal-300/10 text-[var(--tone-accent-text)]">
+                  <MessageSquare className="h-6 w-6" aria-hidden />
+                </div>
+                <h3 className="mt-4 text-base font-semibold text-[var(--text-primary)]">还没有消息</h3>
+                <p className="mt-2 max-w-md text-sm leading-6 text-[var(--text-secondary)]">
+                  输入你的问题，Shadow Agent 会在安全检查通过后请求模型。
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-5">
+                {chatMessages.map((message) => (
+                  <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+                    <div className={`max-w-[min(760px,90%)] ${message.role === "user" ? "items-end" : "items-start"}`}>
+                      <div className="mb-1 px-1 text-xs text-[var(--text-muted)]">{message.role === "user" ? "你" : "Shadow Agent"}</div>
+                      <div
+                        className={`whitespace-pre-wrap break-words rounded-md border px-4 py-3 text-sm leading-7 ${
+                          message.role === "user"
+                            ? "border-teal-300/25 bg-teal-300/10 text-[var(--text-primary)]"
+                            : "border-[var(--panel-border-soft)] bg-[var(--surface-elevated)] text-[var(--text-primary)]"
+                        }`}
+                      >
+                        {message.content}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {chatLoading ? (
+                  <div className="flex justify-start">
+                    <div className="rounded-md border border-[var(--panel-border-soft)] bg-[var(--surface-elevated)] px-4 py-3 text-sm text-[var(--text-secondary)]">
+                      正在请求模型...
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
+
+          {chatError ? (
+            <div className="relative mt-4 rounded-md border border-red-300/30 bg-red-500/10 px-4 py-3 text-sm leading-6 text-[var(--tone-danger-text)]" role="alert">
+              {chatError}
+            </div>
+          ) : null}
+
+          <form onSubmit={submitChat} className="relative mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+            <label className="min-w-0 flex-1">
+              <span className="sr-only">输入消息</span>
+              <textarea
+                value={chatInput}
+                onChange={(event) => setChatInput(event.target.value)}
+                className={`${inputBase} min-h-24 resize-y py-3 leading-6`}
+                placeholder="输入你想咨询的问题"
+                disabled={chatLoading}
+              />
+            </label>
+            <button type="submit" disabled={chatLoading || !chatInput.trim()} className={`${buttonClass("primary")} min-h-24 shrink-0 sm:w-28`}>
+              <Send className="h-4 w-4" aria-hidden />
+              {chatLoading ? "处理中" : "发送"}
+            </button>
+          </form>
+        </div>
+      </section>
+
+      <aside className="space-y-5">
+        <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
+          <PanelGlow />
+          <div className="relative flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)]">
+            <Bot className="h-4 w-4 text-[var(--tone-accent-text)]" aria-hidden />
+            对话设置
+          </div>
+          <label className="relative mt-5 block">
+            <span className="mb-2 block text-sm text-[var(--text-secondary)]">模型</span>
+            <GlassSelect value={chatModel} onChange={setChatModel} options={chatModelOptions} ariaLabel="选择对话模型" />
+          </label>
+          <div className="relative mt-5 space-y-3 border-t border-[var(--divider)] pt-4 text-sm">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[var(--text-secondary)]">安全审计</span>
+              <span className="rounded-md border border-emerald-300/30 bg-emerald-400/10 px-2 py-1 text-xs text-[var(--tone-success-text)]">已启用</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[var(--text-secondary)]">当前账号</span>
+              <span className="max-w-[150px] truncate text-[var(--text-primary)]">{user?.email}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[var(--text-secondary)]">网关访问</span>
+              <span className={hasGatewayAccess ? "text-[var(--tone-success-text)]" : "text-[var(--tone-danger-text)]"}>{hasGatewayAccess ? "可用" : "未配置"}</span>
+            </div>
+          </div>
+        </section>
+
+        <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
+          <PanelGlow />
+          <h2 className="relative text-sm font-semibold text-[var(--text-primary)]">调用链路</h2>
+          <div className="relative mt-4 space-y-2 text-sm">
+            {["你的消息", "Shadow Agent 安全审计", "已配置的大模型"].map((item, index) => (
+              <div key={item} className="flex items-center gap-3">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-teal-300/20 bg-teal-300/10 text-xs text-[var(--tone-accent-text)]">{index + 1}</span>
+                <span className="text-[var(--text-secondary)]">{item}</span>
+              </div>
+            ))}
+          </div>
+          <button type="button" onClick={() => navigateTo("settings")} className={`${buttonClass("secondary")} relative mt-5 w-full`}>
+            <Settings className="h-4 w-4" aria-hidden />
+            配置连接
+          </button>
+        </section>
+      </aside>
+    </div>
+  );
+
   const renderGateway = () => (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
+    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
       <form onSubmit={submitGatewayTest} className={`${glassPanelClass} relative space-y-4 p-5`}>
         <PanelGlow />
         <div className={`${glassPanelSoftClass} relative space-y-4 p-4`}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-teal-200/20 bg-teal-300/10 px-3 py-1 text-[11px] font-medium text-[var(--tone-accent-text)]">
+            <div className="min-w-0">
+              <div className="inline-flex max-w-full self-start whitespace-nowrap items-center gap-2 rounded-full border border-teal-200/20 bg-teal-300/10 px-3 py-1 text-[11px] font-medium text-[var(--tone-accent-text)]">
                 <Sparkles className="h-3.5 w-3.5" aria-hidden />
                 场景化安全验证
               </div>
               <h2 className="mt-3 text-lg font-semibold text-white">{selectedScenario.label}</h2>
               <p className="mt-2 text-sm leading-6 text-zinc-400">{selectedScenario.summary}</p>
             </div>
-            <span className={`shrink-0 rounded-full border px-3 py-1 text-xs ${severityClass(selectedScenario.severity)}`}>
+            <span className={`self-start shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-xs sm:self-auto ${severityClass(selectedScenario.severity)}`}>
               {selectedScenario.expectedOutcome === "blocked" ? "预期拦截" : "预期放行"}
             </span>
           </div>
@@ -3830,15 +4629,15 @@ export default function Home() {
           <div className="grid gap-3 md:grid-cols-2">
             <div className="rounded-md border border-white/[0.08] bg-white/[0.035] p-3 text-sm">
               <div className="text-xs text-zinc-500">攻击面</div>
-              <div className="mt-2 text-zinc-100">{selectedScenario.attackSurface}</div>
+              <div className="mt-2 break-words text-zinc-100">{selectedScenario.attackSurface}</div>
             </div>
             <div className="rounded-md border border-white/[0.08] bg-white/[0.035] p-3 text-sm">
               <div className="text-xs text-zinc-500">操作提示</div>
-              <div className="mt-2 text-zinc-100">{selectedScenario.operatorHint}</div>
+              <div className="mt-2 break-words text-zinc-100">{selectedScenario.operatorHint}</div>
             </div>
           </div>
 
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-1">
+          <div className="grid gap-2 md:grid-cols-2 2xl:grid-cols-1">
             {DEMO_SCENARIOS.map((scenario) => {
               const active = selectedScenarioId === scenario.id;
               return (
@@ -3846,14 +4645,14 @@ export default function Home() {
                   key={scenario.id}
                   type="button"
                   onClick={() => loadScenarioIntoGateway(scenario.id)}
-                  className={`flex items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition ${
+                  className={`flex flex-col gap-2 rounded-md border px-3 py-2 text-left text-sm transition sm:flex-row sm:items-center sm:justify-between ${
                     active
                       ? "border-teal-200/24 bg-teal-300/[0.08] text-white"
                       : "border-white/[0.08] bg-white/[0.04] text-zinc-300 hover:border-white/[0.14] hover:text-white"
                   }`}
                 >
-                  <span>{scenario.label}</span>
-                  <span className="text-[11px] opacity-75">{scenario.expectedOutcome === "blocked" ? "Block" : "Allow"}</span>
+                  <span className="min-w-0 break-words">{scenario.label}</span>
+                  <span className="shrink-0 whitespace-nowrap text-[11px] opacity-75">{scenario.expectedOutcome === "blocked" ? "Block" : "Allow"}</span>
                 </button>
               );
             })}
@@ -3907,28 +4706,28 @@ export default function Home() {
           <textarea value={gatewayForm.parameters} onChange={(event) => setGatewayForm((current) => ({ ...current, parameters: event.target.value }))} className={`${inputBase} min-h-28 resize-y py-3 font-mono leading-6`} spellCheck={false} />
         </label>
 
-          <div className="relative flex flex-col gap-3 border-t border-white/[0.07] pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative flex flex-col gap-3 border-t border-white/[0.07] pt-4 xl:flex-row xl:items-center xl:justify-between">
             <label className="flex items-center gap-3 text-sm text-zinc-300">
               <input type="checkbox" checked={gatewayForm.stream} onChange={(event) => setGatewayForm((current) => ({ ...current, stream: event.target.checked }))} className="h-4 w-4 accent-teal-300" />
               Stream
             </label>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => loadGatewaySample("safe")} className={buttonClass("secondary")}>
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            <button type="button" onClick={() => loadGatewaySample("safe")} className={`${buttonClass("secondary")} w-full`}>
               安全样例
             </button>
-            <button type="button" onClick={() => loadGatewaySample("risky")} className={buttonClass("secondary")}>
+            <button type="button" onClick={() => loadGatewaySample("risky")} className={`${buttonClass("secondary")} w-full`}>
               默认高风险场景
             </button>
-            <button type="button" onClick={launchValidationPreset} className={buttonClass("secondary")}>
+            <button type="button" onClick={launchValidationPreset} className={`${buttonClass("secondary")} w-full`}>
               载入默认验证
             </button>
-            <button type="button" onClick={() => void runValidationSuite()} disabled={validationRunning} className={buttonClass("secondary")}>
+            <button type="button" onClick={() => void runValidationSuite()} disabled={validationRunning} className={`${buttonClass("secondary")} w-full`}>
               {validationRunning ? "批量验证中" : "运行批量验证"}
             </button>
-            <button type="button" onClick={resetGatewayForm} className={buttonClass("secondary")}>
+            <button type="button" onClick={resetGatewayForm} className={`${buttonClass("secondary")} w-full`}>
               清空
             </button>
-            <button type="submit" disabled={gatewayLoading} className={buttonClass("primary")}>
+            <button type="submit" disabled={gatewayLoading} className={`${buttonClass("primary")} w-full`}>
               <Play className="h-4 w-4" aria-hidden />
               {gatewayLoading ? "发送中" : "发送检测"}
             </button>
@@ -3939,9 +4738,9 @@ export default function Home() {
       <aside className="space-y-4">
         <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
           <PanelGlow />
-          <div className="relative flex items-center justify-between">
+          <div className="relative flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <h2 className="text-base font-semibold text-white">测试结果</h2>
-            <button type="button" onClick={() => navigateTo("settings")} className={buttonClass("ghost")}>
+            <button type="button" onClick={() => navigateTo("settings")} className={`${buttonClass("ghost")} w-full sm:w-auto`}>
               <KeyRound className="h-4 w-4" aria-hidden />
               API Key
             </button>
@@ -3970,6 +4769,33 @@ export default function Home() {
                 ) : null}
               </div>
               {gatewayResult.detail ? <pre className={`${glassPanelSoftClass} mt-4 max-h-[360px] overflow-auto p-4 text-xs leading-5 text-[var(--text-secondary)]`}>{JSON.stringify(gatewayResult.detail, null, 2)}</pre> : null}
+              <div className="mt-4 grid gap-3">
+                <div className={`${glassPanelSoftClass} p-4`}>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <h3 className="text-sm font-semibold text-white">证据包摘要</h3>
+                    <button type="button" onClick={downloadEvidenceBundle} className={`${buttonClass("secondary")} w-full sm:w-auto`}>
+                      <Save className="h-4 w-4" aria-hidden />
+                      一键导出
+                    </button>
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-md border border-white/[0.08] bg-white/[0.04] p-3 text-sm">
+                      <div className="text-xs text-zinc-500">当前角色视角</div>
+                      <div className="mt-2 text-white">{roleShowcaseDefinition.label}</div>
+                      <div className="mt-1 text-xs leading-5 text-zinc-400">{roleShowcaseDefinition.judgeFocus}</div>
+                    </div>
+                    <div className="rounded-md border border-white/[0.08] bg-white/[0.04] p-3 text-sm">
+                      <div className="text-xs text-zinc-500">最近证据链</div>
+                      <div className="mt-2 text-white">{evidenceBundle.latestEvidenceChain?.requestId || "本次尚未形成阻断 request id"}</div>
+                      <div className="mt-1 text-xs leading-5 text-zinc-400">
+                        {evidenceBundle.latestEvidenceChain
+                          ? `审批 ${evidenceBundle.latestEvidenceChain.approval ? "已关联" : "未关联"} · 告警 ${evidenceBundle.latestEvidenceChain.alerts.length} 条 · 回放 ${evidenceBundle.latestEvidenceChain.replay ? "已关联" : "未关联"}`
+                          : "导出后会附带当前场景输入、验证结果、最近日志、审批、告警与回放快照。"}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           ) : (
             <div className="relative mt-4">
@@ -4029,8 +4855,8 @@ export default function Home() {
               </div>
             ))}
           </div>
-          <div className="relative mt-5 flex flex-wrap gap-2">
-            <button type="button" onClick={() => void checkHealth()} className={`${buttonClass("secondary")} min-w-[112px] flex-1`}>
+          <div className="relative mt-5 grid gap-2 sm:grid-cols-2">
+            <button type="button" onClick={() => void checkHealth()} className={`${buttonClass("secondary")} w-full`}>
               <Network className="h-4 w-4" aria-hidden />
               检测网关
             </button>
@@ -4038,18 +4864,22 @@ export default function Home() {
               type="button"
               onClick={() => void downloadValidationResults()}
               disabled={validationRunning || (validationSummary.executed === 0 && validationHistory.length === 0)}
-              className={`${buttonClass("secondary")} min-w-[112px] flex-1`}
+              className={`${buttonClass("secondary")} w-full`}
             >
               <Save className="h-4 w-4" aria-hidden />
               导出结果
             </button>
-            <button type="button" onClick={() => void runValidationSuite()} disabled={validationRunning} className={`${buttonClass("primary")} min-w-[112px] flex-1`}>
+            <button type="button" onClick={() => void runValidationSuite()} disabled={validationRunning} className={`${buttonClass("primary")} w-full`}>
               <Play className="h-4 w-4" aria-hidden />
               {validationRunning ? "运行中" : "批量验证"}
             </button>
+            <button type="button" onClick={downloadEvidenceBundle} className={`${buttonClass("secondary")} w-full`}>
+              <Clipboard className="h-4 w-4" aria-hidden />
+              证据包导出
+            </button>
           </div>
           <div className="relative mt-5">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <h3 className="text-sm font-semibold text-white">最近运行</h3>
               <span className="text-xs text-[var(--text-secondary)]">自动保存在当前浏览器</span>
             </div>
@@ -4098,15 +4928,15 @@ export default function Home() {
   );
 
   const renderSettings = () => (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
       <section className={`${glassPanelClass} relative space-y-4 p-5`}>
         <PanelGlow />
         <div className="relative flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
+          <div className="min-w-0">
             <h2 className="text-base font-semibold text-white">接口配置</h2>
-            <p className="mt-1 text-sm text-zinc-400">登录后会自动使用后台签发的 Token；API Key 仅作为兼容方式保存在当前浏览器本地。</p>
+            <p className="mt-1 text-sm text-zinc-400">登录后会自动使用后台签发的 Token；API Key 仅作为兼容方式保留在当前浏览器会话，不会写入长期本地存储。</p>
           </div>
-          <button type="button" onClick={() => setKeysVisible((value) => !value)} className={buttonClass("secondary")}>
+          <button type="button" onClick={() => setKeysVisible((value) => !value)} className={`${buttonClass("secondary")} w-full sm:w-auto`}>
             {keysVisible ? <EyeOff className="h-4 w-4" aria-hidden /> : <Eye className="h-4 w-4" aria-hidden />}
             {keysVisible ? "隐藏 Key" : "显示 Key"}
           </button>
@@ -4123,20 +4953,20 @@ export default function Home() {
             <input value={settings.adminApiKey} onChange={(event) => setSettings((current) => ({ ...current, adminApiKey: event.target.value }))} className={inputBase} type={keysVisible ? "text" : "password"} autoComplete="off" />
           </label>
           <label className="block">
-            <span className="mb-2 block text-sm text-[var(--text-secondary)]">Client API Key（兼容备用）</span>
+            <span className="mb-2 block text-sm text-[var(--text-secondary)]">Client / Gateway API Key（兼容备用）</span>
             <input value={settings.clientApiKey} onChange={(event) => setSettings((current) => ({ ...current, clientApiKey: event.target.value }))} className={inputBase} type={keysVisible ? "text" : "password"} autoComplete="off" />
           </label>
         </div>
 
         <div className={`${glassPanelSoftClass} relative space-y-2 p-4 text-sm text-zinc-300`}>
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <span className="text-zinc-400">当前会话</span>
             <span className={hasConsoleToken ? "text-emerald-200" : "text-zinc-200"}>
               {hasConsoleToken ? "后台 Token 已生效" : "未登录 Token"}
             </span>
           </div>
           <p className="text-xs leading-6 text-zinc-400">
-            如果你已经通过登录进入控制台，下面的 Key 可以留空。只有在需要兼容脚本调用或未登录联调时，才需要填写 API Key。
+            如果你已经通过登录进入控制台，下面的 Key 可以留空。只有在需要兼容脚本调用或未登录联调时，才需要填写 API Key；这些 Key 在刷新页面后不会自动恢复。
           </p>
         </div>
 
@@ -4144,10 +4974,10 @@ export default function Home() {
           <div>
             <div className="text-sm font-medium text-white">主路径已切换为托管密钥</div>
             <p className="mt-1 text-xs leading-6 text-zinc-400">
-              推荐先登录后台，再去“密钥中心”为每个用户或服务签发独立 Key。这里保留的 Admin / Client Key 仅作为兼容备用。
+              推荐先登录后台，再去“密钥中心”为每个用户或服务签发独立 Key。这里保留的 Admin / Client Key 仅作为兼容备用，且只在当前会话有效。
             </p>
           </div>
-          <button type="button" onClick={() => navigateTo("keys")} className={buttonClass("secondary")}>
+          <button type="button" onClick={() => navigateTo("keys")} className={`${buttonClass("secondary")} w-full sm:w-auto`}>
             <KeyRound className="h-4 w-4" aria-hidden />
             打开密钥中心
           </button>
@@ -4332,12 +5162,13 @@ export default function Home() {
   );
 
   const renderContent = () => {
-    if (view === "logs") return renderLogs();
-    if (view === "policies") return renderPolicies();
-    if (view === "keys") return renderManagedKeys();
-    if (view === "gateway") return renderGateway();
-    if (view === "settings") return renderSettings();
-    if (view === "help") return renderHelp();
+    if (effectiveView === "chat") return renderChat();
+    if (effectiveView === "logs") return renderLogs();
+    if (effectiveView === "policies") return renderPolicies();
+    if (effectiveView === "keys") return renderManagedKeys();
+    if (effectiveView === "gateway") return renderGateway();
+    if (effectiveView === "settings") return renderSettings();
+    if (effectiveView === "help") return renderHelp();
     return renderOverview();
   };
 
@@ -4351,7 +5182,7 @@ export default function Home() {
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(var(--page-grid)_1px,transparent_1px),linear-gradient(90deg,var(--page-grid)_1px,transparent_1px)] bg-[size:56px_56px] opacity-25" />
       <div className="relative grid min-h-screen grid-cols-1 lg:grid-cols-[264px_minmax(0,1fr)]">
         <aside className="border-b border-[var(--panel-border-soft)] bg-[var(--panel-bg-soft)] px-4 py-4 shadow-[var(--sidebar-shadow)] backdrop-blur-[28px] lg:border-b-0 lg:border-r">
-          <button type="button" onClick={() => navigateTo("overview")} className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left hover:bg-white/[0.06] focus:outline-none focus:ring-2 focus:ring-teal-300/60">
+          <button type="button" onClick={() => navigateTo("chat")} className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left hover:bg-white/[0.06] focus:outline-none focus:ring-2 focus:ring-teal-300/60">
             <span className="flex h-10 w-10 items-center justify-center rounded-md border border-teal-300/30 bg-teal-400/10">
               <Shield className="h-5 w-5 text-teal-200" aria-hidden />
             </span>
@@ -4361,15 +5192,15 @@ export default function Home() {
             </span>
           </button>
 
-          <nav className="mt-6 grid gap-1" aria-label="管理导航">
-            {VIEW_ITEMS.map((item) => (
+          <nav className="mt-6 grid gap-1" aria-label="应用导航">
+            {visibleViewItems.map((item) => (
               <button
                 key={item.id}
                 type="button"
                 onClick={() => navigateTo(item.id)}
-                aria-current={view === item.id ? "page" : undefined}
+                aria-current={effectiveView === item.id ? "page" : undefined}
                 className={`flex min-h-10 items-center gap-3 rounded-md px-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-teal-300/60 ${
-                  view === item.id
+                  effectiveView === item.id
                     ? "border border-teal-200/25 bg-teal-300/[0.11] text-teal-50 shadow-[0_0_24px_rgba(45,212,191,0.1)]"
                     : "text-zinc-400 hover:bg-white/[0.055] hover:text-zinc-100"
                 }`}
@@ -4419,19 +5250,27 @@ export default function Home() {
               <h1 className="mt-2 text-3xl font-semibold text-white">{activeView.title}</h1>
             </div>
             <div className="relative flex flex-wrap items-center gap-2">
-              <button type="button" onClick={() => void loadLogs()} className={buttonClass("secondary")}>
-                <RefreshCcw className={`h-4 w-4 ${logsLoading ? "animate-spin" : ""}`} aria-hidden />
-                刷新日志
+              {hasAdminAccess ? (
+                <button type="button" onClick={() => void loadLogs()} className={buttonClass("secondary")}>
+                  <RefreshCcw className={`h-4 w-4 ${logsLoading ? "animate-spin" : ""}`} aria-hidden />
+                  刷新日志
+                </button>
+              ) : null}
+              <button type="button" onClick={() => navigateTo("chat")} className={buttonClass("primary")}>
+                <MessageSquare className="h-4 w-4" aria-hidden />
+                开始对话
               </button>
-              <button type="button" onClick={() => navigateTo("gateway")} className={buttonClass("primary")}>
-                <Play className="h-4 w-4" aria-hidden />
-                测试网关
-              </button>
+              {hasAdminAccess ? (
+                <button type="button" onClick={() => navigateTo("gateway")} className={buttonClass("secondary")}>
+                  <Play className="h-4 w-4" aria-hidden />
+                  网关测试
+                </button>
+              ) : null}
             </div>
           </header>
 
           <AnimatePresence mode="wait">
-            <motion.div key={view} variants={viewVariants} initial="hidden" animate="show" exit="exit" className="mt-6">
+            <motion.div key={effectiveView} variants={viewVariants} initial="hidden" animate="show" exit="exit" className="mt-6">
               {renderContent()}
             </motion.div>
           </AnimatePresence>
