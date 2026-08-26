@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Generator
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
@@ -36,8 +36,23 @@ class Base(DeclarativeBase):
 
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False},
+    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
+    pool_pre_ping=True,
 )
+
+
+if DATABASE_URL.startswith("sqlite"):
+
+    @event.listens_for(engine, "connect")
+    def _configure_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
+        """WAL + busy timeout so request writes and audit writes coexist."""
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA busy_timeout=5000")
+        finally:
+            cursor.close()
 
 SessionLocal = sessionmaker(
     autocommit=False,
@@ -54,6 +69,46 @@ def init_database() -> None:
 
         Base.metadata.create_all(bind=engine)
         _apply_lightweight_migrations()
+        _backfill_intercept_log_request_ids()
+
+
+def _backfill_intercept_log_request_ids() -> None:
+    """Backfill request_id for legacy rows that only carry it inside details JSON."""
+    import json
+
+    from models import InterceptLog
+
+    db = SessionLocal()
+    try:
+        chunk_size = 200
+        last_id = 0
+        while True:
+            rows = (
+                db.query(InterceptLog)
+                .filter(
+                    InterceptLog.id > last_id,
+                    InterceptLog.request_id == "",
+                )
+                .order_by(InterceptLog.id.asc())
+                .limit(chunk_size)
+                .all()
+            )
+            if not rows:
+                break
+            for row in rows:
+                last_id = row.id
+                try:
+                    details = json.loads(row.details)
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(details, dict):
+                    continue
+                request_id = details.get("request_id")
+                if isinstance(request_id, str) and request_id.strip():
+                    row.request_id = request_id.strip()[:96]
+            db.commit()
+    finally:
+        db.close()
 
 
 def _apply_lightweight_migrations() -> None:
@@ -90,6 +145,21 @@ def _apply_lightweight_migrations() -> None:
                         "ALTER TABLE tool_policies ADD COLUMN system_managed BOOLEAN NOT NULL DEFAULT 0"
                     )
                 )
+
+        if "intercept_logs" in existing_tables:
+            log_columns = {column["name"] for column in inspector.get_columns("intercept_logs")}
+            if "request_id" not in log_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE intercept_logs ADD COLUMN request_id VARCHAR(96) NOT NULL DEFAULT ''"
+                    )
+                )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_intercept_logs_request_id "
+                    "ON intercept_logs (request_id)"
+                )
+            )
 
         if "approval_requests" in existing_tables:
             approval_columns = {column["name"] for column in inspector.get_columns("approval_requests")}

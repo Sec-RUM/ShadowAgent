@@ -1,0 +1,61 @@
+# Shadow Agent — local/production compose stack.
+#
+# Copy .env.example to .env, fill in the secrets, then:
+#   docker compose up -d --build
+#
+# Required secrets fail fast at startup (JWT signing key, static API keys).
+# The backend persists its SQLite database in the shadowagent-data volume.
+
+name: shadowagent
+
+services:
+  backend:
+    build:
+      context: ./backend
+      # Set to "true" plus SHADOW_AGENT_REDIS_URL to enable shared rate-limit
+      # and login-lockout state across replicas (high-availability mode).
+      args:
+        INSTALL_REDIS: ${SHADOW_AGENT_ENABLE_REDIS:-false}
+    restart: unless-stopped
+    ports:
+      - "${SHADOW_AGENT_BACKEND_PORT:-8000}:8000"
+    environment:
+      SHADOW_AGENT_JWT_SECRET: ${SHADOW_AGENT_JWT_SECRET:?Set SHADOW_AGENT_JWT_SECRET in .env (32+ random characters)}
+      SHADOW_AGENT_ADMIN_API_KEY: ${SHADOW_AGENT_ADMIN_API_KEY:?Set SHADOW_AGENT_ADMIN_API_KEY in .env}
+      SHADOW_AGENT_CLIENT_API_KEY: ${SHADOW_AGENT_CLIENT_API_KEY:?Set SHADOW_AGENT_CLIENT_API_KEY in .env}
+      SHADOW_AGENT_API_KEY_PEPPER: ${SHADOW_AGENT_API_KEY_PEPPER:?Set SHADOW_AGENT_API_KEY_PEPPER in .env}
+      SHADOW_AGENT_CONSOLE_BOOTSTRAP_TOKEN: ${SHADOW_AGENT_CONSOLE_BOOTSTRAP_TOKEN:-}
+      SHADOW_AGENT_ALLOW_OPEN_CONSOLE_BOOTSTRAP: ${SHADOW_AGENT_ALLOW_OPEN_CONSOLE_BOOTSTRAP:-false}
+      SHADOW_AGENT_ALLOWED_ORIGINS: ${SHADOW_AGENT_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      SHADOW_AGENT_UPSTREAM_BASE_URL: ${SHADOW_AGENT_UPSTREAM_BASE_URL:-}
+      SHADOW_AGENT_UPSTREAM_API_KEY: ${SHADOW_AGENT_UPSTREAM_API_KEY:-}
+      SHADOW_AGENT_UPSTREAM_MODEL: ${SHADOW_AGENT_UPSTREAM_MODEL:-}
+      SHADOW_AGENT_ALLOW_SIMULATED_RESPONSES: ${SHADOW_AGENT_ALLOW_SIMULATED_RESPONSES:-false}
+      SHADOW_AGENT_REDIS_URL: ${SHADOW_AGENT_REDIS_URL:-}
+      SHADOW_AGENT_LOG_RETENTION_DAYS: ${SHADOW_AGENT_LOG_RETENTION_DAYS:-180}
+      SHADOW_AGENT_AUDIT_LOG_RETENTION_DAYS: ${SHADOW_AGENT_AUDIT_LOG_RETENTION_DAYS:-365}
+      SHADOW_AGENT_RETENTION_CLEANUP_INTERVAL_SECONDS: ${SHADOW_AGENT_RETENTION_CLEANUP_INTERVAL_SECONDS:-3600}
+    volumes:
+      - shadowagent-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # URL the BROWSER uses to reach the backend (same host, mapped port).
+        NEXT_PUBLIC_SHADOW_AGENT_API_BASE: ${SHADOW_AGENT_PUBLIC_API_BASE:-http://localhost:8000}
+    restart: unless-stopped
+    ports:
+      - "${SHADOW_AGENT_FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  shadowagent-data:

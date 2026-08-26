@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -489,6 +490,15 @@ def ensure_default_tool_policies(db: Session) -> None:
         db.commit()
 
 
+@lru_cache(maxsize=256)
+def _compile_policy_pattern(pattern_text: str) -> re.Pattern[str] | None:
+    """Compile and cache blacklist regexes so hot paths avoid recompilation."""
+    try:
+        return re.compile(pattern_text, re.IGNORECASE | re.DOTALL)
+    except re.error:
+        return None
+
+
 def inspect_prompt(text: str, db: Session) -> AuditDecision:
     """Inspect untrusted prompt text with DB-backed blacklist regex policies."""
 
@@ -506,9 +516,8 @@ def inspect_prompt(text: str, db: Session) -> AuditDecision:
     matched_rules: list[str] = []
     evidence: list[str] = []
     for policy in policies:
-        try:
-            pattern = re.compile(policy.blacklist_keyword, re.IGNORECASE | re.DOTALL)
-        except re.error:
+        pattern = _compile_policy_pattern(policy.blacklist_keyword)
+        if pattern is None:
             continue
 
         match = pattern.search(text)

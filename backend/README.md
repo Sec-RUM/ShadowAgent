@@ -2,13 +2,41 @@
 
 FastAPI gateway for the Shadow Agent runtime security layer.
 
+## Project Structure
+
+```text
+backend/
+  main.py            # application wiring: middleware, routers, lifespan
+  app/
+    config.py        # environment-driven configuration helpers
+    schemas.py       # Pydantic request/response models
+    serializers.py   # ORM row -> response serialization
+    auth_helpers.py  # console auth/session helpers
+    audit.py         # intercept logging, approvals, alerts, admin audit
+    upstream.py      # upstream LLM forwarding (shared connection pool)
+    metrics.py       # Prometheus /metrics counters + latency histograms
+    routers/         # HTTP routers per domain
+      auth.py        #   /api/v1/auth/*
+      api_keys.py    #   /api/v1/api-keys*
+      monitoring.py  #   /api/v1/logs|approvals|alerts
+      replays.py     #   /api/v1/replays*
+      policies.py    #   /api/v1/policies*
+      tool_policies.py # /api/v1/tool-policies*
+      gateway.py     #   /api/v1/analyze, /api/v1/chat/completions
+  alembic/           # migration environment + versions
+  security_engine.py # policy/permission/risk engines
+  security_controls.py # auth, rate limiting, redaction
+  database.py / models.py
+  tests/             # pytest suite (fast, isolated temp DB per session)
+```
+
 ## Run
 
 ```powershell
 cd D:\Github_projects\ShadowAgent\backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 Copy-Item .env.example .env
 python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
@@ -16,8 +44,9 @@ python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 `main.py` will automatically load `backend/.env`, `backend/.env.local`, or
 the repository-root `.env` at startup. For local development, editing
 `backend/.env` is the easiest way to avoid re-entering API keys every time.
-If you want the console login flow to issue bearer tokens, also set
-`SHADOW_AGENT_JWT_SECRET`.
+Console login **requires** `SHADOW_AGENT_JWT_SECRET`: the JWT signing key is
+no longer derived from the static API keys, so a leaked client key cannot be
+used to forge admin tokens.
 
 Example `backend/.env`:
 
@@ -153,10 +182,153 @@ so it can be rotated or revoked independently.
 
 ## Smoke Test
 
+The fast pytest suite is the primary regression gate (uses an isolated temp
+database, a mock upstream, and does not touch your real `.env` values):
+
 ```powershell
 cd D:\Github_projects\ShadowAgent\backend
-python test_gateway.py
+pip install -r requirements-dev.txt
+python -m pytest tests
 ```
+
+It covers auth flows, managed API keys, policy management, approvals,
+replays, gateway decisions, streaming concurrency, metrics, and the security
+hardening regressions (conversation-history injection blocking, instant JWT
+revocation, login lockout, approval state machine, admin action audit trail).
+
+The legacy scripts remain as ad-hoc probes against a running server:
+
+```powershell
+python test_gateway.py
+python test_integration.py
+```
+
+## Database Migrations (Alembic)
+
+Schema changes are versioned under `alembic/versions/`. The runtime still
+self-initializes via `create_all`, but production deployments should drive
+schema changes through migrations:
+
+```powershell
+python -m alembic upgrade head                        # apply pending migrations
+python -m alembic revision --autogenerate -m "..."    # create a new migration
+python -m alembic history                             # inspect revisions
+```
+
+Existing databases created before Alembic was introduced are already stamped
+at the baseline revision. The container entrypoint runs `upgrade head` before
+starting uvicorn, and the database URL is resolved from the same environment
+variables as the app (`SHADOW_AGENT_DATABASE_URL` / `SHADOW_AGENT_DATABASE_PATH`).
+
+## Metrics
+
+`GET /metrics` exposes Prometheus text-format metrics (admin credentials
+required — the same `Authorization: Bearer` or `X-API-Key` as other admin
+endpoints):
+
+- `shadow_agent_http_requests_total{method,status,route}` — request counter
+- `shadow_agent_http_request_duration_seconds_bucket/sum/count{route}` —
+  latency histogram (buckets 5ms…10s)
+
+Routes are recorded as templates (`/api/v1/policies/{id}`) so label
+cardinality stays bounded. Requests throttled by the rate limiter before
+reaching the app are not counted. Rows purged by the retention job are
+exported as `shadow_agent_retention_purged_rows_total{table}`.
+
+## Real-Time Event Stream (SSE)
+
+`GET /api/v1/events/stream` (admin credentials required) pushes intercept
+events to connected clients as Server-Sent Events:
+
+- Frames: `event: intercept` with a JSON payload (request_id, layer,
+  threat_type, risk_score, reason, …); `: ping` comments every 15s as
+  heartbeat.
+- On connect the last 50 events are replayed so dashboards render instantly.
+- Use `fetch()` with header auth (browser `EventSource` cannot send
+  Authorization headers); reconnect with backoff.
+- In-process fan-out, bounded queues, slow consumers drop the oldest event;
+  the database audit log remains the authoritative record.
+
+## Log Retention
+
+Operational logs are purged automatically (data minimization, see
+`docs/compliance/gdpr.md`). Defaults: intercept logs / alert events /
+replay runs 180 days, audit logs 365 days. Override globally with
+`SHADOW_AGENT_LOG_RETENTION_DAYS`, per table with
+`SHADOW_AGENT_INTERCEPT_LOG_RETENTION_DAYS` /
+`SHADOW_AGENT_AUDIT_LOG_RETENTION_DAYS` /
+`SHADOW_AGENT_ALERT_RETENTION_DAYS` /
+`SHADOW_AGENT_REPLAY_RETENTION_DAYS` (set to `0` to keep a table forever).
+The job runs at startup and then every
+`SHADOW_AGENT_RETENTION_CLEANUP_INTERVAL_SECONDS` (default 3600, min 60),
+deleting in bounded batches so large first runs cannot lock the database.
+
+## Performance Testing
+
+`perf/load_test.py` is a dependency-free load generator with bounded
+concurrency/duration (safe for developer laptops):
+
+```powershell
+# terminal 1: isolated server (raised rate limit, throwaway DB, simulated mode)
+$env:SHADOW_AGENT_DATABASE_PATH="$env:TEMP\perf.db"
+$env:SHADOW_AGENT_RATE_LIMIT_PER_MINUTE="1000000"
+$env:SHADOW_AGENT_ALLOW_SIMULATED_RESPONSES="true"
+$env:SHADOW_AGENT_UPSTREAM_BASE_URL=" "   # space: keep .env from overriding
+python -m uvicorn main:app --host 127.0.0.1 --port 8018
+
+# terminal 2:
+python perf/load_test.py --base-url http://127.0.0.1:8018 `
+    --client-key <client key> --admin-key <admin key>
+```
+
+Scenarios: `health`, `chat` (clean request through the full engine),
+`injection` (blocked request, exercises intercept logging), `analyze`,
+`logs`, `mixed`. Output includes RPS, p50/p90/p95/p99, and status-code
+distribution. See `docs/launch-checklist.md` for recorded baselines.
+
+## High Availability / Multi-Instance
+
+The rate limiter and login lockout are process-local by default. To run
+multiple gateway replicas behind a load balancer, share that state in Redis:
+
+1. `pip install -r requirements-redis.txt` (or build the image with
+   `--build-arg INSTALL_REDIS=true` / compose `SHADOW_AGENT_ENABLE_REDIS=true`)
+2. Set `SHADOW_AGENT_REDIS_URL=redis://host:6379/0`
+
+`GET /health` reports the active backend as `"shared_state": "redis"|"memory"`
+so misconfiguration is observable. Redis failures at runtime degrade fail-open
+(availability over throttle precision) with error logs. Multi-instance
+deployments must also move SQLite to a shared filesystem or switch
+`SHADOW_AGENT_DATABASE_URL` to a client-server database.
+
+## Docker
+
+Build and run the full stack from the repository root:
+
+```powershell
+Copy-Item .env.example .env   # fill in real secrets first
+docker compose up -d --build
+```
+
+The backend container applies Alembic migrations at startup, persists SQLite
+in the `shadowagent-data` volume, runs as a non-root user, and exposes a
+healthcheck. Required secrets (`SHADOW_AGENT_JWT_SECRET`, static API keys,
+pepper) fail fast when missing. See the root `.env.example` for all variables.
+
+## Security Hardening Notes
+
+- Conversation history (all non-system messages) is audited for injected
+  instructions, not just the latest user message.
+- Disabling or deleting a console user revokes their JWT immediately.
+- Repeated failed logins lock the account temporarily
+  (`SHADOW_AGENT_LOGIN_MAX_FAILURES`, `SHADOW_AGENT_LOGIN_LOCKOUT_SECONDS`).
+- Privileged management operations (API keys, policies, approvals) are
+  recorded in the audit log.
+- Approvals transition only once out of `pending`; re-review returns `409`.
+- Custom policy regexes are validated on create/update (`400` on invalid
+  patterns) and compiled patterns are cached.
+- Intercept logs store `request_id` in an indexed column; replays use that
+  index instead of scanning the whole table.
 
 ## Broken Access Control Probe
 

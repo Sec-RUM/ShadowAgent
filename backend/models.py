@@ -14,6 +14,12 @@ class InterceptLog(Base):
     __tablename__ = "intercept_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    request_id: Mapped[str] = mapped_column(
+        String(96),
+        default="",
+        nullable=False,
+        index=True,
+    )
     timestamp: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,

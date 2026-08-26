@@ -45,9 +45,10 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import type { FormEvent, ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatedInterceptLogList, GlassInterceptLogCard } from "./components/intercept-log-card";
 import { GlassSelect, type GlassSelectOption } from "./components/glass-select";
+import SecurityDashboard from "./components/security-dashboard";
 import { buildTimeTooltip, formatBeijingTime, formatRelativeTime, parseDateValue } from "./time-utils";
 
 type IconComponent = React.ComponentType<{
@@ -55,7 +56,7 @@ type IconComponent = React.ComponentType<{
   "aria-hidden"?: boolean;
 }>;
 
-type ViewKey = "chat" | "overview" | "logs" | "policies" | "keys" | "gateway" | "settings" | "help";
+type ViewKey = "chat" | "overview" | "metrics" | "logs" | "policies" | "keys" | "gateway" | "settings" | "help";
 
 type SessionUser = {
   id: string;
@@ -598,6 +599,14 @@ const VIEW_ITEMS: Array<{
     audience: "admin",
   },
   {
+    id: "metrics",
+    label: "运行状态",
+    icon: Activity,
+    title: "运行状态",
+    subtitle: "网关请求量、延迟与状态码的实时遥测（Prometheus /metrics）。",
+    audience: "admin",
+  },
+  {
     id: "logs",
     label: "拦截日志",
     icon: FileText,
@@ -1077,6 +1086,173 @@ function logReasonText(details: Record<string, unknown>) {
   return friendlyDecisionReason(detailText(details.reason), detailText(details.category));
 }
 
+type MetricsRouteRow = {
+  route: string;
+  requests: number;
+  statusCodes: Record<string, number>;
+  latencySum: number;
+  latencyCount: number;
+};
+
+type ParsedMetrics = {
+  totalRequests: number;
+  blockedRequests: number;
+  serverErrors: number;
+  clientErrors: number;
+  latencySum: number;
+  latencyCount: number;
+  routes: MetricsRouteRow[];
+  retentionPurged: Record<string, number>;
+};
+
+type MetricsHistoryPoint = {
+  ts: number;
+  totalRequests: number;
+  blockedRequests: number;
+  serverErrors: number;
+  latencySum: number;
+  latencyCount: number;
+};
+
+const METRICS_HISTORY_LIMIT = 60;
+
+function parseMetricLabels(raw: string): Record<string, string> {
+  const labels: Record<string, string> = {};
+  const labelPattern = /(\w+)="((?:[^"\\]|\\.)*)"/g;
+  let match = labelPattern.exec(raw);
+  while (match !== null) {
+    labels[match[1]] = match[2].replace(/\\(.)/g, "$1");
+    match = labelPattern.exec(raw);
+  }
+  return labels;
+}
+
+function parsePrometheusText(body: string): ParsedMetrics {
+  const routes = new Map<string, MetricsRouteRow>();
+  const retentionPurged: Record<string, number> = {};
+  let totalRequests = 0;
+  let blockedRequests = 0;
+  let serverErrors = 0;
+  let clientErrors = 0;
+  let latencySum = 0;
+  let latencyCount = 0;
+
+  for (const rawLine of body.split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+
+    const spaceIndex = line.lastIndexOf(" ");
+    if (spaceIndex === -1) continue;
+
+    const series = line.slice(0, spaceIndex);
+    const value = Number.parseFloat(line.slice(spaceIndex + 1));
+    if (!Number.isFinite(value)) continue;
+
+    const braceIndex = series.indexOf("{");
+    const metricName = braceIndex === -1 ? series : series.slice(0, braceIndex);
+    const labels = braceIndex === -1 ? {} : parseMetricLabels(series.slice(braceIndex));
+
+    if (metricName === "shadow_agent_http_requests_total") {
+      const route = labels.route ?? "unknown";
+      const status = labels.status ?? "";
+      const row = routes.get(route) ?? { route, requests: 0, statusCodes: {}, latencySum: 0, latencyCount: 0 };
+      row.requests += value;
+      row.statusCodes[status] = (row.statusCodes[status] ?? 0) + value;
+      routes.set(route, row);
+
+      totalRequests += value;
+      if (status === "403") blockedRequests += value;
+      if (status.startsWith("5")) serverErrors += value;
+      if (status.startsWith("4")) clientErrors += value;
+    } else if (metricName === "shadow_agent_http_request_duration_seconds_sum") {
+      const route = labels.route ?? "unknown";
+      const row = routes.get(route) ?? { route, requests: 0, statusCodes: {}, latencySum: 0, latencyCount: 0 };
+      row.latencySum += value;
+      routes.set(route, row);
+      latencySum += value;
+    } else if (metricName === "shadow_agent_http_request_duration_seconds_count") {
+      const route = labels.route ?? "unknown";
+      const row = routes.get(route) ?? { route, requests: 0, statusCodes: {}, latencySum: 0, latencyCount: 0 };
+      row.latencyCount += value;
+      routes.set(route, row);
+      latencyCount += value;
+    } else if (metricName === "shadow_agent_retention_purged_rows_total") {
+      retentionPurged[labels.table ?? "unknown"] = value;
+    }
+  }
+
+  return {
+    totalRequests,
+    blockedRequests,
+    serverErrors,
+    clientErrors,
+    latencySum,
+    latencyCount,
+    routes: Array.from(routes.values()).sort((a, b) => b.requests - a.requests),
+    retentionPurged,
+  };
+}
+
+function formatMetricsCount(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  if (value >= 10_000) return `${(value / 1_000).toFixed(1)}k`;
+  return value.toLocaleString("zh-CN");
+}
+
+function formatMetricsLatency(seconds: number): string {
+  const ms = seconds * 1000;
+  if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`;
+  if (ms >= 100) return `${ms.toFixed(0)}ms`;
+  return `${ms.toFixed(1)}ms`;
+}
+
+function Sparkline({
+  points,
+  className = "",
+  strokeWidth = 2,
+}: {
+  points: number[];
+  className?: string;
+  strokeWidth?: number;
+}) {
+  if (points.length < 2) {
+    return <div className={`h-full w-full rounded-[inherit] bg-white/[0.04] ${className}`} aria-hidden />;
+  }
+
+  const width = 100;
+  const height = 30;
+  const max = Math.max(...points, 1);
+  const step = width / (points.length - 1);
+  const coords = points.map((value, index) => {
+    const x = index * step;
+    const y = height - (value / max) * (height - 2) - 1;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  });
+  const linePoints = coords.join(" ");
+  const areaPoints = `0,${height} ${linePoints} ${width},${height}`;
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className={`h-full w-full ${className}`} aria-hidden>
+      <defs>
+        <linearGradient id="sparkline-fill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="rgba(45,212,191,0.35)" />
+          <stop offset="100%" stopColor="rgba(45,212,191,0)" />
+        </linearGradient>
+      </defs>
+      <polygon points={areaPoints} fill="url(#sparkline-fill)" />
+      <polyline
+        points={linePoints}
+        fill="none"
+        stroke="rgba(94,234,212,0.9)"
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
+  );
+}
+
 function buildHeaders(
   settings: AppSettings,
   intent: "admin" | "client",
@@ -1421,6 +1597,7 @@ export default function Home() {
   const [health, setHealth] = useState<HealthState>({ status: "unknown", message: "尚未检测" });
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [selectedLog, setSelectedLog] = useState<InterceptLog | null>(null);
+  const [dashboardOpen, setDashboardOpen] = useState(false);
   const [gatewayLoading, setGatewayLoading] = useState(false);
   const [gatewayResult, setGatewayResult] = useState<GatewayResult | null>(null);
   const [gatewayForm, setGatewayForm] = useState<GatewayFormState>(DEFAULT_GATEWAY_FORM);
@@ -1438,7 +1615,19 @@ export default function Home() {
   const securityConfigKey = `${apiBaseUrl}|${settings.adminApiKey}|${authSession?.accessToken ?? ""}|${user?.id ?? ""}`;
   const hasConsoleToken = isAuthSessionValid(authSession);
   const hasConsoleAdmin = Boolean(hasConsoleToken && isAdminRole(user?.role));
-  const hasAdminAccess = Boolean(hasConsoleAdmin || settings.adminApiKey.trim());
+
+  // Admin panels require EITHER a console admin session OR an Admin API Key
+  // that has been verified against the backend. A non-empty key alone must
+  // never unlock admin UI (misleading "fake authorization"). The verification
+  // effect itself lives below, after `addToast` is defined.
+  const [adminKeyVerified, setAdminKeyVerified] = useState(false);
+  const [adminKeyError, setAdminKeyError] = useState("");
+  const lastVerifiedKeyRef = useRef("");
+  const adminKeyToastRef = useRef("");
+
+  const hasAdminAccess = Boolean(
+    hasConsoleAdmin || (settings.adminApiKey.trim() && adminKeyVerified)
+  );
   const hasGatewayAccess = Boolean(hasConsoleToken || settings.clientApiKey.trim());
   const visibleViewItems = VIEW_ITEMS.filter((item) => item.audience === "all" || hasAdminAccess);
   const requestedViewItem = VIEW_ITEMS.find((item) => item.id === view);
@@ -1451,6 +1640,72 @@ export default function Home() {
       setToasts((current) => current.filter((item) => item.id !== toast.id));
     }, 3200);
   }, []);
+
+  // Verify the configured Admin API Key against the backend before trusting
+  // it for admin UI. 401/403 => invalid (panels stay locked + user is told);
+  // network errors => unverifiable (also locked, distinct message).
+  useEffect(() => {
+    const adminKey = settings.adminApiKey.trim();
+
+    const resetVerification = (message: string) => {
+      lastVerifiedKeyRef.current = "";
+      setAdminKeyVerified(false);
+      setAdminKeyError(message);
+    };
+
+    let disposed = false;
+    if (!adminKey || hasConsoleAdmin) {
+      const resetTimer = window.setTimeout(() => {
+        if (!disposed) resetVerification("");
+      }, 0);
+      return () => {
+        disposed = true;
+        window.clearTimeout(resetTimer);
+      };
+    }
+
+    const verificationKey = `${apiBaseUrl}|${adminKey}`;
+    if (verificationKey === lastVerifiedKeyRef.current) return;
+
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const response = await fetch(`${apiBaseUrl}/api/v1/logs?limit=1`, {
+            headers: { "x-api-key": adminKey },
+            cache: "no-store",
+          });
+          if (disposed) return;
+          if (response.ok) {
+            lastVerifiedKeyRef.current = verificationKey;
+            setAdminKeyVerified(true);
+            setAdminKeyError("");
+          } else if (response.status === 401 || response.status === 403) {
+            lastVerifiedKeyRef.current = "";
+            setAdminKeyVerified(false);
+            setAdminKeyError("Admin API Key 无效（后端已拒绝），管理面板未解锁");
+            if (verificationKey !== adminKeyToastRef.current) {
+              adminKeyToastRef.current = verificationKey;
+              addToast("Admin API Key 无效，管理面板未解锁", "error");
+            }
+          } else {
+            lastVerifiedKeyRef.current = "";
+            setAdminKeyVerified(false);
+            setAdminKeyError(`暂时无法验证 Admin API Key（HTTP ${response.status}）`);
+          }
+        } catch {
+          if (disposed) return;
+          lastVerifiedKeyRef.current = "";
+          setAdminKeyVerified(false);
+          setAdminKeyError("暂时无法验证 Admin API Key（后端不可达）");
+        }
+      })();
+    }, 600);
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [addToast, apiBaseUrl, hasConsoleAdmin, settings.adminApiKey]);
 
   const loadBootstrapStatus = useCallback(
     async (signal?: AbortSignal) => {
@@ -1650,6 +1905,75 @@ export default function Home() {
       setLogsLoading(false);
     }
   }, [addToast, authSession, hasAdminAccess, mergeLogs, settings]);
+
+  const [metricsSnapshot, setMetricsSnapshot] = useState<ParsedMetrics | null>(null);
+  const [metricsHistory, setMetricsHistory] = useState<MetricsHistoryPoint[]>([]);
+  const [metricsError, setMetricsError] = useState("");
+  const [metricsLoading, setMetricsLoading] = useState(false);
+  const [metricsAutoRefresh, setMetricsAutoRefresh] = useState(true);
+
+  const loadMetrics = useCallback(
+    async (options?: { silent?: boolean }) => {
+      const silent = options?.silent ?? true;
+      if (!silent) setMetricsLoading(true);
+
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 7000);
+
+      try {
+        const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/metrics`, {
+          headers: buildHeaders(settings, "admin", false, authSession),
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const parsed = parsePrometheusText(await response.text());
+        setMetricsSnapshot(parsed);
+        setMetricsError("");
+        setMetricsHistory((prev) => [
+          ...prev.slice(-(METRICS_HISTORY_LIMIT - 1)),
+          {
+            ts: Date.now(),
+            totalRequests: parsed.totalRequests,
+            blockedRequests: parsed.blockedRequests,
+            serverErrors: parsed.serverErrors,
+            latencySum: parsed.latencySum,
+            latencyCount: parsed.latencyCount,
+          },
+        ]);
+        if (!silent) addToast("运行状态已刷新", "success");
+      } catch (error) {
+        const message =
+          error instanceof Error && error.name === "AbortError"
+            ? "请求超时"
+            : error instanceof Error
+              ? error.message
+              : "无法连接指标接口";
+        setMetricsError(message);
+        if (!silent) addToast(`运行状态刷新失败：${message}`, "error");
+      } finally {
+        window.clearTimeout(timer);
+        if (!silent) setMetricsLoading(false);
+      }
+    },
+    [addToast, authSession, settings]
+  );
+
+  useEffect(() => {
+    if (effectiveView !== "metrics" || !hasAdminAccess || !metricsAutoRefresh) return;
+
+    const tick = () => {
+      void loadMetrics({ silent: true });
+    };
+    // Defer the first sample out of the effect body to avoid cascading renders.
+    const initialTimer = window.setTimeout(tick, 0);
+    const timer = window.setInterval(tick, 5000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(timer);
+    };
+  }, [effectiveView, hasAdminAccess, loadMetrics, metricsAutoRefresh]);
 
   const loadOperations = useCallback(async () => {
     if (!hasAdminAccess) {
@@ -2339,8 +2663,8 @@ export default function Home() {
   const enterDemo = () => {
     const demoUser: SessionUser = {
       id: "demo-admin",
-      name: "安全管理员",
-      email: "admin@shadow.local",
+      name: "安全管理员（演示）",
+      email: "demo@shadow.local",
       role: "admin",
       createdAt: new Date().toISOString(),
     };
@@ -3382,6 +3706,339 @@ export default function Home() {
       {renderToasts()}
     </main>
   );
+
+  const renderMetrics = () => {
+    if (!hasAdminAccess) {
+      return (
+        <section className={`${glassPanelClass} relative overflow-hidden p-6`}>
+          <PanelGlow />
+          <div className="relative flex items-start gap-3 text-sm leading-6 text-zinc-300">
+            <Shield className="mt-0.5 h-5 w-5 shrink-0 text-amber-200" aria-hidden />
+            <span>
+              运行状态页需要管理员权限。请使用管理员账号登录，或在「设置」中配置 Admin API Key 后重试。
+            </span>
+          </div>
+        </section>
+      );
+    }
+
+    const qpsSeries: number[] = [];
+    const latencySeries: number[] = [];
+    for (let index = 1; index < metricsHistory.length; index += 1) {
+      const previous = metricsHistory[index - 1];
+      const current = metricsHistory[index];
+      const deltaSeconds = (current.ts - previous.ts) / 1000;
+      if (deltaSeconds <= 0) continue;
+      qpsSeries.push(Math.max(0, (current.totalRequests - previous.totalRequests) / deltaSeconds));
+      const previousAvg = previous.latencyCount > 0 ? previous.latencySum / previous.latencyCount : 0;
+      const currentAvg = current.latencyCount > 0 ? current.latencySum / current.latencyCount : 0;
+      latencySeries.push(((previousAvg + currentAvg) / 2) * 1000);
+    }
+
+    const currentQps = qpsSeries.length > 0 ? qpsSeries[qpsSeries.length - 1] : 0;
+    const avgLatency =
+      metricsSnapshot && metricsSnapshot.latencyCount > 0
+        ? (metricsSnapshot.latencySum / metricsSnapshot.latencyCount) * 1000
+        : null;
+
+    const statusGroups = new Map<string, number>();
+    if (metricsSnapshot) {
+      for (const route of metricsSnapshot.routes) {
+        for (const [status, count] of Object.entries(route.statusCodes)) {
+          statusGroups.set(status, (statusGroups.get(status) ?? 0) + count);
+        }
+      }
+    }
+    const statusItems = Array.from(statusGroups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    const statusTotal = statusItems.reduce((sum, [, count]) => sum + count, 0);
+
+    const statusTone = (status: string) => {
+      if (status.startsWith("2")) return "border-emerald-300/25 bg-emerald-300/10 text-emerald-200";
+      if (status === "403") return "border-rose-300/25 bg-rose-300/10 text-rose-200";
+      if (status.startsWith("4")) return "border-amber-300/25 bg-amber-300/10 text-amber-200";
+      if (status.startsWith("5")) return "border-red-400/25 bg-red-400/10 text-red-200";
+      return "border-white/15 bg-white/[0.06] text-zinc-300";
+    };
+
+    const retentionEntries = metricsSnapshot
+      ? Object.entries(metricsSnapshot.retentionPurged).filter(([, count]) => count > 0)
+      : [];
+
+    const statCards = [
+      {
+        label: "累计请求",
+        value: metricsSnapshot ? formatMetricsCount(metricsSnapshot.totalRequests) : "—",
+        icon: Activity,
+        tone: "text-teal-200",
+        hint: metricsSnapshot ? `${metricsSnapshot.routes.length} 个路由` : "尚未采集",
+      },
+      {
+        label: "安全阻断 (403)",
+        value: metricsSnapshot ? formatMetricsCount(metricsSnapshot.blockedRequests) : "—",
+        icon: ShieldCheck,
+        tone: metricsSnapshot && metricsSnapshot.blockedRequests > 0 ? "text-rose-200" : "text-emerald-200",
+        hint: "被策略引擎拦截的请求",
+      },
+      {
+        label: "服务端错误 (5xx)",
+        value: metricsSnapshot ? formatMetricsCount(metricsSnapshot.serverErrors) : "—",
+        icon: AlertTriangle,
+        tone: metricsSnapshot && metricsSnapshot.serverErrors > 0 ? "text-red-300" : "text-zinc-200",
+        hint: metricsSnapshot && metricsSnapshot.serverErrors > 0 ? "需要立即关注" : "运行正常",
+      },
+      {
+        label: "平均响应延迟",
+        value: avgLatency !== null ? formatMetricsLatency(avgLatency / 1000) : "—",
+        icon: Gauge,
+        tone: "text-sky-200",
+        hint: metricsSnapshot ? `${formatMetricsCount(metricsSnapshot.latencyCount)} 次采样` : "尚未采集",
+      },
+    ];
+
+    return (
+      <div className="space-y-5">
+        <section className={`${glassPanelClass} relative overflow-hidden p-6`}>
+          <PanelGlow />
+          <div className="absolute inset-y-0 right-0 hidden w-[34%] bg-[radial-gradient(circle_at_top,rgba(45,212,191,0.16),transparent_52%),radial-gradient(circle_at_bottom,rgba(56,189,248,0.14),transparent_50%)] lg:block" />
+          <div className="relative flex flex-wrap items-start justify-between gap-4">
+            <div className="space-y-3">
+              <div className="inline-flex items-center gap-2 rounded-full border border-teal-200/20 bg-teal-300/10 px-3 py-1 text-xs font-medium text-[var(--tone-accent-text)]">
+                <Sparkles className="h-3.5 w-3.5" aria-hidden />
+                实时遥测 · 每 5 秒自动采集
+              </div>
+              <h2 className="text-2xl font-semibold leading-tight text-white sm:text-3xl">网关运行状态</h2>
+              <p className="max-w-2xl text-sm leading-7 text-zinc-300">
+                数据来自后端 <span className="font-mono text-teal-200">/metrics</span>（Prometheus 格式）：请求计数、延迟直方图与保留清理计数。切换到其他页面时自动停止采集。
+              </p>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${
+                    health.status === "online"
+                      ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-200"
+                      : "border-amber-300/25 bg-amber-300/10 text-amber-200"
+                  }`}
+                >
+                  <Network className="h-3 w-3" aria-hidden />
+                  {health.status === "online" ? `网关在线${health.message ? ` · ${health.message}` : ""}` : "网关未检测"}
+                </span>
+                {metricsSnapshot && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.06] px-2.5 py-1 text-zinc-300">
+                    <Database className="h-3 w-3" aria-hidden />
+                    数据库保留清理已移除 {formatMetricsCount(Object.values(metricsSnapshot.retentionPurged).reduce((sum, count) => sum + count, 0))} 行
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setMetricsAutoRefresh((current) => !current)}
+                className={`${buttonClass(metricsAutoRefresh ? "primary" : "secondary")} relative`}
+              >
+                <Activity className="h-4 w-4" aria-hidden />
+                {metricsAutoRefresh ? "自动采集中" : "自动刷新已暂停"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void loadMetrics({ silent: false })}
+                disabled={metricsLoading}
+                className={`${buttonClass("secondary")} relative`}
+              >
+                <RefreshCcw className={`h-4 w-4 ${metricsLoading ? "animate-spin" : ""}`} aria-hidden />
+                {metricsLoading ? "采集中…" : "立即刷新"}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {metricsError && !metricsSnapshot && (
+          <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
+            <PanelGlow />
+            <div className="relative flex items-start gap-3 text-sm leading-6 text-rose-200">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" aria-hidden />
+              <span>指标拉取失败：{metricsError}。请确认后端已启动、管理员凭证有效，然后点击「立即刷新」。</span>
+            </div>
+          </section>
+        )}
+
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {statCards.map((card) => (
+            <motion.section key={card.label} whileHover={{ y: -3 }} className={`${glassPanelClass} ${glassPanelMotionClass} relative overflow-hidden p-5`}>
+              <PanelGlow />
+              <div className="relative flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-xs font-medium tracking-wide text-zinc-400">{card.label}</div>
+                  <div className={`mt-2 font-mono text-3xl font-semibold ${card.tone}`}>{card.value}</div>
+                  <div className="mt-2 text-xs text-zinc-500">{card.hint}</div>
+                </div>
+                <card.icon className={`h-5 w-5 shrink-0 ${card.tone}`} aria-hidden />
+              </div>
+            </motion.section>
+          ))}
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(300px,1fr)]">
+          <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
+            <PanelGlow />
+            <div className="relative flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-white">请求吞吐趋势</h3>
+                <p className="mt-1 text-xs text-zinc-500">
+                  相邻两次采集的计数差分，窗口约 {metricsHistory.length * 5}s
+                  {metricsHistory.length > 0 &&
+                    ` · 始于 ${new Date(metricsHistory[0].ts).toLocaleTimeString("zh-CN", { hour12: false })}`}
+                </p>
+              </div>
+              <div className="text-right">
+                <div className="font-mono text-2xl font-semibold text-teal-200">{currentQps.toFixed(1)}</div>
+                <div className="text-xs text-zinc-500">req/s</div>
+              </div>
+            </div>
+            <div className="relative mt-4 h-36 rounded-md border border-white/[0.07] bg-white/[0.03] p-2">
+              <Sparkline points={qpsSeries} strokeWidth={2} />
+            </div>
+            <div className="relative mt-4 grid grid-cols-2 gap-3 text-xs text-zinc-500 sm:grid-cols-4">
+              <div>
+                <div className="text-zinc-400">窗口峰值</div>
+                <div className="mt-1 font-mono text-sm text-zinc-200">
+                  {qpsSeries.length > 0 ? `${Math.max(...qpsSeries).toFixed(1)} req/s` : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-zinc-400">窗口均值</div>
+                <div className="mt-1 font-mono text-sm text-zinc-200">
+                  {qpsSeries.length > 0 ? `${(qpsSeries.reduce((sum, value) => sum + value, 0) / qpsSeries.length).toFixed(1)} req/s` : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-zinc-400">延迟趋势</div>
+                <div className="mt-1 font-mono text-sm text-zinc-200">
+                  {latencySeries.length > 0 ? formatMetricsLatency(latencySeries[latencySeries.length - 1] / 1000) : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-zinc-400">采集点数</div>
+                <div className="mt-1 font-mono text-sm text-zinc-200">{metricsHistory.length}</div>
+              </div>
+            </div>
+          </section>
+
+          <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
+            <PanelGlow />
+            <h3 className="relative text-sm font-semibold text-white">状态码分布</h3>
+            <p className="relative mt-1 text-xs text-zinc-500">自后端启动以来的全部请求</p>
+            <div className="relative mt-4 space-y-2.5">
+              {statusItems.length === 0 && (
+                <div className="rounded-md border border-white/[0.07] bg-white/[0.03] px-3 py-6 text-center text-sm text-zinc-500">
+                  暂无请求数据，等待下一次采集
+                </div>
+              )}
+              {statusItems.map(([status, count]) => (
+                <div key={status} className="space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono ${statusTone(status)}`}>{status}</span>
+                    <span className="font-mono text-zinc-300">
+                      {formatMetricsCount(count)}
+                      {statusTotal > 0 && <span className="ml-1.5 text-zinc-500">{((count / statusTotal) * 100).toFixed(1)}%</span>}
+                    </span>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+                    <div
+                      className={`h-full rounded-full ${
+                        status === "403"
+                          ? "bg-rose-300/80"
+                          : status.startsWith("2")
+                            ? "bg-emerald-300/80"
+                            : status.startsWith("5")
+                              ? "bg-red-400/80"
+                              : "bg-amber-300/80"
+                      }`}
+                      style={{ width: `${statusTotal > 0 ? Math.max(2, (count / statusTotal) * 100) : 0}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+
+        <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
+          <PanelGlow />
+          <div className="relative flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-white">路由明细</h3>
+              <p className="mt-1 text-xs text-zinc-500">按请求量排序 · 平均延迟来自延迟直方图 sum/count</p>
+            </div>
+          </div>
+          <div className="relative mt-4 overflow-x-auto">
+            <div className="min-w-[640px] space-y-1.5">
+              <div className="grid grid-cols-[minmax(0,1.5fr)_90px_110px_minmax(120px,1fr)] gap-3 px-3 py-2 text-xs font-medium text-zinc-500">
+                <span>路由</span>
+                <span className="text-right">请求数</span>
+                <span className="text-right">平均延迟</span>
+                <span>状态码</span>
+              </div>
+              {metricsSnapshot && metricsSnapshot.routes.length > 0 ? (
+                metricsSnapshot.routes.map((route) => {
+                  const routeAvg = route.latencyCount > 0 ? route.latencySum / route.latencyCount : null;
+                  const maxRequests = metricsSnapshot.routes[0]?.requests ?? 1;
+                  return (
+                    <div key={route.route} className={`${glassPanelSoftClass} grid grid-cols-[minmax(0,1.5fr)_90px_110px_minmax(120px,1fr)] items-center gap-3 px-3 py-2.5`}>
+                      <div className="min-w-0">
+                        <div className="truncate font-mono text-sm text-zinc-200">{route.route}</div>
+                        <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-white/[0.06]">
+                          <div className="h-full rounded-full bg-teal-300/70" style={{ width: `${Math.max(2, (route.requests / Math.max(1, maxRequests)) * 100)}%` }} />
+                        </div>
+                      </div>
+                      <span className="text-right font-mono text-sm text-zinc-200">{formatMetricsCount(route.requests)}</span>
+                      <span className="text-right font-mono text-sm text-zinc-200">
+                        {routeAvg !== null ? formatMetricsLatency(routeAvg) : "—"}
+                      </span>
+                      <div className="flex flex-wrap justify-end gap-1.5">
+                        {Object.entries(route.statusCodes)
+                          .sort((a, b) => a[0].localeCompare(b[0]))
+                          .map(([status, count]) => (
+                            <span key={status} className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-xs ${statusTone(status)}`}>
+                              {status}
+                              <span className="opacity-75">{formatMetricsCount(count)}</span>
+                            </span>
+                          ))}
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="rounded-md border border-white/[0.07] bg-white/[0.03] px-3 py-8 text-center text-sm text-zinc-500">
+                  暂无路由数据。切换到「网关测试」发送几次请求，或等待自动采集。
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {retentionEntries.length > 0 && (
+          <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
+            <PanelGlow />
+            <div className="relative flex items-center gap-2 text-sm font-semibold text-white">
+              <Database className="h-4 w-4 text-teal-200" aria-hidden />
+              日志保留清理记录
+            </div>
+            <p className="relative mt-1 text-xs text-zinc-500">
+              满足 GDPR 数据最小化：过期的拦截/审计/告警/重放日志会被周期性删除。
+            </p>
+            <div className="relative mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {retentionEntries.map(([table, count]) => (
+                <div key={table} className={`${glassPanelSoftClass} flex items-center justify-between px-3 py-2.5`}>
+                  <span className="font-mono text-sm text-zinc-300">{table}</span>
+                  <span className="font-mono text-sm font-semibold text-teal-200">-{formatMetricsCount(count)} 行</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
+    );
+  };
 
   const renderOverview = () => {
     const enabledPolicies = policies.filter((policy) => policy.enabled).length;
@@ -4951,6 +5608,11 @@ export default function Home() {
           <label className="block">
             <span className="mb-2 block text-sm text-[var(--text-secondary)]">Admin API Key（兼容备用）</span>
             <input value={settings.adminApiKey} onChange={(event) => setSettings((current) => ({ ...current, adminApiKey: event.target.value }))} className={inputBase} type={keysVisible ? "text" : "password"} autoComplete="off" />
+            {settings.adminApiKey.trim() && !hasConsoleAdmin ? (
+              <span className={`mt-2 block text-xs ${adminKeyVerified ? "text-emerald-300" : "text-amber-300"}`}>
+                {adminKeyVerified ? "✓ Key 已通过后端验证，管理面板已解锁" : adminKeyError || "正在向后端验证 Key…"}
+              </span>
+            ) : null}
           </label>
           <label className="block">
             <span className="mb-2 block text-sm text-[var(--text-secondary)]">Client / Gateway API Key（兼容备用）</span>
@@ -5088,7 +5750,14 @@ export default function Home() {
       <aside className="space-y-4">
         <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
           <PanelGlow />
-          <h2 className="relative text-base font-semibold text-white">当前账号</h2>
+          <div className="relative flex items-center justify-between">
+            <h2 className="relative text-base font-semibold text-white">当前账号</h2>
+            {!hasConsoleToken && user ? (
+              <span className="relative rounded-full border border-amber-300/30 bg-amber-400/10 px-2.5 py-1 text-[11px] font-medium text-amber-200">
+                本地演示身份 · 未连接后端
+              </span>
+            ) : null}
+          </div>
           <div className="relative mt-4 space-y-3 text-sm">
             <div className="flex justify-between border-b border-white/[0.07] pb-3">
               <span className="text-zinc-400">姓名</span>
@@ -5100,7 +5769,10 @@ export default function Home() {
             </div>
             <div className="flex justify-between">
               <span className="text-zinc-400">角色</span>
-              <span className="font-medium text-white">{user?.role}</span>
+              <span className="font-medium text-white">
+                {user?.role}
+                {!hasConsoleToken && user ? "（演示）" : ""}
+              </span>
             </div>
           </div>
           <button type="button" onClick={logout} className={`${buttonClass("secondary")} relative mt-5 w-full`}>
@@ -5163,6 +5835,7 @@ export default function Home() {
 
   const renderContent = () => {
     if (effectiveView === "chat") return renderChat();
+    if (effectiveView === "metrics") return renderMetrics();
     if (effectiveView === "logs") return renderLogs();
     if (effectiveView === "policies") return renderPolicies();
     if (effectiveView === "keys") return renderManagedKeys();
@@ -5211,6 +5884,18 @@ export default function Home() {
             ))}
           </nav>
 
+          {hasAdminAccess ? (
+            <button
+              type="button"
+              onClick={() => setDashboardOpen(true)}
+              className="mt-4 flex min-h-10 w-full items-center gap-3 rounded-md border border-teal-200/25 bg-gradient-to-r from-teal-400/[0.13] to-sky-400/[0.09] px-3 text-left text-sm text-teal-50 shadow-[0_0_24px_rgba(45,212,191,0.12)] transition hover:border-teal-200/40 hover:from-teal-400/[0.18] focus:outline-none focus:ring-2 focus:ring-teal-300/60"
+            >
+              <Activity className="h-4 w-4" aria-hidden />
+              安全大屏
+              <span className="ml-auto rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400">SOC</span>
+            </button>
+          ) : null}
+
           <div className={`${glassPanelSoftClass} mt-6 p-4`}>
             <div className="flex items-center gap-2 text-sm font-medium text-zinc-100">
               <Network className="h-4 w-4 text-emerald-300" aria-hidden />
@@ -5233,6 +5918,11 @@ export default function Home() {
           </div>
 
           <div className={`${glassPanelSoftClass} mt-4 p-4`}>
+            {!hasConsoleToken && user ? (
+              <span className="mb-1.5 inline-flex rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-medium text-amber-200">
+                本地演示身份
+              </span>
+            ) : null}
             <div className="text-sm font-medium text-white">{user.name}</div>
             <div className="mt-1 truncate text-xs text-zinc-500">{user.email}</div>
             <button type="button" onClick={logout} className={`${buttonClass("ghost")} mt-3 w-full justify-start px-2`}>
@@ -5276,6 +5966,14 @@ export default function Home() {
           </AnimatePresence>
         </section>
       </div>
+
+      {dashboardOpen && hasAdminAccess ? (
+        <SecurityDashboard
+          apiBase={settings.apiBase.replace(/\/$/, "")}
+          buildAuthHeaders={() => buildHeaders(settings, "admin", false, authSession)}
+          onExit={() => setDashboardOpen(false)}
+        />
+      ) : null}
 
       {selectedLog ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
