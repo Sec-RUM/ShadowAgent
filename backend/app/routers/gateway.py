@@ -17,7 +17,9 @@ from app.audit import (
     _submit_audit_log,
     _threat_label_from_decision,
 )
-from app.config import _allow_simulated_responses, _upstream_proxy_enabled
+from app.config import _allow_simulated_responses, _env_text, _upstream_proxy_enabled
+from app.custom_rules import custom_prompt_check
+from app.dlp import apply_response_dlp
 from app.schemas import AnalyzeRequest, ChatCompletionRequest, ChatMessage
 from app.upstream import (
     _attach_shadow_agent_metadata,
@@ -104,6 +106,11 @@ async def analyze_request(
                 payload.parameters,
             )
         ),
+        "custom_rules": _decision_payload(
+            custom_prompt_check(
+                f"{payload.prompt}\n{payload.external_context or ''}".strip(), db
+            )
+        ),
     }
 
     blocked_checks = [
@@ -126,6 +133,39 @@ async def analyze_request(
         "checks": checks,
         "separation": separated,
     }
+
+
+@router.get("/models")
+async def list_models(
+    principal: Principal = Depends(require_client),
+) -> dict[str, Any]:
+    """OpenAI-compatible model listing so SDKs can point base_url here.
+
+    Returns the configured upstream model plus the simulated model when
+    simulated responses are enabled; de-duplicated and order-stable.
+    """
+    candidates: list[str] = []
+    upstream_model = _env_text("SHADOW_AGENT_UPSTREAM_MODEL")
+    if upstream_model:
+        candidates.append(upstream_model)
+    if _allow_simulated_responses():
+        candidates.append("shadow-agent-simulated")
+
+    seen: set[str] = set()
+    data: list[dict[str, Any]] = []
+    for model in candidates:
+        if model in seen:
+            continue
+        seen.add(model)
+        data.append(
+            {
+                "id": model,
+                "object": "model",
+                "created": 0,
+                "owned_by": "shadow-agent",
+            }
+        )
+    return {"object": "list", "data": data}
 
 
 @router.post("/chat/completions")
@@ -296,6 +336,23 @@ async def chat_completions(
         },
     )
 
+    custom_rule_decision = custom_prompt_check(
+        f"{prompt}\n{payload.external_context or ''}".strip(), db
+    )
+    _raise_if_blocked(
+        request_id=request_id,
+        layer="custom_rule",
+        decision=custom_rule_decision,
+        source_excerpt=prompt,
+        original_prompt=prompt,
+        threat_type="Custom Rule Match",
+        db=db,
+        details={
+            "model": payload.model,
+            "principal": principal.subject,
+        },
+    )
+
     latency_ms = round((time.perf_counter() - started_at) * 1000, 3)
     logger.info(
         "ShadowAgent allowed request_id=%s latency_ms=%.3f model=%s",
@@ -310,6 +367,7 @@ async def chat_completions(
                 payload,
                 request_id=request_id,
                 separated=separated,
+                db=db,
             )
         if not _allow_simulated_responses():
             raise HTTPException(
@@ -325,6 +383,12 @@ async def chat_completions(
             payload,
             request_id=request_id,
             separated=separated,
+        )
+        apply_response_dlp(
+            upstream_response,
+            request_id=request_id,
+            db=db,
+            details={"model": payload.model, "principal": principal.subject, "mode": "proxy"},
         )
         return _attach_shadow_agent_metadata(
             upstream_response,

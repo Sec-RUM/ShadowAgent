@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.alerts import enqueue_alert
 from app.auth_helpers import _principal_label
 from app.events import publish_event
 from database import SessionLocal
@@ -320,20 +321,20 @@ def _raise_if_blocked(
         decision.matched_rules,
         source_excerpt[:200],
     )
-    publish_event(
-        {
-            "type": "intercept",
-            "request_id": request_id,
-            "layer": layer,
-            "threat_type": threat_type,
-            "category": decision.category,
-            "categories": decision.categories,
-            "risk_score": decision.risk_score,
-            "reason": decision.reason,
-            "recommended_action": decision.recommended_action,
-            "action_taken": "Blocked",
-        }
-    )
+    intercept_event = {
+        "type": "intercept",
+        "request_id": request_id,
+        "layer": layer,
+        "threat_type": threat_type,
+        "category": decision.category,
+        "categories": decision.categories,
+        "risk_score": decision.risk_score,
+        "reason": decision.reason,
+        "recommended_action": decision.recommended_action,
+        "action_taken": "Blocked",
+    }
+    publish_event(intercept_event)
+    enqueue_alert(intercept_event)
     raise HTTPException(
         status_code=403,
         detail={

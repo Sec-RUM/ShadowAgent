@@ -35,6 +35,7 @@ from app.routers import (
     monitoring,
     policies,
     replays,
+    rules,
     tool_policies,
 )
 from app.upstream import _close_upstream_client
@@ -70,13 +71,18 @@ async def _retention_cleanup_loop() -> None:
 @asynccontextmanager
 async def _app_lifespan(app: FastAPI):
     from app import events as event_bus
+    from app import alerts as alert_bus
 
     event_bus.bind_main_loop(asyncio.get_running_loop())
+    alert_bus.bind_main_loop(asyncio.get_running_loop())
     retention_task = asyncio.create_task(_retention_cleanup_loop())
+    alert_task = asyncio.create_task(alert_bus.alert_dispatcher_loop())
     yield
     retention_task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await retention_task
+    alert_task.cancel()
+    for task in (retention_task, alert_task):
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
     await _close_upstream_client()
     audit_log_executor.shutdown(wait=True)
 
@@ -104,6 +110,7 @@ app.include_router(monitoring.router)
 app.include_router(replays.router)
 app.include_router(policies.router)
 app.include_router(tool_policies.router)
+app.include_router(rules.router)
 app.include_router(gateway.router)
 app.include_router(metrics_router)
 

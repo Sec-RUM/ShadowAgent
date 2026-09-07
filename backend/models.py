@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
@@ -178,6 +178,39 @@ class ReplayRun(Base):
         default=datetime.utcnow,
         nullable=False,
         index=True,
+    )
+
+
+class CustomRule(Base):
+    """User-defined detection rule evaluated by the gateway engines.
+
+    rule_type: "regex" (Python re, case-insensitive) or "keyword" (substring).
+    target: "prompt" (request side), "response" (model output / DLP), or "any".
+    action: "block" (403 / terminate stream), "redact" (response side only,
+    replaces the match with a placeholder), or "alert" (log only).
+    """
+
+    __tablename__ = "custom_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    rule_type: Mapped[str] = mapped_column(String(16), default="regex", nullable=False, index=True)
+    pattern: Mapped[str] = mapped_column(String(512), nullable=False)
+    target: Mapped[str] = mapped_column(String(16), default="prompt", nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(16), default="block", nullable=False, index=True)
+    risk_score: Mapped[float] = mapped_column(Float, default=0.8, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
     )
 
 

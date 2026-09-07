@@ -1,125 +1,77 @@
-# 影子智能体 (Shadow Agent)
+# 影子智能体 Shadow Agent
 
+![CI](https://github.com/Sec-RUM/ShadowAgent/actions/workflows/ci.yml/badge.svg)
 ![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=nextdotjs)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.136-009688?logo=fastapi)
-![SQLite](https://img.shields.io/badge/SQLite-Log%20Persistence-003B57?logo=sqlite)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)
 
-影子智能体是面向大语言模型 Agent 运行时的中间层安全沙箱。项目重点防御外部插件、检索内容、第三方 API 返回值引入的间接提示词注入 (Indirect Prompt Injection)，以及模型在工具调用链路中的越权访问风险。
+**面向 LLM Agent 运行时的开源安全网关** —— 在你的应用与模型之间加一层低延迟、可审计的安全控制面，防御提示词注入、敏感数据外泄与工具调用越权，且**不改业务代码**（OpenAI SDK 换个 `base_url` 即接入）。
 
-系统设计目标是在不破坏现有 Agent 框架接入方式的前提下，为 Prompt、外部上下文和工具调用增加一层低延迟、可审计、可持续演进的安全控制面。
+```python
+from openai import OpenAI
 
-## 核心架构
+client = OpenAI(base_url="http://127.0.0.1:8000/api/v1", api_key="sak_xxx.yyy")
+# 所有请求先过 Shadow Agent：注入被拦截(403)，正常请求透传给上游模型
+```
 
-**代理层 (Proxy Layer)**  
-以 FastAPI 实现 OpenAI 风格的 `/api/v1/chat/completions` 网关入口，负责接收上游 Agent 请求、抽取用户指令、承载外部上下文并向后续模型调用链路透明转发。
+## 它防什么
 
-**引擎层 (Purification Engine)**  
-通过指令/数据解耦，将用户可信指令与外部不可信数据分离处理。当前版本包含规则化的提示词注入识别与工具权限检查骨架，后续会接入轻量本地模型、语义相似度审计、敏感词和黑白名单策略。
+| 威胁 | 防御机制 |
+| --- | --- |
+| 直接/间接提示词注入 | 指令-数据解耦 + 多引擎检测（黑名单/语义意图/行为风险），支持**多轮会话全量审计**（不只看最后一条消息） |
+| 敏感数据外泄 | 凭据/密钥模式识别 + 输出脱敏（redaction） |
+| 危险工具调用 | 工具名+参数级策略引擎，高危操作（删除、外发）强制审批流 |
+| 越权访问 | RBAC（admin / security_admin / client / gateway）+ 托管 API Key（可吊销/可设期/角色绑定） |
+| 暴力破解 | 登录限速 + 账户锁定 + 登录枚举防护，JWT 可即时吊销 |
 
-**沙箱层 (Sandbox Layer)**  
-围绕工具名、参数和策略上下文做多级权限校验，将高风险外部 API 调用结果和敏感操作封装在受控边界内，并将拦截事件沉淀为可查询日志。
+## 平台能力
 
-**管理端 (Dashboard)**  
-基于 Next.js App Router、TypeScript 和 Tailwind CSS 构建安全运营大屏，用于展示拦截日志、运行态指标和策略状态。
+- **安全运营控制台**：拦截日志、策略管理、审批工作流、密钥中心、攻击重放
+- **实时告警**：SSE 实时事件流 + 全屏 SOC 安全大屏 + Webhook 推送（Slack/飞书/钉钉，HMAC 签名 + 自动重试）
+- **可观测性**：Prometheus `/metrics`（请求计数/延迟直方图/清理指标），运行状态仪表盘
+- **合规就绪**：GDPR 日志保留期自动清理、管理操作全量审计、[等保 2.0 / GDPR 指引](./docs/compliance/)
+- **工程化**：50+ 测试用例、Alembic 迁移、Docker/compose 部署、CI 矩阵（Python 3.11–3.13）、压测基线（约 260 rps，p95 33ms）
+
+## 架构
+
+```mermaid
+flowchart LR
+    A["Agent / 应用<br/>(OpenAI SDK · LangChain · SDK)"] -->|"Bearer sak_..."| G
+
+    subgraph G["Shadow Agent 网关"]
+        direction TB
+        AUTH["认证与限速<br/>RBAC · 托管 Key"]
+        ENGINE["安全引擎<br/>指令数据解耦 · 注入检测<br/>行为风险 · 工具权限"]
+        AUDIT["审计与告警<br/>拦截日志 · SSE 推送<br/>Webhook"]
+    end
+
+    G -->|"放行的请求"| U["上游 LLM<br/>(OpenAI 兼容)"]
+    G -->|"403 拦截 + 决策详情"| A
+    G --> C["控制台 / SOC 大屏<br/>Next.js"]
+    G -.->|"指标"| M["Prometheus<br/>/metrics"]
+```
 
 ## 快速开始
 
-### 克隆项目
-
 ```powershell
-git clone https://github.com/ZacharyRiser/ShadowAgent.git
+git clone https://github.com/Sec-RUM/ShadowAgent.git
 cd ShadowAgent
+Copy-Item .env.example .env    # 填入随机密钥（文件头有生成命令）
+docker compose up -d --build
 ```
 
-### 启动后端
+打开 `http://localhost:3000` 进入控制台；5 分钟完整接入教程（含 OpenAI SDK / Python SDK / 裸 HTTP 三种方式与告警配置）见 **[docs/quickstart.md](./docs/quickstart.md)**。
 
-```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn main:app --reload --host 127.0.0.1 --port 8000
-```
+## 文档
 
-后端健康检查：
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:8000/health
-```
-
-运行网关烟测：
-
-```powershell
-python test_gateway.py
-```
-
-### 启动前端
-
-```powershell
-cd ..\frontend
-npm install
-$env:SHADOW_AGENT_API_BASE="http://127.0.0.1:8000"
-npm run dev
-```
-
-打开浏览器访问：
-
-```text
-http://localhost:3000
-```
-
-## API 概览
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| `GET` | `/health` | 网关健康检查 |
-| `POST` | `/api/v1/chat/completions` | OpenAI 风格聊天网关入口，串联安全审计流程 |
-| `GET` | `/api/v1/logs` | 查询最新拦截日志，供管理端大屏消费 |
-
-## 项目目录
-
-```text
-ShadowAgent
-├─ README.md
-├─ backend
-│  ├─ README.md
-│  ├─ database.py
-│  ├─ main.py
-│  ├─ models.py
-│  ├─ requirements.txt
-│  ├─ security_engine.py
-│  └─ test_gateway.py
-└─ frontend
-   ├─ README.md
-   ├─ eslint.config.mjs
-   ├─ next.config.ts
-   ├─ package-lock.json
-   ├─ package.json
-   ├─ postcss.config.mjs
-   ├─ public
-   │  ├─ file.svg
-   │  ├─ globe.svg
-   │  ├─ next.svg
-   │  ├─ vercel.svg
-   │  └─ window.svg
-   ├─ src
-   │  └─ app
-   │     ├─ favicon.ico
-   │     ├─ globals.css
-   │     ├─ layout.tsx
-   │     └─ page.tsx
-   └─ tsconfig.json
-```
-
-## 当前能力
-
-- OpenAI 兼容风格的 FastAPI 网关入口。
-- 指令/数据解耦、提示词注入检测、工具权限检查骨架。
-- SQLite + SQLAlchemy 拦截日志持久化。
-- 控制台账号体系：首次 bootstrap 管理员 + 邀请制/开关控制的后续注册 + 托管 API Key。
-- 面向安全运营的 Next.js 管理大屏骨架。
+| 文档 | 内容 |
+| --- | --- |
+| [快速开始](./docs/quickstart.md) | 5 分钟接入：Docker 启动 → 拿 Key → 三行代码 |
+| [后端手册](./backend/README.md) | 全部 API、环境变量、测试、迁移、部署 |
+| [SDK](./sdk/python/) | Python 客户端（同步/异步，拦截决策一等公民处理） |
+| [上线清单](./docs/launch-checklist.md) | 生产环境逐项核对（密钥/架构/合规/性能） |
+| [合规指引](./docs/compliance/) | GDPR 数据映射与等保 2.0 条款对照 |
 
 ## 安全
 
@@ -127,7 +79,10 @@ ShadowAgent
 
 ## 路线规划
 
-- 接入轻量级本地语义审计模型或 DeepSeek 审计链路。
-- 增加敏感词、正则、黑白名单和插件权限策略配置。
-- 引入 PostgreSQL、Redis、速率限制和高速缓存。
-- 完善管理端日志检索、策略编辑、插件授权和态势感知视图。
+- [x] OpenAI SDK 兼容接入（Bearer 认证 + `/models`）
+- [x] 实时告警（SSE 大屏 + Webhook 推送）
+- [ ] 响应侧 DLP 扫描（模型输出中的敏感数据检测）
+- [ ] 自定义检测规则编辑器（正则/关键词/阈值）与规则包热更新
+- [ ] 语义级注入检测（embedding 相似度）
+- [ ] 多租户（组织/成员/密钥层级）与 SSO
+- [ ] 检测能力公开基准报告（注入语料库 + 检出率/误报率）

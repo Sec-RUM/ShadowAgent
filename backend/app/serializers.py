@@ -8,6 +8,7 @@ from typing import Any
 from app.schemas import (
     AlertEventResponse,
     ApprovalRequestResponse,
+    CustomRuleResponse,
     ManagedApiKeyResponse,
     ReplayRunResponse,
     SecurityPolicyResponse,
@@ -17,6 +18,7 @@ from app.utils import _json_loads_safe, _utc_timestamp
 from models import (
     AlertEvent,
     ApprovalRequest,
+    CustomRule,
     ManagedApiKey,
     ReplayRun,
     SecurityPolicy,
@@ -45,6 +47,22 @@ def _serialize_tool_policy(policy: ToolPolicy) -> dict[str, Any]:
         allowed=policy.allowed,
         requires_admin_approval=policy.requires_admin_approval,
         system_managed=policy.system_managed,
+    ).model_dump()
+
+
+def _serialize_custom_rule(rule: CustomRule) -> dict[str, Any]:
+    return CustomRuleResponse(
+        id=rule.id,
+        name=rule.name,
+        description=rule.description,
+        rule_type=rule.rule_type,
+        pattern=rule.pattern,
+        target=rule.target,
+        action=rule.action,
+        risk_score=float(rule.risk_score),
+        enabled=rule.enabled,
+        created_at=_utc_timestamp(rule.created_at),
+        updated_at=_utc_timestamp(rule.updated_at),
     ).model_dump()
 
 

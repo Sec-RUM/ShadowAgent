@@ -68,6 +68,8 @@ SHADOW_AGENT_DATABASE_PATH=shadow_agent.db
 Protected endpoints accept either:
 
 - `Authorization: Bearer <jwt>` issued by `/api/v1/auth/register` or `/api/v1/auth/login`
+- `Authorization: Bearer <api-key>` — OpenAI SDK compatible: managed keys and
+  shared env keys also work via the Bearer scheme
 - `X-API-Key` for a managed API key created by the backend admin console
 - `X-API-Key` for legacy shared env keys during local development or compatibility mode
 
@@ -77,6 +79,39 @@ Managed API keys are hashed with `SHADOW_AGENT_API_KEY_PEPPER`, so production
 deployments should set that value separately from the JWT secret.
 Set `SHADOW_AGENT_ALLOWED_ORIGINS` to the public dashboard origin when exposing
 the service across networks.
+
+## OpenAI SDK Compatibility
+
+Point any OpenAI-compatible SDK at the gateway — change `base_url` and `api_key`,
+nothing else:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8000/api/v1", api_key="sak_...")
+print(client.models.list())          # GET /api/v1/models (upstream model + simulated)
+print(client.chat.completions.create(model="...", messages=[...]))
+```
+
+`GET /api/v1/models` lists the configured `SHADOW_AGENT_UPSTREAM_MODEL` plus
+`shadow-agent-simulated` when simulated responses are enabled. Blocked requests
+return a standard 403 error envelope whose `detail` carries the full security
+decision (`request_id`, `reason`, `risk_score`, `matched_rules`, …), so SDK
+callers can distinguish intercepts from upstream failures.
+
+## Intercept Alerting (Webhook)
+
+Set `SHADOW_AGENT_ALERT_WEBHOOK_URL` to receive a signed JSON POST on every
+blocked request (Slack / Feishu / DingTalk bots or your own receiver):
+
+- Payload fields: `source`, `event`, `timestamp` (UTC ISO), `request_id`,
+  `threat_type`, `category`, `risk_score`, `layer`, `reason`,
+  `recommended_action`, `action_taken`.
+- With `SHADOW_AGENT_ALERT_WEBHOOK_SECRET` set, each delivery carries
+  `X-ShadowAgent-Signature: sha256=<hmac-sha256 of the raw body>` for receiver-side
+  verification.
+- Deliveries retry up to 3 attempts (1s / 4s backoff) in a background task;
+  the database audit log remains the authoritative record.
 
 Before the first console admin can register, the backend should either:
 

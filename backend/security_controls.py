@@ -561,11 +561,12 @@ def _verify_jwt(token: str) -> Principal | None:
     return Principal(subject=subject, role=role, auth_method="jwt")
 
 
-def _verify_api_key(request: Request) -> Principal | None:
+def _verify_api_key(request: Request, bearer_credentials: str = "") -> Principal | None:
     presented = (
         request.headers.get("x-api-key")
         or request.headers.get("x-admin-api-key")
         or request.headers.get("x-client-api-key")
+        or bearer_credentials
     )
     if not presented:
         return None
@@ -660,16 +661,25 @@ def _verify_console_user_active(principal: Principal) -> Principal:
     return principal
 
 
+def _looks_like_jwt(credentials: str) -> bool:
+    """Heuristic: real JWTs are `header.payload.signature` (two dots)."""
+    return credentials.count(".") == 2
+
+
 def _authenticate(request: Request) -> Principal:
     authorization = request.headers.get("authorization")
     scheme, credentials = get_authorization_scheme_param(authorization)
+    bearer_credentials = credentials if scheme.lower() == "bearer" and credentials else ""
 
-    if scheme.lower() == "bearer" and credentials:
-        principal = _verify_jwt(credentials)
+    # Bearer tokens that look like a JWT must verify as one (errors surface
+    # immediately). Anything else (e.g. `sak_...` managed keys or plain env
+    # keys sent by OpenAI-style SDKs) falls through to the API-key path.
+    if bearer_credentials and _looks_like_jwt(bearer_credentials):
+        principal = _verify_jwt(bearer_credentials)
         if principal:
             return _verify_console_user_active(principal)
 
-    principal = _verify_api_key(request)
+    principal = _verify_api_key(request, bearer_credentials=bearer_credentials)
     if principal:
         return principal
 

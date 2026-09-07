@@ -42,6 +42,7 @@ import {
   Check,
   ChevronDown,
   Send,
+  ShieldAlert,
 } from "lucide-react";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import type { FormEvent, ReactNode } from "react";
@@ -56,7 +57,7 @@ type IconComponent = React.ComponentType<{
   "aria-hidden"?: boolean;
 }>;
 
-type ViewKey = "chat" | "overview" | "metrics" | "logs" | "policies" | "keys" | "gateway" | "settings" | "help";
+type ViewKey = "chat" | "overview" | "metrics" | "logs" | "policies" | "rules" | "keys" | "gateway" | "settings" | "help";
 
 type SessionUser = {
   id: string;
@@ -261,6 +262,52 @@ type ManagedApiKeyIssueState = {
   action: "created" | "rotated";
   apiKey: string;
   item: ManagedApiKeyItem;
+};
+
+type CustomRuleItemType = "regex" | "keyword";
+type CustomRuleTarget = "prompt" | "response" | "any";
+type CustomRuleAction = "block" | "redact" | "alert";
+
+type CustomRuleItem = {
+  id: number;
+  name: string;
+  description: string;
+  rule_type: CustomRuleItemType | string;
+  pattern: string;
+  target: CustomRuleTarget | string;
+  action: CustomRuleAction | string;
+  risk_score: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type CustomRuleDraft = {
+  name: string;
+  description: string;
+  rule_type: CustomRuleItemType;
+  pattern: string;
+  target: CustomRuleTarget;
+  action: CustomRuleAction;
+  risk_score: number;
+  enabled: boolean;
+};
+
+type RuleTestMatch = {
+  matched_text: string;
+  span: [number, number];
+};
+
+type RuleTestResult = {
+  rule: { name: string; pattern: string; action: string; target: string };
+  matched: boolean;
+  match_count: number;
+  matches: RuleTestMatch[];
+};
+
+type DlpStatusInfo = {
+  mode: "off" | "monitor" | "redact" | "block" | string;
+  builtin_patterns: Array<{ type: string; risk_score: number; pattern: string }>;
 };
 
 type RoleShowcaseId = "admin" | "client" | "gateway";
@@ -620,6 +667,14 @@ const VIEW_ITEMS: Array<{
     icon: SlidersHorizontal,
     title: "策略配置",
     subtitle: "调整提示词注入防护规则、工具权限与审计边界。",
+    audience: "admin",
+  },
+  {
+    id: "rules",
+    label: "自定义规则",
+    icon: ShieldAlert,
+    title: "自定义检测规则",
+    subtitle: "编写正则/关键词规则作用于提示词或模型输出（响应侧 DLP），支持测试、导入与导出。",
     audience: "admin",
   },
   {
@@ -1575,6 +1630,26 @@ export default function Home() {
   const [managedKeyIssueState, setManagedKeyIssueState] = useState<ManagedApiKeyIssueState | null>(null);
   const [managedKeyBusyId, setManagedKeyBusyId] = useState<number | null>(null);
   const [includeInactiveKeys, setIncludeInactiveKeys] = useState(true);
+  const [customRules, setCustomRules] = useState<CustomRuleItem[]>([]);
+  const [customRulesLoading, setCustomRulesLoading] = useState(false);
+  const [customRulesError, setCustomRulesError] = useState("");
+  const [ruleDraftOpen, setRuleDraftOpen] = useState(false);
+  const [ruleEditingId, setRuleEditingId] = useState<number | null>(null);
+  const [ruleDraft, setRuleDraft] = useState<CustomRuleDraft>({
+    name: "",
+    description: "",
+    rule_type: "regex",
+    pattern: "",
+    target: "prompt",
+    action: "block",
+    risk_score: 0.8,
+    enabled: true,
+  });
+  const [ruleTestText, setRuleTestText] = useState("");
+  const [ruleTestResult, setRuleTestResult] = useState<RuleTestResult | null>(null);
+  const [ruleTestBusy, setRuleTestBusy] = useState(false);
+  const [ruleBusyId, setRuleBusyId] = useState<number | null>(null);
+  const [dlpStatus, setDlpStatus] = useState<DlpStatusInfo | null>(null);
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsError, setLogsError] = useState("");
   const [search, setSearch] = useState("");
@@ -2059,6 +2134,257 @@ export default function Home() {
     [addToast, apiBaseUrl, authSession, hasAdminAccess, includeInactiveKeys, settings]
   );
 
+  const loadCustomRules = useCallback(
+    async (showFeedback = false) => {
+      if (!hasAdminAccess) {
+        setCustomRules([]);
+        setCustomRulesError("");
+        return;
+      }
+
+      setCustomRulesLoading(true);
+      setCustomRulesError("");
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 7000);
+
+      try {
+        const [rulesResponse, dlpResponse] = await Promise.all([
+          fetch(`${apiBaseUrl}/api/v1/rules`, {
+            headers: buildHeaders(settings, "admin", false, authSession),
+            signal: controller.signal,
+            cache: "no-store",
+          }),
+          fetch(`${apiBaseUrl}/api/v1/rules/dlp-status`, {
+            headers: buildHeaders(settings, "admin", false, authSession),
+            signal: controller.signal,
+            cache: "no-store",
+          }),
+        ]);
+        const rulesData = (await rulesResponse.json().catch(() => ({}))) as {
+          items?: CustomRuleItem[];
+          detail?: unknown;
+        };
+        if (!rulesResponse.ok) {
+          throw new Error(detailText(rulesData.detail) || `HTTP ${rulesResponse.status}`);
+        }
+        setCustomRules(rulesData.items ?? []);
+        if (dlpResponse.ok) {
+          const dlpData = (await dlpResponse.json().catch(() => ({}))) as DlpStatusInfo;
+          setDlpStatus(dlpData);
+        }
+        if (showFeedback) addToast("自定义规则已刷新", "success");
+      } catch (error) {
+        const message =
+          error instanceof Error && error.name === "AbortError"
+            ? "请求超时"
+            : error instanceof Error
+              ? error.message
+              : "无法获取自定义规则";
+        setCustomRulesError(message);
+        if (showFeedback) addToast(`规则列表刷新失败：${message}`, "error");
+      } finally {
+        window.clearTimeout(timer);
+        setCustomRulesLoading(false);
+      }
+    },
+    [addToast, apiBaseUrl, authSession, hasAdminAccess, settings]
+  );
+
+  const submitCustomRule = async () => {
+    if (!hasAdminAccess) {
+      addToast("请先登录管理员账号或配置 Admin API Key", "error");
+      return;
+    }
+    const name = ruleDraft.name.trim();
+    const pattern = ruleDraft.pattern.trim();
+    if (!name || !pattern) {
+      addToast("规则名称与匹配模式不能为空", "error");
+      return;
+    }
+
+    setRuleTestBusy(true);
+    try {
+      const editing = ruleEditingId !== null;
+      const response = await fetch(
+        editing ? `${apiBaseUrl}/api/v1/rules/${ruleEditingId}` : `${apiBaseUrl}/api/v1/rules`,
+        {
+          method: editing ? "PUT" : "POST",
+          headers: buildHeaders(settings, "admin", true, authSession),
+          body: JSON.stringify({
+            name,
+            description: ruleDraft.description.trim(),
+            rule_type: ruleDraft.rule_type,
+            pattern,
+            target: ruleDraft.target,
+            action: ruleDraft.action,
+            risk_score: ruleDraft.risk_score,
+            enabled: ruleDraft.enabled,
+          }),
+        }
+      );
+      const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
+      if (!response.ok) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }
+      addToast(editing ? "规则已更新" : "规则已创建", "success");
+      setRuleDraftOpen(false);
+      setRuleEditingId(null);
+      setRuleDraft({
+        name: "",
+        description: "",
+        rule_type: "regex",
+        pattern: "",
+        target: "prompt",
+        action: "block",
+        risk_score: 0.8,
+        enabled: true,
+      });
+      await loadCustomRules();
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "保存规则失败", "error");
+    } finally {
+      setRuleTestBusy(false);
+    }
+  };
+
+  const deleteCustomRule = async (item: CustomRuleItem) => {
+    setRuleBusyId(item.id);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/rules/${item.id}`, {
+        method: "DELETE",
+        headers: buildHeaders(settings, "admin", true, authSession),
+      });
+      const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
+      if (!response.ok) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }
+      addToast(`规则 ${item.name} 已删除`, "success");
+      await loadCustomRules();
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "删除规则失败", "error");
+    } finally {
+      setRuleBusyId(null);
+    }
+  };
+
+  const toggleCustomRule = async (item: CustomRuleItem, enabled: boolean) => {
+    setRuleBusyId(item.id);
+    setCustomRules((current) => current.map((rule) => (rule.id === item.id ? { ...rule, enabled } : rule)));
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/rules/${item.id}`, {
+        method: "PUT",
+        headers: buildHeaders(settings, "admin", true, authSession),
+        body: JSON.stringify({
+          name: item.name,
+          description: item.description,
+          rule_type: item.rule_type,
+          pattern: item.pattern,
+          target: item.target,
+          action: item.action,
+          risk_score: item.risk_score,
+          enabled,
+        }),
+      });
+      const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
+      if (!response.ok) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }
+    } catch (error) {
+      setCustomRules((current) => current.map((rule) => (rule.id === item.id ? { ...rule, enabled: !enabled } : rule)));
+      addToast(error instanceof Error ? error.message : "切换规则失败", "error");
+    } finally {
+      setRuleBusyId(null);
+    }
+  };
+
+  const testCustomRule = async () => {
+    if (!ruleDraft.pattern.trim()) {
+      addToast("请先填写匹配模式", "error");
+      return;
+    }
+    setRuleTestBusy(true);
+    setRuleTestResult(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/rules/test`, {
+        method: "POST",
+        headers: buildHeaders(settings, "admin", true, authSession),
+        body: JSON.stringify({
+          sample_text: ruleTestText,
+          rule_id: null,
+          draft: {
+            name: ruleDraft.name.trim() || "draft",
+            description: ruleDraft.description.trim(),
+            rule_type: ruleDraft.rule_type,
+            pattern: ruleDraft.pattern.trim(),
+            target: ruleDraft.target,
+            action: ruleDraft.action,
+            risk_score: ruleDraft.risk_score,
+            enabled: ruleDraft.enabled,
+          },
+        }),
+      });
+      const data = (await response.json().catch(() => ({}))) as RuleTestResult & { detail?: unknown };
+      if (!response.ok) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }
+      setRuleTestResult(data);
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "测试规则失败", "error");
+    } finally {
+      setRuleTestBusy(false);
+    }
+  };
+
+  const exportCustomRules = async () => {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/rules/export`, {
+        headers: buildHeaders(settings, "admin", false, authSession),
+        cache: "no-store",
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = window.document.createElement("a");
+      anchor.href = url;
+      anchor.download = "shadow-agent-rules.json";
+      anchor.click();
+      URL.revokeObjectURL(url);
+      addToast("规则已导出", "success");
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "导出失败", "error");
+    }
+  };
+
+  const importCustomRules = async (file: File) => {
+    setRuleTestBusy(true);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as { exported_rules?: unknown };
+      const rules = Array.isArray(parsed.exported_rules) ? parsed.exported_rules : null;
+      if (!rules) throw new Error("文件格式不正确：缺少 exported_rules 数组");
+      const response = await fetch(`${apiBaseUrl}/api/v1/rules/import`, {
+        method: "POST",
+        headers: buildHeaders(settings, "admin", true, authSession),
+        body: JSON.stringify({ mode: "merge", rules }),
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        created?: number;
+        updated?: number;
+        skipped?: string[];
+        detail?: unknown;
+      };
+      if (!response.ok) throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      const skippedCount = data.skipped?.length ?? 0;
+      addToast(`导入完成：新增 ${data.created ?? 0}，更新 ${data.updated ?? 0}${skippedCount ? `，跳过 ${skippedCount}` : ""}`, "success");
+      await loadCustomRules();
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "导入失败", "error");
+    } finally {
+      setRuleTestBusy(false);
+    }
+  };
+
   const loadSecurityConfiguration = useCallback(async () => {
     const localPolicies = readStorage<PolicyRule[]>(STORAGE_KEYS.policies, DEFAULT_POLICIES);
     const localTools = readStorage<ToolPermission[]>(STORAGE_KEYS.tools, DEFAULT_TOOLS);
@@ -2162,8 +2488,9 @@ export default function Home() {
       void loadSecurityConfiguration();
       void loadOperations();
       void loadManagedApiKeys();
+      void loadCustomRules();
     }, 0);
-  }, [loadManagedApiKeys, loadOperations, loadSecurityConfiguration, mounted, securityConfigKey, user]);
+  }, [loadCustomRules, loadManagedApiKeys, loadOperations, loadSecurityConfiguration, mounted, securityConfigKey, user]);
 
   useEffect(() => {
     if (!mounted || !hasConsoleToken) return;
@@ -5833,11 +6160,400 @@ export default function Home() {
     </div>
   );
 
+  const ruleTypeOptions = useMemo<GlassSelectOption[]>(
+    () => [
+      { value: "regex", label: "正则表达式" },
+      { value: "keyword", label: "关键词" },
+    ],
+    [],
+  );
+
+  const ruleTargetOptions = useMemo<GlassSelectOption[]>(
+    () => [
+      { value: "prompt", label: "提示词（请求侧）" },
+      { value: "response", label: "模型输出（响应侧 DLP）" },
+      { value: "any", label: "两者都检查" },
+    ],
+    [],
+  );
+
+  const ruleActionOptions = useMemo<GlassSelectOption[]>(
+    () => [
+      { value: "block", label: "阻断（403）" },
+      { value: "redact", label: "脱敏（替换为占位符）" },
+      { value: "alert", label: "仅告警记录" },
+    ],
+    [],
+  );
+
+  const ruleTargetText = (target: string) =>
+    target === "response" ? "响应侧" : target === "any" ? "双向" : "请求侧";
+  const ruleActionText = (action: string) =>
+    action === "redact" ? "脱敏" : action === "alert" ? "告警" : "阻断";
+  const ruleActionClass = (action: string) =>
+    action === "redact"
+      ? "border-sky-300/30 bg-sky-400/10 text-sky-200"
+      : action === "alert"
+        ? "border-amber-300/30 bg-amber-400/10 text-amber-200"
+        : "border-rose-300/30 bg-rose-400/10 text-rose-200";
+  const dlpModeClass = (mode: string) =>
+    mode === "block"
+      ? "border-rose-300/30 bg-rose-400/10 text-rose-200"
+      : mode === "redact"
+        ? "border-sky-300/30 bg-sky-400/10 text-sky-200"
+        : mode === "monitor"
+          ? "border-amber-300/30 bg-amber-400/10 text-amber-200"
+          : "border-white/10 bg-white/[0.055] text-zinc-300";
+
+  const renderRules = () => (
+    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
+      <section className="space-y-4">
+        <div className={`${glassPanelClass} ${glassPanelMotionClass} p-4 sm:flex sm:items-center sm:justify-between`}>
+          <PanelGlow />
+          <div className="relative">
+            <h2 className="text-base font-semibold text-white">自定义检测规则</h2>
+            <p className="mt-1 text-sm text-zinc-400">
+              规则由网关引擎实时执行：请求侧拦截可疑提示词，响应侧对模型输出做 DLP 脱敏。
+            </p>
+          </div>
+          <div className="relative mt-3 flex flex-wrap gap-2 sm:mt-0">
+            <button
+              type="button"
+              onClick={() => {
+                setRuleDraftOpen((value) => !value);
+                setRuleEditingId(null);
+                setRuleTestResult(null);
+                setRuleDraft({
+                  name: "",
+                  description: "",
+                  rule_type: "regex",
+                  pattern: "",
+                  target: "prompt",
+                  action: "block",
+                  risk_score: 0.8,
+                  enabled: true,
+                });
+              }}
+              className={buttonClass("secondary")}
+            >
+              <Plus className="h-4 w-4" aria-hidden />
+              新增规则
+            </button>
+            <button type="button" onClick={() => void loadCustomRules(true)} className={buttonClass("secondary")}>
+              <RefreshCcw className="h-4 w-4" aria-hidden />
+              刷新
+            </button>
+            <button type="button" onClick={() => void exportCustomRules()} className={buttonClass("secondary")}>
+              导出
+            </button>
+            <label className={`${buttonClass("secondary")} cursor-pointer`}>
+              导入
+              <input
+                type="file"
+                accept="application/json"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (file) void importCustomRules(file);
+                }}
+              />
+            </label>
+          </div>
+        </div>
+
+        {ruleDraftOpen ? (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitCustomRule();
+            }}
+            className={`${glassPanelClass} relative p-4`}
+          >
+            <PanelGlow />
+            <div className="relative grid gap-3 md:grid-cols-2">
+              <label>
+                <span className="mb-2 block text-sm text-[var(--text-secondary)]">规则名称</span>
+                <input
+                  value={ruleDraft.name}
+                  onChange={(event) => setRuleDraft((current) => ({ ...current, name: event.target.value }))}
+                  className={inputBase}
+                  placeholder="例如：内部代号泄露防护"
+                />
+              </label>
+              <label>
+                <span className="mb-2 block text-sm text-[var(--text-secondary)]">匹配方式</span>
+                <GlassSelect
+                  value={ruleDraft.rule_type}
+                  onChange={(next) => setRuleDraft((current) => ({ ...current, rule_type: next as CustomRuleItemType }))}
+                  options={ruleTypeOptions}
+                  ariaLabel="规则匹配方式"
+                />
+              </label>
+              <label className="md:col-span-2">
+                <span className="mb-2 block text-sm text-[var(--text-secondary)]">
+                  {ruleDraft.rule_type === "regex" ? "正则表达式（不区分大小写）" : "关键词（子串匹配）"}
+                </span>
+                <input
+                  value={ruleDraft.pattern}
+                  onChange={(event) => setRuleDraft((current) => ({ ...current, pattern: event.target.value }))}
+                  className={`${inputBase} font-mono`}
+                  placeholder={ruleDraft.rule_type === "regex" ? "例如：INTERNAL[- ]PROJECT[- ]CODE[- ]\\d+" : "例如：PROJECT-XRAY"}
+                />
+              </label>
+              <label>
+                <span className="mb-2 block text-sm text-[var(--text-secondary)]">作用位置</span>
+                <GlassSelect
+                  value={ruleDraft.target}
+                  onChange={(next) => {
+                    const target = next as CustomRuleTarget;
+                    setRuleDraft((current) => ({
+                      ...current,
+                      target,
+                      action: target === "prompt" && current.action === "redact" ? "block" : current.action,
+                    }));
+                  }}
+                  options={ruleTargetOptions}
+                  ariaLabel="规则作用位置"
+                />
+              </label>
+              <label>
+                <span className="mb-2 block text-sm text-[var(--text-secondary)]">命中后动作</span>
+                <GlassSelect
+                  value={ruleDraft.action}
+                  onChange={(next) => setRuleDraft((current) => ({ ...current, action: next as CustomRuleAction }))}
+                  options={
+                    ruleDraft.target === "prompt"
+                      ? ruleActionOptions.filter((option) => option.value !== "redact")
+                      : ruleActionOptions
+                  }
+                  ariaLabel="命中后动作"
+                />
+              </label>
+              <label>
+                <span className="mb-2 block text-sm text-[var(--text-secondary)]">风险评分（{ruleDraft.risk_score.toFixed(2)}）</span>
+                <input
+                  type="range"
+                  min={0.1}
+                  max={0.99}
+                  step={0.01}
+                  value={ruleDraft.risk_score}
+                  onChange={(event) => setRuleDraft((current) => ({ ...current, risk_score: Number(event.target.value) }))}
+                  className="h-10 w-full accent-teal-300"
+                />
+              </label>
+              <label>
+                <span className="mb-2 block text-sm text-[var(--text-secondary)]">描述</span>
+                <input
+                  value={ruleDraft.description}
+                  onChange={(event) => setRuleDraft((current) => ({ ...current, description: event.target.value }))}
+                  className={inputBase}
+                  placeholder="这条规则防护什么（可选）"
+                />
+              </label>
+              <label className="md:col-span-2">
+                <span className="mb-2 block text-sm text-[var(--text-secondary)]">测试样例文本（可选，保存前先试跑）</span>
+                <textarea
+                  value={ruleTestText}
+                  onChange={(event) => setRuleTestText(event.target.value)}
+                  className={`${inputBase} min-h-20 font-mono`}
+                  placeholder="粘贴一段提示词或模型输出，验证规则是否命中…"
+                />
+              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="submit" disabled={ruleTestBusy} className={buttonClass("primary")}>
+                  <Save className="h-4 w-4" aria-hidden />
+                  {ruleEditingId !== null ? "保存修改" : "创建规则"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void testCustomRule()}
+                  disabled={ruleTestBusy}
+                  className={buttonClass("secondary")}
+                >
+                  <Play className="h-4 w-4" aria-hidden />
+                  测试规则
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRuleDraftOpen(false);
+                    setRuleEditingId(null);
+                    setRuleTestResult(null);
+                  }}
+                  className={buttonClass("secondary")}
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+            {ruleTestResult ? (
+              <div className="relative mt-4 rounded-md border border-white/[0.08] bg-white/[0.03] p-3 text-sm">
+                {ruleTestResult.matched ? (
+                  <>
+                    <p className="text-emerald-300">命中 {ruleTestResult.match_count} 处：</p>
+                    <ul className="mt-2 space-y-1">
+                      {ruleTestResult.matches.map((match, index) => (
+                        <li key={index} className="font-mono text-xs text-zinc-300">
+                          <span className="mr-2 text-zinc-500">[{match.span[0]}:{match.span[1]}]</span>
+                          {match.matched_text}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <p className="text-zinc-400">未命中：样例文本中没有匹配该模式的内容。</p>
+                )}
+              </div>
+            ) : null}
+          </form>
+        ) : null}
+
+        {customRulesError ? (
+          <div className={`${glassPanelClass} border-rose-300/20 p-4 text-sm text-rose-200`}>{customRulesError}</div>
+        ) : null}
+
+        {customRulesLoading && customRules.length === 0 ? (
+          <div className={`${glassPanelClass} p-6 text-center text-sm text-zinc-400`}>正在加载自定义规则…</div>
+        ) : null}
+
+        {!customRulesLoading && customRules.length === 0 && !customRulesError ? (
+          <div className={`${glassPanelClass} p-6 text-center text-sm text-zinc-400`}>
+            还没有自定义规则。点击「新增规则」创建第一条，或导入规则包。
+          </div>
+        ) : null}
+
+        <div className="grid gap-3">
+          {customRules.map((rule) => (
+            <motion.article key={rule.id} whileHover={{ y: -2 }} className={`${glassPanelClass} ${glassPanelMotionClass} overflow-visible p-5`}>
+              <PanelGlow />
+              <div className="relative flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-base font-semibold text-white">{rule.name}</h3>
+                    <span className="rounded-md border border-white/[0.1] bg-white/[0.055] px-2 py-1 text-xs text-zinc-300">
+                      {rule.rule_type === "keyword" ? "关键词" : "正则"}
+                    </span>
+                    <span className="rounded-md border border-white/[0.1] bg-white/[0.055] px-2 py-1 text-xs text-zinc-300">
+                      {ruleTargetText(String(rule.target))}
+                    </span>
+                    <span className={`rounded-md border px-2 py-1 text-xs ${ruleActionClass(String(rule.action))}`}>
+                      {ruleActionText(String(rule.action))}
+                    </span>
+                    <span className="rounded-md border border-white/[0.1] bg-white/[0.055] px-2 py-1 text-xs text-zinc-300">
+                      风险 {Number(rule.risk_score).toFixed(2)}
+                    </span>
+                  </div>
+                  <p className="mt-2 break-all font-mono text-xs text-zinc-400">{rule.pattern}</p>
+                  {rule.description ? <p className="mt-1 text-sm leading-6 text-zinc-400">{rule.description}</p> : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Switch
+                    label={`切换 ${rule.name}`}
+                    checked={rule.enabled}
+                    onChange={(value) => void toggleCustomRule(rule, value)}
+                  />
+                </div>
+              </div>
+              <div className="relative mt-4 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRuleDraftOpen(true);
+                    setRuleEditingId(rule.id);
+                    setRuleTestResult(null);
+                    setRuleDraft({
+                      name: rule.name,
+                      description: rule.description,
+                      rule_type: (rule.rule_type === "keyword" ? "keyword" : "regex") as CustomRuleItemType,
+                      pattern: rule.pattern,
+                      target: String(rule.target) as CustomRuleTarget,
+                      action: String(rule.action) as CustomRuleAction,
+                      risk_score: Number(rule.risk_score),
+                      enabled: rule.enabled,
+                    });
+                  }}
+                  className={buttonClass("secondary")}
+                >
+                  编辑
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void deleteCustomRule(rule)}
+                  disabled={ruleBusyId === rule.id}
+                  className={buttonClass("danger")}
+                >
+                  <Trash2 className="h-4 w-4" aria-hidden />
+                  删除
+                </button>
+              </div>
+            </motion.article>
+          ))}
+        </div>
+      </section>
+
+      <aside className="space-y-4">
+        <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
+          <PanelGlow />
+          <h2 className="relative text-base font-semibold text-white">响应侧 DLP 引擎</h2>
+          <p className="relative mt-2 text-sm leading-6 text-zinc-400">
+            对模型输出做敏感数据扫描（AWS/GitHub/OpenAI/Slack/Google 密钥、JWT、私钥块、密钥赋值等）。
+          </p>
+          {dlpStatus ? (
+            <div className="relative mt-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
+                <span className="text-sm text-zinc-400">当前模式</span>
+                <span className={`rounded-md border px-2.5 py-1 text-xs font-medium ${dlpModeClass(String(dlpStatus.mode))}`}>
+                  {dlpStatus.mode === "off"
+                    ? "已关闭"
+                    : dlpStatus.mode === "monitor"
+                      ? "monitor（只记录）"
+                      : dlpStatus.mode === "block"
+                        ? "block（阻断）"
+                        : "redact（脱敏）"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-zinc-400">内置检测模式</span>
+                <span className="text-sm font-medium text-white">{dlpStatus.builtin_patterns.length} 类</span>
+              </div>
+              <div className="space-y-1.5 pt-1">
+                {dlpStatus.builtin_patterns.map((pattern) => (
+                  <div key={pattern.type} className="flex items-center justify-between gap-3 text-xs">
+                    <span className="font-mono text-zinc-300">{pattern.type}</span>
+                    <span className="shrink-0 text-zinc-500">风险 {pattern.risk_score.toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="pt-2 text-xs leading-5 text-zinc-500">
+                通过环境变量 SHADOW_AGENT_RESPONSE_DLP_MODE 调整（off / monitor / redact / block）。
+              </p>
+            </div>
+          ) : (
+            <p className="relative mt-4 text-sm text-zinc-500">加载中…</p>
+          )}
+        </section>
+
+        <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
+          <PanelGlow />
+          <h2 className="relative text-base font-semibold text-white">编写建议</h2>
+          <ul className="relative mt-3 space-y-2 text-sm leading-6 text-zinc-400">
+            <li>· 请求侧规则作用于完整会话文本与外部上下文，适合拦截内部代号、竞品关键词等。</li>
+            <li>· 响应侧规则参与 DLP 扫描，「脱敏」动作会把命中内容替换为 [REDACTED:规则名]。</li>
+            <li>· 正则不区分大小写，长度上限 512 字符；创建前先用测试面板试跑。</li>
+            <li>· 规则变更实时生效，全部改动会写入管理员审计日志。</li>
+          </ul>
+        </section>
+      </aside>
+    </div>
+  );
+
   const renderContent = () => {
     if (effectiveView === "chat") return renderChat();
     if (effectiveView === "metrics") return renderMetrics();
     if (effectiveView === "logs") return renderLogs();
     if (effectiveView === "policies") return renderPolicies();
+    if (effectiveView === "rules") return renderRules();
     if (effectiveView === "keys") return renderManagedKeys();
     if (effectiveView === "gateway") return renderGateway();
     if (effectiveView === "settings") return renderSettings();

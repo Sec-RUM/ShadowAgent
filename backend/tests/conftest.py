@@ -49,12 +49,29 @@ class MockUpstreamHandler(BaseHTTPRequestHandler):
         payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
         self.__class__.captured_requests.append(payload)
 
+        messages = payload.get("messages") or []
+        wants_dlp_demo = any(
+            "__dlp_demo__" in str(message.get("content", ""))
+            for message in messages
+            if isinstance(message, dict)
+        )
+
         if payload.get("stream"):
-            body = (
-                b'data: {"id":"chunk-1","choices":[{"delta":{"content":"mock "}}]}\n\n'
-                b'data: {"id":"chunk-2","choices":[{"delta":{"content":"stream ok"}}]}\n\n'
-                b"data: [DONE]\n\n"
-            )
+            if wants_dlp_demo:
+                # The AWS key is split across chunk boundaries on purpose so
+                # tests prove the streaming hold-back scanner still catches it.
+                body = (
+                    b'data: {"id":"c1","choices":[{"delta":{"content":"export: "}}]}\n\n'
+                    b'data: {"id":"c2","choices":[{"delta":{"content":"AKIAIOSFODN"}}]}\n\n'
+                    b'data: {"id":"c3","choices":[{"delta":{"content":"N7EXAMPLE ok"}}]}\n\n'
+                    b"data: [DONE]\n\n"
+                )
+            else:
+                body = (
+                    b'data: {"id":"chunk-1","choices":[{"delta":{"content":"mock "}}]}\n\n'
+                    b'data: {"id":"chunk-2","choices":[{"delta":{"content":"stream ok"}}]}\n\n'
+                    b"data: [DONE]\n\n"
+                )
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Content-Length", str(len(body)))
@@ -62,6 +79,14 @@ class MockUpstreamHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if wants_dlp_demo:
+            response_content = (
+                "Config export: AKIAIOSFODNN7EXAMPLE and token "
+                "ghp_abcdefghijklmnopqrstuvwxyz0123456789ABCDE plus key "
+                "sk-proj-abcdefghij1234567890abcdefghij. Done."
+            )
+        else:
+            response_content = "mock upstream ok"
         response_body = {
             "id": "mock-upstream-response",
             "object": "chat.completion",
@@ -70,7 +95,7 @@ class MockUpstreamHandler(BaseHTTPRequestHandler):
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": "mock upstream ok"},
+                    "message": {"role": "assistant", "content": response_content},
                     "finish_reason": "stop",
                 }
             ],

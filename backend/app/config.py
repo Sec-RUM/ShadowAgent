@@ -98,6 +98,16 @@ def _console_bootstrap_token() -> str:
     return _env_text("SHADOW_AGENT_CONSOLE_BOOTSTRAP_TOKEN")
 
 
+def _alert_webhook_url() -> str:
+    """Outbound webhook for intercept alerts (Slack/Feishu/DingTalk/generic)."""
+    return _env_text("SHADOW_AGENT_ALERT_WEBHOOK_URL")
+
+
+def _alert_webhook_secret() -> str:
+    """Optional HMAC-SHA256 secret signing each webhook delivery."""
+    return _env_text("SHADOW_AGENT_ALERT_WEBHOOK_SECRET")
+
+
 def _allow_open_console_bootstrap() -> bool:
     raw_value = _env_text("SHADOW_AGENT_ALLOW_OPEN_CONSOLE_BOOTSTRAP").lower()
     return raw_value in {"1", "true", "yes", "on"}

@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any
 
 import httpx
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
 
 from app.config import (
     UPSTREAM_CONTEXT_GUARDRAIL,
     _env_text,
     _upstream_timeout_seconds,
 )
+from app.custom_rules import enabled_rules
+from app.dlp import StreamingDlpScanner, response_dlp_mode
 from app.schemas import ChatCompletionRequest, ChatMessage
+
+logger = logging.getLogger("shadow_agent.upstream")
 
 _upstream_client: httpx.AsyncClient | None = None
 
@@ -213,6 +220,7 @@ async def _stream_upstream_response(
     *,
     request_id: str,
     separated: dict[str, str],
+    db: Session | None = None,
 ) -> StreamingResponse:
     from app.config import _upstream_chat_completions_url
 
@@ -275,12 +283,96 @@ async def _stream_upstream_response(
             },
         )
 
+    dlp_mode = response_dlp_mode()
+    dlp_rules: list = []
+    if dlp_mode != "off" and db is not None:
+        dlp_rules = enabled_rules(db, target="response")
+    scanner = StreamingDlpScanner(
+        mode=dlp_mode,
+        rules=dlp_rules,
+        request_id=request_id,
+        details={"mode": "proxy-stream", "model": upstream_model},
+    )
+
     async def iterator():
+        sse_buffer = b""
         try:
             async for chunk in response.aiter_raw():
-                yield chunk
+                sse_buffer += chunk
+                # Only process complete SSE frames (delimited by a blank line).
+                while b"\n\n" in sse_buffer:
+                    frame, sse_buffer = sse_buffer.split(b"\n\n", 1)
+                    out = _process_sse_frame(frame)
+                    if out is not None:
+                        yield out
+                    if scanner.blocked:
+                        return  # error frame already emitted; terminate stream
+            if sse_buffer:
+                out = _process_sse_frame(sse_buffer)
+                if out is not None:
+                    yield out
+            scanner.finalize_logging()
         finally:
             await response.aclose()
+
+    def _process_sse_frame(frame: bytes) -> bytes | None:
+        """Scan/redact one SSE frame; returns the bytes to forward (or None)."""
+        if dlp_mode == "off":
+            return frame + b"\n\n"
+
+        text = frame.decode("utf-8", errors="replace")
+        out_lines: list[str] = []
+        for line in text.split("\n"):
+            stripped = line.strip()
+            if not stripped.startswith("data:"):
+                out_lines.append(line)
+                continue
+            data = stripped[5:].strip()
+            if data == "[DONE]":
+                if not scanner.blocked:
+                    flushed = scanner.finish()
+                    if flushed:
+                        out_lines.append(
+                            "data: "
+                            + json.dumps(
+                                {"choices": [{"index": 0, "delta": {"content": flushed}}]},
+                                ensure_ascii=False,
+                            )
+                        )
+                out_lines.append("data: [DONE]")
+                continue
+            if scanner.blocked:
+                continue  # drop remaining content after a block
+            try:
+                event = json.loads(data)
+            except ValueError:
+                out_lines.append(line)
+                continue
+            choices = event.get("choices") if isinstance(event, dict) else None
+            if (
+                not isinstance(choices, list)
+                or not choices
+                or not isinstance(choices[0], dict)
+            ):
+                out_lines.append(line)
+                continue
+            delta = choices[0].get("delta")
+            content = delta.get("content") if isinstance(delta, dict) else None
+            if not isinstance(content, str) or not content:
+                out_lines.append(line)
+                continue
+            emitted = scanner.feed(content)
+            if scanner.blocked:
+                out_lines.append(
+                    "data: " + json.dumps({"error": scanner.blocked_payload()}, ensure_ascii=False)
+                )
+                out_lines.append("data: [DONE]")
+                continue
+            if emitted:
+                event["choices"][0]["delta"]["content"] = emitted
+                out_lines.append("data: " + json.dumps(event, ensure_ascii=False))
+            # emitted == "" -> withhold this frame's content (hold-back window)
+        return ("\n".join(out_lines) + "\n\n").encode("utf-8")
 
     return StreamingResponse(
         iterator(),

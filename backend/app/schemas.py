@@ -150,6 +150,44 @@ class ReplayRequest(BaseModel):
     request_id: str = Field(min_length=1, max_length=96)
 
 
+class CustomRuleUpsert(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="", max_length=4000)
+    rule_type: Literal["regex", "keyword"]
+    pattern: str = Field(min_length=1, max_length=512)
+    target: Literal["prompt", "response", "any"] = "prompt"
+    action: Literal["block", "redact", "alert"] = "block"
+    risk_score: float = Field(default=0.8, ge=0.0, le=1.0)
+    enabled: bool = True
+
+
+class CustomRuleTestRequest(BaseModel):
+    """Test a rule (existing by id, or an ad-hoc draft) against sample text."""
+
+    sample_text: str = Field(min_length=0, max_length=20000)
+    rule_id: int | None = None
+    draft: CustomRuleUpsert | None = None
+
+
+class CustomRuleImportRequest(BaseModel):
+    rules: list[CustomRuleUpsert] = Field(min_length=1, max_length=200)
+    mode: Literal["merge", "replace"] = "merge"
+
+
+class CustomRuleResponse(BaseModel):
+    id: int
+    name: str
+    description: str
+    rule_type: str
+    pattern: str
+    target: str
+    action: str
+    risk_score: float
+    enabled: bool
+    created_at: str
+    updated_at: str
+
+
 class ReplayRunResponse(BaseModel):
     id: int
     source_request_id: str
