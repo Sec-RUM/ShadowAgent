@@ -14,6 +14,7 @@ from app.audit import _record_admin_action
 from app.auth_helpers import _principal_label
 from app.events import subscribe, unsubscribe
 from app.schemas import ApprovalReviewRequest, InterceptLogResponse
+from app.semantic import semantic_status
 from app.serializers import _serialize_alert_event, _serialize_approval_request
 from app.utils import _json_loads_safe, _utc_timestamp
 from database import get_db
@@ -23,6 +24,14 @@ from security_controls import Principal, require_admin
 router = APIRouter(prefix="/api/v1", tags=["monitoring"])
 
 _SSE_HEARTBEAT_SECONDS = 15.0
+
+
+@router.get("/semantic-status")
+async def get_semantic_status(
+    principal: Principal = Depends(require_admin),
+) -> dict[str, Any]:
+    """Request-side semantic detection runtime status (mode/threshold/model)."""
+    return semantic_status()
 
 
 async def _sse_event_stream() -> AsyncIterator[str]:

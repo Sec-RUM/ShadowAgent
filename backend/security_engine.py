@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.semantic import semantic_ml_check
 from models import SecurityPolicy, ToolPolicy
 
 
@@ -566,7 +567,13 @@ def separate_instruction_and_data(prompt: str, external_context: str | None) -> 
 
 
 def semantic_intent_check(text: str) -> AuditDecision:
-    """Detect prompt-injection intent with lightweight signatures."""
+    """Detect prompt-injection intent: regex signatures + local ML classifier.
+
+    Layer 1 matches deterministic injection signatures (high precision,
+    English-centric). Layer 2 scores the text with the shipped local model
+    and applies the configured semantic mode (off / monitor / enforce) —
+    see ``app.semantic`` for the decision policy and artifact details.
+    """
 
     if not text:
         return AuditDecision(allowed=True)
@@ -589,6 +596,34 @@ def semantic_intent_check(text: str) -> AuditDecision:
             categories=["prompt_injection"],
             evidence=evidence[:6],
             recommended_action="block",
+        )
+
+    ml = semantic_ml_check(text)
+    if ml is not None and ml["suspected"]:
+        evidence.append(
+            f"semantic_ml score={ml['score']} threshold={ml['threshold']} "
+            f"mode={ml['mode']} model_version={ml['model_version']}"
+        )
+        if ml["block"]:
+            return AuditDecision(
+                allowed=False,
+                reason="semantic_injection_detected",
+                risk_score=round(max(0.86, ml["score"]), 4),
+                matched_rules=[f"semantic_ml_v{ml['model_version']}"],
+                category="prompt_injection",
+                categories=["prompt_injection"],
+                evidence=evidence[:6],
+                recommended_action="block",
+            )
+        return AuditDecision(
+            allowed=True,
+            reason="semantic_injection_suspected",
+            risk_score=round(max(0.05, ml["score"]), 4),
+            matched_rules=[f"semantic_ml_v{ml['model_version']}"],
+            category="prompt_injection",
+            categories=["prompt_injection"],
+            evidence=evidence[:6],
+            recommended_action="review",
         )
 
     return AuditDecision(allowed=True, risk_score=0.05)

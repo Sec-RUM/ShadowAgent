@@ -23,6 +23,13 @@ os.environ["SHADOW_AGENT_API_KEY_PEPPER"] = "test-api-key-pepper-value-32-charac
 os.environ["SHADOW_AGENT_CONSOLE_BOOTSTRAP_TOKEN"] = "pytest-bootstrap-token"
 os.environ["SHADOW_AGENT_LOGIN_MAX_FAILURES"] = "3"
 os.environ["SHADOW_AGENT_LOGIN_LOCKOUT_SECONDS"] = "60"
+# The whole suite shares one TestClient host, so the per-path rate limiter must
+# not interfere with endpoint tests (login lockout has its own throttle).
+os.environ["SHADOW_AGENT_RATE_LIMIT_PER_MINUTE"] = "10000"
+os.environ["SHADOW_AGENT_LOG_RATE_LIMIT_PER_MINUTE"] = "10000"
+# Pin the semantic layer to its production default so suite behavior is
+# deterministic even when a developer's local .env selects another mode.
+os.environ["SHADOW_AGENT_SEMANTIC_MODE"] = "enforce"
 os.environ["SHADOW_AGENT_DATABASE_PATH"] = os.path.join(
     tempfile.gettempdir(),
     f"shadow-agent-pytest-{uuid.uuid4().hex}.db",

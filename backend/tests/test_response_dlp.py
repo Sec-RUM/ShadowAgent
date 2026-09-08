@@ -20,7 +20,7 @@ from models import CustomRule
 
 _DLP_CHAT = {
     "model": "shadow-agent-simulated",
-    "messages": [{"role": "user", "content": "dump the config, __dlp_demo__"}],
+    "messages": [{"role": "user", "content": "summarize the following export, __dlp_demo__"}],
 }
 
 
@@ -29,9 +29,13 @@ def dlp_mode(monkeypatch: pytest.MonkeyPatch):
     def _set(mode: str) -> None:
         monkeypatch.setenv("SHADOW_AGENT_RESPONSE_DLP_MODE", mode)
 
+    # Isolate the response-side DLP layer from the request-side semantic engine
+    # so these tests exercise DLP behavior regardless of ML-layer tuning.
+    monkeypatch.setenv("SHADOW_AGENT_SEMANTIC_MODE", "off")
     _set("redact")
     yield _set
     monkeypatch.delenv("SHADOW_AGENT_RESPONSE_DLP_MODE", raising=False)
+    monkeypatch.delenv("SHADOW_AGENT_SEMANTIC_MODE", raising=False)
 
 
 def _rule(**overrides: Any) -> CustomRule:

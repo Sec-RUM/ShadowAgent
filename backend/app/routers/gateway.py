@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.audit import (
     _decision_payload,
+    _log_semantic_monitor_event,
     _raise_if_blocked,
     _submit_audit_log,
     _threat_label_from_decision,
@@ -58,6 +59,41 @@ def _conversation_text(messages: list[ChatMessage]) -> str:
         f"[{message.role}] {message.content}"
         for message in messages
         if message.role != "system"
+    )
+
+
+def _run_semantic_checks(
+    request_id: str,
+    layer: str,
+    text: str,
+    original_prompt: str,
+    db: Session,
+    details: dict[str, Any] | None = None,
+) -> None:
+    """Run the fused regex+ML semantic layer over one text slice.
+
+    Blocking decisions raise through ``_raise_if_blocked`` (403 + audit
+    trail); monitor-mode suspicions are persisted as ``Monitored`` events.
+    """
+
+    decision = semantic_intent_check(text)
+    _raise_if_blocked(
+        request_id=request_id,
+        layer=layer,
+        decision=decision,
+        source_excerpt=text,
+        original_prompt=original_prompt,
+        threat_type=_threat_label_from_decision(decision, layer),
+        db=db,
+        details=details,
+    )
+    _log_semantic_monitor_event(
+        request_id=request_id,
+        layer=layer,
+        decision=decision,
+        source_excerpt=text,
+        original_prompt=original_prompt,
+        details=details,
     )
 
 
@@ -229,26 +265,20 @@ async def chat_completions(
         },
     )
 
-    prompt_decision = semantic_intent_check(separated["trusted_instruction"])
-    _raise_if_blocked(
+    _run_semantic_checks(
         request_id=request_id,
         layer="trusted_instruction",
-        decision=prompt_decision,
-        source_excerpt=separated["trusted_instruction"],
+        text=separated["trusted_instruction"],
         original_prompt=prompt,
-        threat_type=_threat_label_from_decision(prompt_decision, "trusted_instruction"),
         db=db,
         details={"model": payload.model, "principal": principal.subject},
     )
 
-    external_decision = semantic_intent_check(separated["untrusted_data"])
-    _raise_if_blocked(
+    _run_semantic_checks(
         request_id=request_id,
         layer="untrusted_external_data",
-        decision=external_decision,
-        source_excerpt=separated["untrusted_data"],
+        text=separated["untrusted_data"],
         original_prompt=prompt,
-        threat_type=_threat_label_from_decision(external_decision, "untrusted_external_data"),
         db=db,
         details={"model": payload.model, "principal": principal.subject},
     )
@@ -280,14 +310,11 @@ async def chat_completions(
         },
     )
 
-    conversation_decision = semantic_intent_check(conversation_text)
-    _raise_if_blocked(
+    _run_semantic_checks(
         request_id=request_id,
         layer="conversation_history",
-        decision=conversation_decision,
-        source_excerpt=conversation_text,
+        text=conversation_text,
         original_prompt=prompt,
-        threat_type=_threat_label_from_decision(conversation_decision, "conversation_history"),
         db=db,
         details={
             "model": payload.model,

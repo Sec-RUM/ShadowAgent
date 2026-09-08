@@ -350,3 +350,73 @@ def _raise_if_blocked(
             "recommended_action": decision.recommended_action,
         },
     )
+
+
+def _log_semantic_monitor_event(
+    *,
+    request_id: str,
+    layer: str,
+    decision: AuditDecision,
+    source_excerpt: str,
+    original_prompt: str,
+    details: dict[str, Any] | None = None,
+) -> None:
+    """Persist an intercept record for monitor-mode semantic suspicions.
+
+    Monitor mode lets flagged traffic through on purpose (evaluation), but the
+    suspicion must still land in the audit trail and live console feed —
+    mirroring how the response-side DLP engine logs ``Monitored`` events.
+    """
+
+    if not decision.allowed or decision.reason != "semantic_injection_suspected":
+        return
+
+    log_details = {
+        "request_id": request_id,
+        "layer": layer,
+        "reason": decision.reason,
+        "risk_score": decision.risk_score,
+        "matched_rules": decision.matched_rules,
+        "category": decision.category,
+        "categories": decision.categories,
+        "evidence": decision.evidence,
+        "recommended_action": decision.recommended_action,
+        "source_excerpt": redact_text(source_excerpt, max_chars=500),
+        "action_taken": "Monitored",
+        **(details or {}),
+    }
+    db = SessionLocal()
+    try:
+        db.add(
+            InterceptLog(
+                request_id=request_id,
+                threat_type=_threat_label_from_decision(decision, layer),
+                action_taken="Monitored",
+                original_prompt=redact_text(original_prompt),
+                details=json.dumps(sanitize_json(log_details), ensure_ascii=False),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    logger.info(
+        "ShadowAgent semantic monitor flag request_id=%s layer=%s risk_score=%.2f",
+        request_id,
+        layer,
+        decision.risk_score,
+    )
+    monitor_event = {
+        "type": "intercept",
+        "request_id": request_id,
+        "layer": layer,
+        "threat_type": _threat_label_from_decision(decision, layer),
+        "category": decision.category,
+        "categories": decision.categories,
+        "risk_score": decision.risk_score,
+        "reason": decision.reason,
+        "recommended_action": decision.recommended_action,
+        "action_taken": "Monitored",
+    }
+    publish_event(monitor_event)
+    enqueue_alert(monitor_event)
