@@ -5,8 +5,10 @@ from app.routers import (
     auth,
     gateway,
     monitoring,
+    orgs,
     policies,
     replays,
+    rules,
     tool_policies,
 )
 
@@ -15,7 +17,9 @@ __all__ = [
     "auth",
     "gateway",
     "monitoring",
+    "orgs",
     "policies",
     "replays",
+    "rules",
     "tool_policies",
 ]

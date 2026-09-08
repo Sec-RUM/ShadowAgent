@@ -11,6 +11,13 @@ from sqlalchemy.orm import Session
 from app.audit import _record_admin_action
 from app.schemas import SecurityPolicyUpsert
 from app.serializers import _serialize_policy
+from app.tenancy import (
+    can_manage_row,
+    exact_org_filter,
+    new_row_org_id,
+    org_scope_filter,
+    scoped_query,
+)
 from database import get_db
 from models import SecurityPolicy
 from security_controls import Principal, require_admin
@@ -33,6 +40,43 @@ def _validate_policy_pattern(pattern_text: str) -> None:
         )
 
 
+def _name_taken(db: Session, principal: Principal, name: str, *, exclude_id: int | None = None) -> bool:
+    """Name collision within the principal's visible scope (org + shared)."""
+    query = db.query(SecurityPolicy).filter(
+        org_scope_filter(SecurityPolicy, principal.org_id),
+        SecurityPolicy.name == name,
+    )
+    if exclude_id is not None:
+        query = query.filter(SecurityPolicy.id != exclude_id)
+    return query.one_or_none() is not None
+
+
+def _load_policy(db: Session, principal: Principal, policy_id: int) -> SecurityPolicy:
+    policy = (
+        scoped_query(db, SecurityPolicy, principal)
+        .filter(SecurityPolicy.id == policy_id)
+        .one_or_none()
+    )
+    if policy is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "policy_not_found", "message": "Policy does not exist."},
+        )
+    return policy
+
+
+def _assert_manageable(principal: Principal, policy: SecurityPolicy) -> None:
+    """Org principals cannot modify platform-shared rows."""
+    if not can_manage_row(principal, policy):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "policy_read_only",
+                "message": "Platform-shared policies are read-only for organization admins.",
+            },
+        )
+
+
 @router.get("")
 async def list_policies(
     principal: Principal = Depends(require_admin),
@@ -40,7 +84,7 @@ async def list_policies(
 ) -> dict[str, Any]:
     ensure_default_security_policies(db)
     policies = (
-        db.query(SecurityPolicy)
+        scoped_query(db, SecurityPolicy, principal)
         .order_by(SecurityPolicy.id.asc())
         .all()
     )
@@ -59,12 +103,7 @@ async def create_policy(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     ensure_default_security_policies(db)
-    existing = (
-        db.query(SecurityPolicy)
-        .filter(SecurityPolicy.name == payload.name.strip())
-        .one_or_none()
-    )
-    if existing is not None:
+    if _name_taken(db, principal, payload.name.strip()):
         raise HTTPException(
             status_code=409,
             detail={
@@ -75,6 +114,7 @@ async def create_policy(
 
     _validate_policy_pattern(payload.blacklist_keyword.strip())
     policy = SecurityPolicy(
+        org_id=new_row_org_id(principal),
         name=payload.name.strip(),
         blacklist_keyword=payload.blacklist_keyword.strip(),
         description=payload.description.strip(),
@@ -103,19 +143,9 @@ async def update_policy(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     ensure_default_security_policies(db)
-    policy = db.query(SecurityPolicy).filter(SecurityPolicy.id == policy_id).one_or_none()
-    if policy is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "policy_not_found", "message": "Policy does not exist."},
-        )
+    policy = _load_policy(db, principal, policy_id)
 
-    duplicate = (
-        db.query(SecurityPolicy)
-        .filter(SecurityPolicy.name == payload.name.strip(), SecurityPolicy.id != policy_id)
-        .one_or_none()
-    )
-    if duplicate is not None:
+    if _name_taken(db, principal, payload.name.strip(), exclude_id=policy_id):
         raise HTTPException(
             status_code=409,
             detail={
@@ -124,6 +154,7 @@ async def update_policy(
             },
         )
 
+    _assert_manageable(principal, policy)
     _validate_policy_pattern(payload.blacklist_keyword.strip())
     policy.name = payload.name.strip()
     policy.blacklist_keyword = payload.blacklist_keyword.strip()
@@ -148,12 +179,8 @@ async def delete_policy(
     principal: Principal = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    policy = db.query(SecurityPolicy).filter(SecurityPolicy.id == policy_id).one_or_none()
-    if policy is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "policy_not_found", "message": "Policy does not exist."},
-        )
+    policy = _load_policy(db, principal, policy_id)
+    _assert_manageable(principal, policy)
     if policy.system_managed:
         raise HTTPException(
             status_code=400,
@@ -179,7 +206,14 @@ async def reset_policies(
     principal: Principal = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    custom_policies = db.query(SecurityPolicy).filter(SecurityPolicy.system_managed.is_(False)).all()
+    custom_policies = (
+        db.query(SecurityPolicy)
+        .filter(
+            exact_org_filter(SecurityPolicy, principal.org_id),
+            SecurityPolicy.system_managed.is_(False),
+        )
+        .all()
+    )
     for policy in custom_policies:
         db.delete(policy)
     _record_admin_action(
@@ -191,5 +225,9 @@ async def reset_policies(
     )
     db.commit()
     ensure_default_security_policies(db)
-    policies = db.query(SecurityPolicy).order_by(SecurityPolicy.id.asc()).all()
+    policies = (
+        scoped_query(db, SecurityPolicy, principal)
+        .order_by(SecurityPolicy.id.asc())
+        .all()
+    )
     return {"items": [_serialize_policy(policy) for policy in policies]}

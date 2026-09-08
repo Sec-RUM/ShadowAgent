@@ -76,11 +76,13 @@ def _persist_audit_log(
     original_instruction: str,
     decision: AuditDecision,
     reason: str,
+    org_id: int | None = None,
 ) -> None:
     db = SessionLocal()
     try:
         db.add(
             AuditLog(
+                org_id=org_id,
                 request_id=request_id,
                 original_instruction=redact_text(original_instruction),
                 risk_level=_risk_level(decision.risk_score),
@@ -100,10 +102,12 @@ def _record_admin_action(
     target: str,
     principal: Principal,
     details: dict[str, Any] | None = None,
+    org_id: int | None = None,
 ) -> None:
     """Persist an audit entry for privileged management operations."""
     db.add(
         AuditLog(
+            org_id=org_id if org_id is not None else principal.org_id,
             request_id=f"admin-{uuid.uuid4()}",
             original_instruction=redact_text(f"{action} {target}"),
             risk_level="info",
@@ -144,6 +148,7 @@ def _submit_audit_log(
     layer: str,
     source_text: str,
     decision: AuditDecision,
+    org_id: int | None = None,
 ) -> None:
     if decision.allowed:
         return
@@ -159,6 +164,7 @@ def _submit_audit_log(
         source_text,
         decision,
         reason,
+        org_id,
     )
 
 
@@ -194,6 +200,7 @@ def _create_approval_request(
     tool_name: str | None,
     details: dict[str, Any],
     db: Session,
+    org_id: int | None = None,
 ) -> None:
     if not _should_create_approval(decision):
         return
@@ -208,6 +215,7 @@ def _create_approval_request(
 
     db.add(
         ApprovalRequest(
+            org_id=org_id,
             request_id=request_id,
             status="pending",
             threat_type=threat_type,
@@ -229,6 +237,7 @@ def _create_alert_event(
     threat_type: str,
     details: dict[str, Any],
     db: Session,
+    org_id: int | None = None,
 ) -> None:
     severity = _risk_level(decision.risk_score)
     if severity == "low":
@@ -236,6 +245,7 @@ def _create_alert_event(
 
     db.add(
         AlertEvent(
+            org_id=org_id,
             request_id=request_id,
             severity=severity,
             channel="console",
@@ -267,6 +277,7 @@ def _raise_if_blocked(
     threat_type: str,
     db: Session,
     details: dict[str, Any] | None = None,
+    org_id: int | None = None,
 ) -> None:
     if decision.allowed:
         return
@@ -286,6 +297,7 @@ def _raise_if_blocked(
     }
     db.add(
         InterceptLog(
+            org_id=org_id,
             request_id=request_id,
             threat_type=threat_type,
             action_taken="Blocked",
@@ -301,6 +313,7 @@ def _raise_if_blocked(
         tool_name=(details or {}).get("tool_name"),
         details=log_details,
         db=db,
+        org_id=org_id,
     )
     _create_alert_event(
         request_id=request_id,
@@ -308,6 +321,7 @@ def _raise_if_blocked(
         threat_type=threat_type,
         details=log_details,
         db=db,
+        org_id=org_id,
     )
     db.commit()
 
@@ -323,6 +337,7 @@ def _raise_if_blocked(
     )
     intercept_event = {
         "type": "intercept",
+        "org_id": org_id,
         "request_id": request_id,
         "layer": layer,
         "threat_type": threat_type,
@@ -360,6 +375,7 @@ def _log_semantic_monitor_event(
     source_excerpt: str,
     original_prompt: str,
     details: dict[str, Any] | None = None,
+    org_id: int | None = None,
 ) -> None:
     """Persist an intercept record for monitor-mode semantic suspicions.
 
@@ -389,6 +405,7 @@ def _log_semantic_monitor_event(
     try:
         db.add(
             InterceptLog(
+                org_id=org_id,
                 request_id=request_id,
                 threat_type=_threat_label_from_decision(decision, layer),
                 action_taken="Monitored",
@@ -408,6 +425,7 @@ def _log_semantic_monitor_event(
     )
     monitor_event = {
         "type": "intercept",
+        "org_id": org_id,
         "request_id": request_id,
         "layer": layer,
         "threat_type": _threat_label_from_decision(decision, layer),

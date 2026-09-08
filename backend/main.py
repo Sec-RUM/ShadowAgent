@@ -33,11 +33,14 @@ from app.routers import (
     auth,
     gateway,
     monitoring,
+    orgs,
     policies,
     replays,
     rules,
     tool_policies,
 )
+from app import sso
+from app.tenancy import ensure_default_organization
 from app.upstream import _close_upstream_client
 from database import SessionLocal, init_database
 from security_controls import rate_limit_middleware, shared_state_backend
@@ -111,6 +114,8 @@ app.include_router(replays.router)
 app.include_router(policies.router)
 app.include_router(tool_policies.router)
 app.include_router(rules.router)
+app.include_router(orgs.router)
+app.include_router(sso.router)
 app.include_router(gateway.router)
 app.include_router(metrics_router)
 
@@ -120,6 +125,7 @@ init_database()
 def _seed_default_configuration() -> None:
     db = SessionLocal()
     try:
+        ensure_default_organization(db)
         ensure_default_security_policies(db)
         ensure_default_tool_policies(db)
     finally:

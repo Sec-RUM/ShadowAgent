@@ -69,6 +69,7 @@ def _run_semantic_checks(
     original_prompt: str,
     db: Session,
     details: dict[str, Any] | None = None,
+    org_id: int | None = None,
 ) -> None:
     """Run the fused regex+ML semantic layer over one text slice.
 
@@ -86,6 +87,7 @@ def _run_semantic_checks(
         threat_type=_threat_label_from_decision(decision, layer),
         db=db,
         details=details,
+        org_id=org_id,
     )
     _log_semantic_monitor_event(
         request_id=request_id,
@@ -94,6 +96,7 @@ def _run_semantic_checks(
         source_excerpt=text,
         original_prompt=original_prompt,
         details=details,
+        org_id=org_id,
     )
 
 
@@ -117,13 +120,14 @@ async def analyze_request(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     separated = separate_instruction_and_data(payload.prompt, payload.external_context)
+    org_id = principal.org_id
 
     checks = {
         "prompt_blacklist": _decision_payload(
-            inspect_prompt(separated["trusted_instruction"], db)
+            inspect_prompt(separated["trusted_instruction"], db, org_id)
         ),
         "external_blacklist": _decision_payload(
-            inspect_prompt(separated["untrusted_data"], db)
+            inspect_prompt(separated["untrusted_data"], db, org_id)
         ),
         "semantic_prompt": _decision_payload(
             semantic_intent_check(separated["trusted_instruction"])
@@ -132,7 +136,7 @@ async def analyze_request(
             semantic_intent_check(separated["untrusted_data"])
         ),
         "permission_control": _decision_payload(
-            permission_control(payload.tool_name, payload.parameters, db)
+            permission_control(payload.tool_name, payload.parameters, db, org_id)
         ),
         "behavior_risk": _decision_payload(
             behavior_risk_check(
@@ -144,7 +148,7 @@ async def analyze_request(
         ),
         "custom_rules": _decision_payload(
             custom_prompt_check(
-                f"{payload.prompt}\n{payload.external_context or ''}".strip(), db
+                f"{payload.prompt}\n{payload.external_context or ''}".strip(), db, org_id
             )
         ),
     }
@@ -215,17 +219,19 @@ async def chat_completions(
         sanitize_request_id(request.headers.get("x-request-id")) or str(uuid.uuid4())
     )
     started_at = time.perf_counter()
+    org_id = principal.org_id
     prompt = _latest_user_prompt(payload.messages)
     conversation_text = _conversation_text(payload.messages)
 
     separated = separate_instruction_and_data(prompt, payload.external_context)
 
-    prompt_audit_decision = inspect_prompt(separated["trusted_instruction"], db)
+    prompt_audit_decision = inspect_prompt(separated["trusted_instruction"], db, org_id)
     _submit_audit_log(
         request_id=request_id,
         layer="trusted_instruction",
         source_text=separated["trusted_instruction"],
         decision=prompt_audit_decision,
+        org_id=org_id,
     )
     _raise_if_blocked(
         request_id=request_id,
@@ -240,14 +246,16 @@ async def chat_completions(
             "principal": principal.subject,
             "audit_source": "database_blacklist_policy",
         },
+        org_id=org_id,
     )
 
-    external_audit_decision = inspect_prompt(separated["untrusted_data"], db)
+    external_audit_decision = inspect_prompt(separated["untrusted_data"], db, org_id)
     _submit_audit_log(
         request_id=request_id,
         layer="untrusted_external_data",
         source_text=separated["untrusted_data"],
         decision=external_audit_decision,
+        org_id=org_id,
     )
     _raise_if_blocked(
         request_id=request_id,
@@ -263,6 +271,7 @@ async def chat_completions(
             "audit_source": "database_blacklist_policy",
             "indirect_prompt_injection": True,
         },
+        org_id=org_id,
     )
 
     _run_semantic_checks(
@@ -272,6 +281,7 @@ async def chat_completions(
         original_prompt=prompt,
         db=db,
         details={"model": payload.model, "principal": principal.subject},
+        org_id=org_id,
     )
 
     _run_semantic_checks(
@@ -281,14 +291,16 @@ async def chat_completions(
         original_prompt=prompt,
         db=db,
         details={"model": payload.model, "principal": principal.subject},
+        org_id=org_id,
     )
 
-    conversation_blacklist_decision = inspect_prompt(conversation_text, db)
+    conversation_blacklist_decision = inspect_prompt(conversation_text, db, org_id)
     _submit_audit_log(
         request_id=request_id,
         layer="conversation_history",
         source_text=conversation_text,
         decision=conversation_blacklist_decision,
+        org_id=org_id,
     )
     _raise_if_blocked(
         request_id=request_id,
@@ -308,6 +320,7 @@ async def chat_completions(
             "indirect_prompt_injection": True,
             "conversation_history_audit": True,
         },
+        org_id=org_id,
     )
 
     _run_semantic_checks(
@@ -321,9 +334,10 @@ async def chat_completions(
             "principal": principal.subject,
             "conversation_history_audit": True,
         },
+        org_id=org_id,
     )
 
-    permission_decision = permission_control(payload.tool_name, payload.parameters, db)
+    permission_decision = permission_control(payload.tool_name, payload.parameters, db, org_id)
     _raise_if_blocked(
         request_id=request_id,
         layer="tool_permission",
@@ -338,6 +352,7 @@ async def chat_completions(
             "parameters": sanitize_json(payload.parameters or {}),
             "principal": principal.subject,
         },
+        org_id=org_id,
     )
 
     behavior_decision = behavior_risk_check(
@@ -361,10 +376,11 @@ async def chat_completions(
             "principal": principal.subject,
             "external_context_present": bool((payload.external_context or "").strip()),
         },
+        org_id=org_id,
     )
 
     custom_rule_decision = custom_prompt_check(
-        f"{prompt}\n{payload.external_context or ''}".strip(), db
+        f"{prompt}\n{payload.external_context or ''}".strip(), db, org_id
     )
     _raise_if_blocked(
         request_id=request_id,
@@ -378,6 +394,7 @@ async def chat_completions(
             "model": payload.model,
             "principal": principal.subject,
         },
+        org_id=org_id,
     )
 
     latency_ms = round((time.perf_counter() - started_at) * 1000, 3)
@@ -395,6 +412,7 @@ async def chat_completions(
                 request_id=request_id,
                 separated=separated,
                 db=db,
+                org_id=org_id,
             )
         if not _allow_simulated_responses():
             raise HTTPException(
@@ -416,6 +434,7 @@ async def chat_completions(
             request_id=request_id,
             db=db,
             details={"model": payload.model, "principal": principal.subject, "mode": "proxy"},
+            org_id=org_id,
         )
         return _attach_shadow_agent_metadata(
             upstream_response,

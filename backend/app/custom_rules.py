@@ -14,6 +14,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from models import CustomRule
@@ -121,14 +122,25 @@ def _compiled_rule(rule_type: str, pattern: str) -> re.Pattern[str] | None:
         return None
 
 
-def enabled_rules(db: Session, *, target: str) -> list[CustomRule]:
-    """Enabled rules relevant for a scan target (exact match or 'any')."""
-    return (
-        db.query(CustomRule)
-        .filter(CustomRule.enabled.is_(True), CustomRule.target.in_([target, "any"]))
-        .order_by(CustomRule.id.asc())
-        .all()
+def enabled_rules(
+    db: Session,
+    *,
+    target: str,
+    org_id: int | None = None,
+) -> list[CustomRule]:
+    """Enabled rules relevant for a scan target (exact match or 'any').
+
+    With ``org_id`` the organization's own rules plus platform-shared
+    (``org_id IS NULL``) rules apply; without it every enabled rule does
+    (platform principals).
+    """
+    query = db.query(CustomRule).filter(
+        CustomRule.enabled.is_(True),
+        CustomRule.target.in_([target, "any"]),
     )
+    if org_id is not None:
+        query = query.filter(or_(CustomRule.org_id == org_id, CustomRule.org_id.is_(None)))
+    return query.order_by(CustomRule.id.asc()).all()
 
 
 def match_rules(text: str, rules: list[CustomRule]) -> list[RuleHit]:
@@ -146,13 +158,17 @@ def match_rules(text: str, rules: list[CustomRule]) -> list[RuleHit]:
     return hits
 
 
-def custom_prompt_check(text: str, db: Session) -> AuditDecision:
+def custom_prompt_check(
+    text: str,
+    db: Session,
+    org_id: int | None = None,
+) -> AuditDecision:
     """Evaluate prompt-side custom rules (target prompt/any) on ``text``.
 
     block rules reject the request; alert (and response-only redact) rules
     annotate the decision without blocking.
     """
-    rules = enabled_rules(db, target="prompt")
+    rules = enabled_rules(db, target="prompt", org_id=org_id)
     if not rules or not text.strip():
         return AuditDecision(allowed=True, risk_score=0.0)
 

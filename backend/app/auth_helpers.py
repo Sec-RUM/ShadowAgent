@@ -58,11 +58,35 @@ def _serialize_console_user(user: ConsoleUser) -> dict[str, Any]:
     ).model_dump()
 
 
-def _auth_session_payload(user: ConsoleUser) -> dict[str, Any]:
+def _auth_session_payload(user: ConsoleUser, db: Session | None = None) -> dict[str, Any]:
+    extra_claims: dict[str, Any] = {
+        "email": user.email,
+        "name": user.name,
+        "user_type": "console",
+    }
+    active_org: dict[str, Any] | None = None
+
+    if db is not None:
+        from app.tenancy import (
+            default_org_context,
+            ensure_default_organization,
+            serialize_org,
+        )
+        from models import Organization
+
+        ensure_default_organization(db)
+        org_id, org_role = default_org_context(db, user.id)
+        if org_id is not None:
+            extra_claims["org_id"] = org_id
+            extra_claims["org_role"] = org_role or "member"
+            org = db.query(Organization).filter(Organization.id == org_id).one_or_none()
+            if org is not None:
+                active_org = {**serialize_org(org), "role": org_role or "member"}
+
     token, expires_at = create_jwt(
         subject=f"console-user:{user.id}",
         role=user.role,
-        extra_claims={"email": user.email, "name": user.name, "user_type": "console"},
+        extra_claims=extra_claims,
     )
     return AuthSessionResponse(
         access_token=token,
@@ -75,6 +99,7 @@ def _auth_session_payload(user: ConsoleUser) -> dict[str, Any]:
             role=user.role,
             created_at=_utc_timestamp(user.created_at) or "",
         ),
+        org=active_org,
     ).model_dump()
 
 

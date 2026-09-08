@@ -18,11 +18,17 @@ backend/
     routers/         # HTTP routers per domain
       auth.py        #   /api/v1/auth/*
       api_keys.py    #   /api/v1/api-keys*
-      monitoring.py  #   /api/v1/logs|approvals|alerts
+      monitoring.py  #   /api/v1/logs|approvals|alerts|semantic-status
       replays.py     #   /api/v1/replays*
       policies.py    #   /api/v1/policies*
       tool_policies.py # /api/v1/tool-policies*
+      rules.py       #   /api/v1/rules* (custom rules + dlp-status)
       gateway.py     #   /api/v1/analyze, /api/v1/chat/completions
+    semantic.py      # request-side ML injection classifier (runtime)
+    semantic_corpus.py # labeled training corpus (645 samples)
+    semantic_model.json # trained model artifact (loaded in-process)
+    dlp.py           # response-side DLP engine + streaming scanner
+  tools/             # train_semantic_model.py, bench_semantic.py
   alembic/           # migration environment + versions
   security_engine.py # policy/permission/risk engines
   security_controls.py # auth, rate limiting, redaction
@@ -63,6 +69,8 @@ SHADOW_AGENT_UPSTREAM_API_KEY=replace-with-upstream-provider-key
 SHADOW_AGENT_UPSTREAM_MODEL=replace-with-upstream-model-name
 SHADOW_AGENT_ALLOW_SIMULATED_RESPONSES=true
 SHADOW_AGENT_DATABASE_PATH=shadow_agent.db
+SHADOW_AGENT_SEMANTIC_MODE=enforce
+SHADOW_AGENT_RESPONSE_DLP_MODE=redact
 ```
 
 Protected endpoints accept either:
@@ -99,11 +107,113 @@ return a standard 403 error envelope whose `detail` carries the full security
 decision (`request_id`, `reason`, `risk_score`, `matched_rules`, …), so SDK
 callers can distinguish intercepts from upstream failures.
 
+## Semantic Injection Detection (request side)
+
+Prompt-injection detection runs as a two-layer fusion inside
+`security_engine.semantic_intent_check`:
+
+1. **regex signatures** — deterministic `INJECTION_PATTERNS` (high precision)
+2. **local ML classifier** — `app/semantic.py` scores the text with a shipped
+   logistic-regression model over hashed word/char n-gram features
+   (`app/semantic_model.json`). In-process, zero network access, zero
+   dependencies beyond the stdlib; ~60µs per text at P95.
+
+Runtime configuration (read lazily, same pattern as the DLP engine):
+
+- `SHADOW_AGENT_SEMANTIC_MODE` — `off` | `monitor` | `enforce` (default `enforce`).
+  `monitor` lets flagged traffic through but persists
+  `semantic_injection_suspected` intercept records (action `Monitored`) for
+  gray-launch evaluation; `enforce` blocks at/above the threshold (403).
+- `SHADOW_AGENT_SEMANTIC_THRESHOLD` — optional 0.5–0.99 override; empty = the
+  precision-first threshold baked into the artifact by the trainer.
+
+Operational endpoints (admin credentials required):
+
+- `GET /api/v1/semantic-status` — mode, threshold, `model_loaded`,
+  `model_version`, `trained_at`, train metrics.
+- `GET /api/v1/rules/dlp-status` — response-side DLP mode/pattern counts.
+
+Known limitation: recall on paraphrased **Chinese** injections is low
+(held-out ~5%); see the benchmark for mitigation and the upgrade roadmap.
+
+### Retraining & benchmarking
+
+```powershell
+# 1. extend the labeled corpus (keep tags balanced across the stratified split)
+#    backend/app/semantic_corpus.py
+# 2. retrain — writes backend/app/semantic_model.json
+python tools\train_semantic_model.py
+# 3. regenerate the published benchmark (docs/benchmarks/injection-detection.md)
+python tools\bench_semantic.py
+```
+
+The trainer and the runtime share the exact feature-extraction code
+(`app.semantic.extract_features`), so a regenerated artifact is drop-in:
+restart the backend (or the container) to load it. Feature extraction must
+stay byte-identical between training and inference.
+
+## Response-Side DLP
+
+Model outputs are scanned for secrets (AWS/GitHub/OpenAI keys, JWT, private
+keys, plus admin-managed custom rules) with
+`SHADOW_AGENT_RESPONSE_DLP_MODE` = `off` | `monitor` | `redact` | `block`
+(default `redact`). Streaming responses use a hold-back buffer so secrets
+split across SSE chunks are still caught. Custom rules are managed via
+`/api/v1/rules*` (admin-only CRUD with audit logging and validation).
+
+## Multi-Tenancy (Organizations)
+
+Console users belong to organizations; every admin surface (logs, policies,
+custom rules, managed keys, SSE event stream) is scoped to the caller's active
+organization, while platform principals (static env keys / platform admins)
+keep seeing everything.
+
+- A default organization is seeded lazily at startup; pre-existing users and
+  rows are backfilled into it, so single-tenant deployments keep working
+  unchanged.
+- Creating organizations requires a platform admin or an org `owner`; the
+  creator becomes the owner of the new org.
+- The active organization is carried in the session JWT (`org_id` / `org_role`
+  claims). `POST /api/v1/auth/switch-org` re-issues the token for another
+  membership; `GET /api/v1/auth/me` lists all orgs the user belongs to.
+- Cross-tenant access by id returns `404` (no existence leak). All org
+  mutations are audit-logged (`organization_created`, `org_member_added`, …).
+
+Org management API: `GET/POST /api/v1/orgs`, `GET/PATCH/DELETE /api/v1/orgs/{id}`
+(delete requires `?force=true` once the org owns data — it purges org-scoped
+rows), plus members (`GET/POST /api/v1/orgs/{id}/members`,
+`PATCH/DELETE /api/v1/orgs/{id}/members/{user_id}`).
+
+## OIDC Single Sign-On (SSO)
+
+Per-organization OIDC connections (Authorization Code + PKCE) configured at
+runtime — no static env config per IdP:
+
+1. In the console "组织管理" view (or `PUT /api/v1/orgs/{org_id}/sso`) fill in
+   `provider_name`, `issuer_url` (must expose `.well-known/openid-configuration`),
+   `client_id` / `client_secret`, optional `scopes`, `default_role` (platform
+   role for JIT-provisioned users) and `jit_enabled` / `enabled` toggles.
+   An empty `client_secret` on update keeps the stored one; the secret never
+   leaves the DB (responses return a masked hint only).
+2. Register the redirect URI `{SHADOW_AGENT_PUBLIC_BASE_URL}/api/v1/auth/sso/callback`
+   with the IdP and make sure the console base URL (`SHADOW_AGENT_CONSOLE_URL`)
+   is reachable from the user's browser.
+3. Members enter the org slug on the console login screen ("SSO 登录") —
+   `GET /api/v1/auth/sso/providers/{slug}` checks availability and
+   `GET /api/v1/auth/sso/{slug}/login` redirects to the IdP with PKCE.
+4. The backend exchanges the code, validates the ID token (signature via
+   JWKS, issuer, audience, expiry, nonce — replay rejected), matches the email
+   to a console user or JIT-provisions one, then redirects the browser to
+   `{CONSOLE_URL}/sso/callback#access_token=...&expires_at=...` (errors arrive
+   as `#error=...&error_description=...`).
+
+Login state is single-use with a TTL; disabled/deactivated accounts are
+rejected at callback time.
+
 ## Intercept Alerting (Webhook)
 
 Set `SHADOW_AGENT_ALERT_WEBHOOK_URL` to receive a signed JSON POST on every
 blocked request (Slack / Feishu / DingTalk bots or your own receiver):
-
 - Payload fields: `source`, `event`, `timestamp` (UTC ISO), `request_id`,
   `threat_type`, `category`, `risk_score`, `layer`, `reason`,
   `recommended_action`, `action_taken`.

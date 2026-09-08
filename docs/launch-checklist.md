@@ -28,9 +28,15 @@
 - [ ] `python -m pytest tests` 全部通过（含共享态测试）
 - [ ] 未授权访问 `/metrics`、`/api/v1/logs` 返回 401/403
 - [ ] 注入攻击样本（直接/间接/多轮）均被 403 阻断且有拦截日志
+- [ ] `GET /api/v1/semantic-status`（管理员凭证）返回 `model_loaded: true`，`mode` 与灰度决策一致（建议先 `monitor` 观察再切 `enforce`）
+- [ ] `GET /api/v1/rules/dlp-status` 确认响应侧 DLP 模式符合预期（生产建议 `redact` 或 `block`，不要 `off`）
+- [ ] 中文注入改写样本人工抽测（已知短板：中文泛化召回低，见 [benchmarks/injection-detection.md](benchmarks/injection-detection.md)；monitor 模式事件可作回流标注）
 - [ ] 登录连续失败触发账户锁定（429）
 - [ ] 停用账户后其 JWT 立即失效
 - [ ] 审批单二次审批返回 409（状态机完整）
+- [ ] 多租户隔离抽测：A 组织管理员按 id 访问/修改 B 组织的规则、密钥、日志均返回 404；SSE 事件流仅含本组织事件
+- [ ] SSO 回调校验：错误 state / 过期 state 重放被拒绝（`#error=sso_invalid_state`）；停用账号在回调时被拒绝
+- [ ] 若启用 SSO：`SHADOW_AGENT_CONSOLE_URL` / `SHADOW_AGENT_PUBLIC_BASE_URL` 为生产域名，IdP 侧已注册 `{PUBLIC_BASE_URL}/api/v1/auth/sso/callback` 回调地址，JIT 默认角色与邀请策略经过评审
 - [ ] 无任何测试后门/调试端点残留（`/docs`、`/redoc` 视需要经反代屏蔽）
 
 ## 4. 可观测性与运维

@@ -16,6 +16,7 @@ from app.events import subscribe, unsubscribe
 from app.schemas import ApprovalReviewRequest, InterceptLogResponse
 from app.semantic import semantic_status
 from app.serializers import _serialize_alert_event, _serialize_approval_request
+from app.tenancy import scoped_query
 from app.utils import _json_loads_safe, _utc_timestamp
 from database import get_db
 from models import AlertEvent, ApprovalRequest, InterceptLog
@@ -34,13 +35,28 @@ async def get_semantic_status(
     return semantic_status()
 
 
-async def _sse_event_stream() -> AsyncIterator[str]:
+def _event_visible_to(principal: Principal, event: dict[str, Any]) -> bool:
+    """Tenant visibility for live SSE events.
+
+    Platform principals see everything. Org principals see their own
+    organization's events plus platform-scope events (``org_id`` None) —
+    mirroring ``scoped_query`` semantics for stored rows.
+    """
+    if principal.org_id is None:
+        return True
+    event_org = event.get("org_id")
+    return event_org is None or event_org == principal.org_id
+
+
+async def _sse_event_stream(principal: Principal) -> AsyncIterator[str]:
     """Yield `text/event-stream` frames: replay history, then live events."""
     queue = subscribe()
     try:
         while True:
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_SECONDS)
+                if not _event_visible_to(principal, event):
+                    continue
                 payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
                 yield f"event: {event.get('type', 'message')}\ndata: {payload}\n\n"
             except asyncio.TimeoutError:
@@ -60,7 +76,7 @@ async def stream_security_events(
     payload; `: ping` comments every 15s as heartbeat.
     """
     return StreamingResponse(
-        _sse_event_stream(),
+        _sse_event_stream(principal),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -78,7 +94,7 @@ async def list_intercept_logs(
 ) -> dict[str, Any]:
     safe_limit = max(1, min(limit, 100))
     logs = (
-        db.query(InterceptLog)
+        scoped_query(db, InterceptLog, principal)
         .order_by(InterceptLog.timestamp.desc(), InterceptLog.id.desc())
         .limit(safe_limit)
         .all()
@@ -106,7 +122,7 @@ async def list_approval_requests(
     principal: Principal = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    query = db.query(ApprovalRequest).order_by(
+    query = scoped_query(db, ApprovalRequest, principal).order_by(
         ApprovalRequest.created_at.desc(),
         ApprovalRequest.id.desc(),
     )
@@ -122,7 +138,11 @@ async def review_approval_request(
     principal: Principal = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    item = db.query(ApprovalRequest).filter(ApprovalRequest.id == approval_id).one_or_none()
+    item = (
+        scoped_query(db, ApprovalRequest, principal)
+        .filter(ApprovalRequest.id == approval_id)
+        .one_or_none()
+    )
     if item is None:
         raise HTTPException(
             status_code=404,
@@ -158,7 +178,7 @@ async def list_alert_events(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     items = (
-        db.query(AlertEvent)
+        scoped_query(db, AlertEvent, principal)
         .order_by(AlertEvent.created_at.desc(), AlertEvent.id.desc())
         .limit(100)
         .all()

@@ -15,6 +15,11 @@ from app.serializers import (
     _resolve_managed_api_key_expiration,
     _serialize_managed_api_key,
 )
+from app.tenancy import (
+    new_row_org_id,
+    org_owned_query,
+    require_org_admin,
+)
 from database import get_db
 from models import ManagedApiKey
 from security_controls import (
@@ -26,13 +31,32 @@ from security_controls import (
 router = APIRouter(prefix="/api/v1/api-keys", tags=["api-keys"])
 
 
+def _load_managed_api_key(
+    db: Session,
+    principal: Principal,
+    api_key_id: int,
+) -> ManagedApiKey:
+    """Load a managed key visible to the principal (404 across tenant bounds)."""
+    item = (
+        org_owned_query(db, ManagedApiKey, principal)
+        .filter(ManagedApiKey.id == api_key_id)
+        .one_or_none()
+    )
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "api_key_not_found", "message": "Managed API key does not exist."},
+        )
+    return item
+
+
 @router.get("")
 async def list_managed_api_keys(
     include_inactive: bool = True,
     principal: Principal = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    query = db.query(ManagedApiKey).order_by(
+    query = org_owned_query(db, ManagedApiKey, principal).order_by(
         ManagedApiKey.created_at.desc(),
         ManagedApiKey.id.desc(),
     )
@@ -45,7 +69,7 @@ async def list_managed_api_keys(
 @router.post("")
 async def create_managed_api_key_endpoint(
     payload: ManagedApiKeyCreateRequest,
-    principal: Principal = Depends(require_admin),
+    principal: Principal = Depends(require_org_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     name = payload.name.strip()
@@ -58,6 +82,7 @@ async def create_managed_api_key_endpoint(
     role = _require_platform_role(payload.role)
     raw_api_key, key_prefix, key_hash = generate_managed_api_key(role)
     item = ManagedApiKey(
+        org_id=new_row_org_id(principal),
         name=name,
         role=role,
         description=payload.description.strip(),
@@ -89,15 +114,10 @@ async def create_managed_api_key_endpoint(
 async def rotate_managed_api_key(
     api_key_id: int,
     payload: ManagedApiKeyRotateRequest,
-    principal: Principal = Depends(require_admin),
+    principal: Principal = Depends(require_org_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    item = db.query(ManagedApiKey).filter(ManagedApiKey.id == api_key_id).one_or_none()
-    if item is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "api_key_not_found", "message": "Managed API key does not exist."},
-        )
+    item = _load_managed_api_key(db, principal, api_key_id)
 
     raw_api_key, key_prefix, key_hash = generate_managed_api_key(item.role)
     item.key_prefix = key_prefix
@@ -127,15 +147,10 @@ async def rotate_managed_api_key(
 @router.post("/{api_key_id}/revoke")
 async def revoke_managed_api_key(
     api_key_id: int,
-    principal: Principal = Depends(require_admin),
+    principal: Principal = Depends(require_org_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    item = db.query(ManagedApiKey).filter(ManagedApiKey.id == api_key_id).one_or_none()
-    if item is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "api_key_not_found", "message": "Managed API key does not exist."},
-        )
+    item = _load_managed_api_key(db, principal, api_key_id)
 
     item.is_active = False
     _record_admin_action(
@@ -152,15 +167,10 @@ async def revoke_managed_api_key(
 @router.post("/{api_key_id}/activate")
 async def activate_managed_api_key(
     api_key_id: int,
-    principal: Principal = Depends(require_admin),
+    principal: Principal = Depends(require_org_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    item = db.query(ManagedApiKey).filter(ManagedApiKey.id == api_key_id).one_or_none()
-    if item is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "api_key_not_found", "message": "Managed API key does not exist."},
-        )
+    item = _load_managed_api_key(db, principal, api_key_id)
     if item.expires_at is not None and item.expires_at <= datetime.utcnow():
         raise HTTPException(
             status_code=400,
@@ -185,15 +195,10 @@ async def activate_managed_api_key(
 @router.delete("/{api_key_id}")
 async def delete_managed_api_key(
     api_key_id: int,
-    principal: Principal = Depends(require_admin),
+    principal: Principal = Depends(require_org_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    item = db.query(ManagedApiKey).filter(ManagedApiKey.id == api_key_id).one_or_none()
-    if item is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "api_key_not_found", "message": "Managed API key does not exist."},
-        )
+    item = _load_managed_api_key(db, principal, api_key_id)
 
     deleted_summary = {
         "id": item.id,

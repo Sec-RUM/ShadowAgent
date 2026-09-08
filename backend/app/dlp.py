@@ -202,6 +202,7 @@ def _log_dlp_event(
     excerpt: str,
     details: dict[str, Any],
     severity_threshold: str = "medium",
+    org_id: int | None = None,
 ) -> None:
     """Persist intercept/alert records and fan out events for a DLP action."""
     db = SessionLocal()
@@ -224,6 +225,7 @@ def _log_dlp_event(
         }
         db.add(
             InterceptLog(
+                org_id=org_id,
                 request_id=request_id,
                 threat_type=_DLP_THREAT_TYPE,
                 action_taken=action_taken,
@@ -234,6 +236,7 @@ def _log_dlp_event(
         if severity >= severity_threshold:
             db.add(
                 AlertEvent(
+                    org_id=org_id,
                     request_id=request_id,
                     severity=severity,
                     channel="console",
@@ -250,6 +253,7 @@ def _log_dlp_event(
 
     event = {
         "type": "intercept",
+        "org_id": org_id,
         "request_id": request_id,
         "layer": _DLP_LAYER,
         "threat_type": _DLP_THREAT_TYPE,
@@ -285,13 +289,14 @@ def apply_response_dlp(
     request_id: str,
     db: Session,
     details: dict[str, Any] | None = None,
+    org_id: int | None = None,
 ) -> dict[str, Any]:
     """Scan/redact/block a non-streaming chat completion payload in place."""
     mode = response_dlp_mode()
     if mode == "off":
         return data
 
-    rules = enabled_rules(db, target="response")
+    rules = enabled_rules(db, target="response", org_id=org_id)
     outcome_total = ScanOutcome()
     modified = False
 
@@ -315,6 +320,7 @@ def apply_response_dlp(
                 outcome=outcome,
                 excerpt=content[:500],
                 details=details or {},
+                org_id=org_id,
             )
             from fastapi import HTTPException
 
@@ -356,6 +362,7 @@ def apply_response_dlp(
             .get("message", {})
             .get("content", "")[:500],
             details=details or {},
+            org_id=org_id,
         )
 
     shadow_agent = data.get("shadow_agent")
@@ -392,11 +399,20 @@ class StreamingDlpScanner:
     ``blocked`` result the caller must translate into an SSE error frame.
     """
 
-    def __init__(self, *, mode: str, rules: list[CustomRule], request_id: str, details: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        mode: str,
+        rules: list[CustomRule],
+        request_id: str,
+        details: dict[str, Any] | None = None,
+        org_id: int | None = None,
+    ) -> None:
         self.mode = mode
         self.rules = rules
         self.request_id = request_id
         self.details = details or {}
+        self.org_id = org_id
         self.buffer = ""
         self.suppressed = False
         self.suppression_emitted = False
@@ -540,6 +556,7 @@ class StreamingDlpScanner:
             outcome=outcome,
             excerpt=self.buffer[:500],
             details=self.details,
+            org_id=self.org_id,
         )
         self.buffer = ""
 
@@ -555,6 +572,7 @@ class StreamingDlpScanner:
                 outcome=outcome,
                 excerpt="[streamed response]",
                 details=self.details,
+                org_id=self.org_id,
             )
 
     def blocked_payload(self) -> dict[str, Any]:

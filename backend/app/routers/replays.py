@@ -13,6 +13,7 @@ from app.audit import _decision_payload
 from app.auth_helpers import _principal_label
 from app.schemas import ReplayRequest
 from app.serializers import _serialize_replay_run
+from app.tenancy import new_row_org_id, scoped_query
 from app.utils import _json_loads_safe
 from database import get_db
 from models import InterceptLog, ReplayRun
@@ -49,7 +50,7 @@ async def replay_request_by_request_id(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     matched_log = (
-        db.query(InterceptLog)
+        scoped_query(db, InterceptLog, principal)
         .filter(InterceptLog.request_id == payload.request_id)
         .order_by(InterceptLog.timestamp.desc(), InterceptLog.id.desc())
         .first()
@@ -68,6 +69,7 @@ async def replay_request_by_request_id(
     replay_details = _build_replay_details(matched_log)
     replay_behavior = replay_details["replayed_behavior_risk"]
     run = ReplayRun(
+        org_id=new_row_org_id(principal),
         source_request_id=payload.request_id,
         replay_request_id=replay_request_id,
         triggered_by=_principal_label(principal, db),
@@ -88,7 +90,7 @@ async def list_replay_runs(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     items = (
-        db.query(ReplayRun)
+        scoped_query(db, ReplayRun, principal)
         .order_by(ReplayRun.created_at.desc(), ReplayRun.id.desc())
         .limit(100)
         .all()

@@ -221,6 +221,7 @@ async def _stream_upstream_response(
     request_id: str,
     separated: dict[str, str],
     db: Session | None = None,
+    org_id: int | None = None,
 ) -> StreamingResponse:
     from app.config import _upstream_chat_completions_url
 
@@ -286,12 +287,13 @@ async def _stream_upstream_response(
     dlp_mode = response_dlp_mode()
     dlp_rules: list = []
     if dlp_mode != "off" and db is not None:
-        dlp_rules = enabled_rules(db, target="response")
+        dlp_rules = enabled_rules(db, target="response", org_id=org_id)
     scanner = StreamingDlpScanner(
         mode=dlp_mode,
         rules=dlp_rules,
         request_id=request_id,
         details={"mode": "proxy-stream", "model": upstream_model},
+        org_id=org_id,
     )
 
     async def iterator():

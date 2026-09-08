@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   Bot,
   Bell,
+  Building2,
   CheckCircle2,
   ChevronRight,
   Clipboard,
@@ -16,6 +17,7 @@ import {
   Fingerprint,
   Filter,
   Gauge,
+  Globe,
   HelpCircle,
   KeyRound,
   LayoutDashboard,
@@ -37,6 +39,7 @@ import {
   SunMedium,
   Trash2,
   UserPlus,
+  Users,
   X,
   MoonStar,
   Check,
@@ -57,7 +60,7 @@ type IconComponent = React.ComponentType<{
   "aria-hidden"?: boolean;
 }>;
 
-type ViewKey = "chat" | "overview" | "metrics" | "logs" | "policies" | "rules" | "keys" | "gateway" | "settings" | "help";
+type ViewKey = "chat" | "overview" | "metrics" | "logs" | "policies" | "rules" | "keys" | "orgs" | "gateway" | "settings" | "help";
 
 type SessionUser = {
   id: string;
@@ -82,6 +85,48 @@ type BootstrapStatus = {
   open_registration_enabled: boolean;
   invite_token_configured: boolean;
   recommended_role: string;
+};
+
+type OrgInfo = {
+  id: number;
+  slug: string;
+  name: string;
+  is_default: boolean;
+  role: string;
+};
+
+type OrgListItem = OrgInfo & {
+  member_count?: number;
+  sso_enabled?: boolean;
+  sso_provider?: string;
+};
+
+type OrgMemberItem = {
+  user_id: number;
+  name: string;
+  email: string;
+  platform_role: string;
+  is_active: boolean;
+  org_role: string;
+  joined_at: string;
+};
+
+type SsoConfigItem = {
+  org_id: number;
+  provider_name: string;
+  client_id: string;
+  client_secret_masked: string;
+  issuer_url: string;
+  scopes: string;
+  jit_enabled: boolean;
+  default_role: string;
+  enabled: boolean;
+};
+
+type SsoHandoff = {
+  access_token: string;
+  token_type: string;
+  expires_at: number;
 };
 
 type InterceptLog = {
@@ -683,6 +728,14 @@ const VIEW_ITEMS: Array<{
     icon: KeyRound,
     title: "托管 API Key",
     subtitle: "为每个用户或集成独立签发、轮换、停用、删除与恢复密钥。",
+    audience: "admin",
+  },
+  {
+    id: "orgs",
+    label: "组织管理",
+    icon: Building2,
+    title: "组织与 SSO",
+    subtitle: "管理多租户组织、成员角色与每组织的 OIDC 单点登录连接。",
     audience: "admin",
   },
   {
@@ -1335,6 +1388,47 @@ function isAuthSessionValid(session: AuthSession | null) {
   return Boolean(session?.accessToken && session.expiresAt * 1000 > Date.now());
 }
 
+// Keep in sync with the writer in src/app/sso/callback/page.tsx.
+const SSO_HANDOFF_KEY = "shadow-agent-sso-handoff";
+
+function readSsoHandoff(): SsoHandoff | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(SSO_HANDOFF_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<SsoHandoff>;
+    if (!parsed.access_token || !parsed.expires_at) return null;
+    return {
+      access_token: parsed.access_token,
+      token_type: parsed.token_type || "bearer",
+      expires_at: parsed.expires_at,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function clearSsoHandoff() {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(SSO_HANDOFF_KEY);
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const payloadPart = token.split(".")[1];
+    if (!payloadPart) return null;
+    const normalized = payloadPart.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+    return JSON.parse(window.atob(padded)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 function isAdminRole(role: string | undefined) {
   return role === "admin" || role === "security_admin";
 }
@@ -1613,6 +1707,40 @@ export default function Home() {
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authForm, setAuthForm] = useState({ name: "", email: "", password: "", confirmPassword: "", bootstrapToken: "", inviteToken: "" });
   const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatus | null>(null);
+  const [ssoSlug, setSsoSlug] = useState("");
+  const [ssoBusy, setSsoBusy] = useState(false);
+  const [ssoHint, setSsoHint] = useState("");
+  const [orgContext, setOrgContext] = useState<{
+    orgs: OrgInfo[];
+    activeOrgId: number | null;
+    activeOrgRole: string | null;
+  }>({ orgs: [], activeOrgId: null, activeOrgRole: null });
+  const [orgList, setOrgList] = useState<OrgListItem[]>([]);
+  const [orgListLoading, setOrgListLoading] = useState(false);
+  const [orgListError, setOrgListError] = useState("");
+  const [orgCreateOpen, setOrgCreateOpen] = useState(false);
+  const [orgCreateBusy, setOrgCreateBusy] = useState(false);
+  const [orgCreateForm, setOrgCreateForm] = useState({ slug: "", name: "" });
+  const [orgSelectedId, setOrgSelectedId] = useState<number | null>(null);
+  const [orgMembers, setOrgMembers] = useState<OrgMemberItem[]>([]);
+  const [orgMembersLoading, setOrgMembersLoading] = useState(false);
+  const [memberAddForm, setMemberAddForm] = useState({ email: "", role: "member" });
+  const [memberAddBusy, setMemberAddBusy] = useState(false);
+  const [memberBusyId, setMemberBusyId] = useState<number | null>(null);
+  const [orgSsoConfig, setOrgSsoConfig] = useState<SsoConfigItem | null>(null);
+  const [orgSsoForm, setOrgSsoForm] = useState({
+    provider_name: "",
+    client_id: "",
+    client_secret: "",
+    issuer_url: "",
+    scopes: "openid email profile",
+    default_role: "client",
+    jit_enabled: true,
+    enabled: true,
+  });
+  const [orgSsoLoading, setOrgSsoLoading] = useState(false);
+  const [orgSsoBusy, setOrgSsoBusy] = useState(false);
+  const [orgSwitchBusy, setOrgSwitchBusy] = useState(false);
   const [logs, setLogs] = useState<InterceptLog[]>([]);
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
@@ -2447,16 +2575,41 @@ export default function Home() {
         setSelectedScenarioId(nextValidationRuns[0].scenarioId);
       }
       const storedSessionUser = sanitizeStoredSessionUser(readStorage<SessionUser | null>(STORAGE_KEYS.session, null));
-      removeStorage(STORAGE_KEYS.authSession);
-      if (storedSessionUser?.id === "demo-admin") {
-        removeStorage(STORAGE_KEYS.authSession);
-        setAuthSession(null);
-        setUser(storedSessionUser);
+      // SSO callback hands the session over through sessionStorage (token
+      // never persists to localStorage) — restore it before the default
+      // "always start logged out" cleanup below.
+      const ssoHandoff = readSsoHandoff();
+      if (ssoHandoff && ssoHandoff.expires_at * 1000 > Date.now()) {
+        clearSsoHandoff();
+        const claims = decodeJwtPayload(ssoHandoff.access_token) ?? {};
+        const subject = typeof claims.sub === "string" ? claims.sub.replace("console-user:", "") : "sso-user";
+        const handoffUser: SessionUser = {
+          id: subject,
+          name: typeof claims.name === "string" && claims.name ? claims.name : typeof claims.email === "string" ? claims.email : "SSO 用户",
+          email: typeof claims.email === "string" ? claims.email : "",
+          role: typeof claims.role === "string" ? claims.role : "client",
+          createdAt: new Date().toISOString(),
+        };
+        setAuthSession({
+          accessToken: ssoHandoff.access_token,
+          tokenType: "bearer",
+          expiresAt: ssoHandoff.expires_at,
+          user: handoffUser,
+        });
+        setUser(handoffUser);
       } else {
+        if (ssoHandoff) clearSsoHandoff();
         removeStorage(STORAGE_KEYS.authSession);
-        removeStorage(STORAGE_KEYS.session);
-        setAuthSession(null);
-        setUser(null);
+        if (storedSessionUser?.id === "demo-admin") {
+          removeStorage(STORAGE_KEYS.authSession);
+          setAuthSession(null);
+          setUser(storedSessionUser);
+        } else {
+          removeStorage(STORAGE_KEYS.authSession);
+          removeStorage(STORAGE_KEYS.session);
+          setAuthSession(null);
+          setUser(null);
+        }
       }
       setView(activeViewFromHash());
       setMounted(true);
@@ -2505,6 +2658,9 @@ export default function Home() {
         });
         const data = (await response.json().catch(() => ({}))) as {
           user?: { id: string; name: string; email: string; role: string; created_at: string };
+          org_id?: number | null;
+          org_role?: string | null;
+          orgs?: Array<{ id: number; slug: string; name: string; is_default: boolean; role: string }>;
           detail?: unknown;
         };
         if (!response.ok || !data.user) {
@@ -2519,6 +2675,13 @@ export default function Home() {
           createdAt: data.user.created_at,
         };
         setUser(sessionUser);
+        setOrgContext({
+          orgs: Array.isArray(data.orgs)
+            ? data.orgs.filter((org) => typeof org?.id === "number")
+            : [],
+          activeOrgId: typeof data.org_id === "number" ? data.org_id : null,
+          activeOrgRole: typeof data.org_role === "string" ? data.org_role : null,
+        });
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") {
           return;
@@ -3015,8 +3178,391 @@ export default function Home() {
     setGatewayResult(null);
     setManagedKeys([]);
     setManagedKeyIssueState(null);
+    setOrgContext({ orgs: [], activeOrgId: null, activeOrgRole: null });
     addToast("已退出登录", "info");
   };
+
+  const startSsoLogin = async () => {
+    const slug = ssoSlug.trim().toLowerCase();
+    if (!slug) {
+      addToast("请输入组织标识（slug）", "error");
+      return;
+    }
+    setSsoBusy(true);
+    setSsoHint("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/auth/sso/providers/${encodeURIComponent(slug)}`);
+      const data = (await response.json().catch(() => ({}))) as {
+        enabled?: boolean;
+        provider_name?: string;
+        login_url?: string;
+        detail?: unknown;
+      };
+      if (!response.ok) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }
+      if (!data.enabled || !data.login_url) {
+        throw new Error("该组织未启用 SSO 登录，请使用邮箱密码登录或联系组织管理员。");
+      }
+      // login_url is a backend-relative path; the gateway owns discovery/PKCE.
+      window.location.href = `${apiBaseUrl}${data.login_url}`;
+    } catch (error) {
+      setSsoHint(error instanceof Error ? error.message : "SSO 登录发起失败");
+      addToast(error instanceof Error ? error.message : "SSO 登录发起失败", "error");
+    } finally {
+      setSsoBusy(false);
+    }
+  };
+
+  const switchActiveOrg = async (orgId: number) => {
+    if (!authSession || orgId === orgContext.activeOrgId || orgSwitchBusy) return;
+    setOrgSwitchBusy(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/auth/switch-org`, {
+        method: "POST",
+        headers: {
+          ...(buildHeaders(settings, "client", true, authSession)),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ org_id: orgId }),
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        access_token?: string;
+        token_type?: string;
+        expires_at?: number;
+        user?: { id: string; name: string; email: string; role: string; created_at: string };
+        org?: { id: number; slug: string; name: string; is_default: boolean; role: string } | null;
+        detail?: unknown;
+      };
+      if (!response.ok || !data.access_token || !data.user) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }
+      const sessionUser: SessionUser = {
+        id: data.user.id,
+        name: data.user.name,
+        email: data.user.email,
+        role: data.user.role,
+        createdAt: data.user.created_at,
+      };
+      setAuthSession({
+        accessToken: data.access_token,
+        tokenType: "bearer",
+        expiresAt: asNumber(data.expires_at),
+        user: sessionUser,
+      });
+      setUser(sessionUser);
+      const nextOrg = data.org ?? null;
+      if (nextOrg) {
+        setOrgContext((current) => ({
+          orgs: current.orgs.some((org) => org.id === nextOrg.id)
+            ? current.orgs.map((org) => (org.id === nextOrg.id ? { ...org, role: nextOrg.role } : org))
+            : [...current.orgs, { ...nextOrg, role: nextOrg.role }],
+          activeOrgId: nextOrg.id,
+          activeOrgRole: nextOrg.role,
+        }));
+      }
+      addToast(`已切换到组织「${nextOrg?.name ?? orgId}」`, "success");
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "组织切换失败", "error");
+    } finally {
+      setOrgSwitchBusy(false);
+    }
+  };
+
+  const loadOrgList = useCallback(async () => {
+    if (!hasAdminAccess) return;
+    setOrgListLoading(true);
+    setOrgListError("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/orgs`, {
+        headers: buildHeaders(settings, "admin", false, authSession),
+        cache: "no-store",
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        items?: Array<OrgListItem>;
+        detail?: unknown;
+      };
+      if (!response.ok || !Array.isArray(data.items)) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }
+      setOrgList(data.items);
+    } catch (error) {
+      setOrgListError(error instanceof Error ? error.message : "组织列表加载失败");
+    } finally {
+      setOrgListLoading(false);
+    }
+  }, [apiBaseUrl, authSession, hasAdminAccess, settings]);
+
+  const selectOrg = useCallback(
+    (orgId: number | null) => {
+      setOrgSelectedId(orgId);
+      setOrgMembers([]);
+      setOrgSsoConfig(null);
+      if (orgId === null) return;
+      const load = async () => {
+        setOrgMembersLoading(true);
+        setOrgSsoLoading(true);
+        const headers = buildHeaders(settings, "admin", false, authSession);
+        try {
+          const membersResponse = await fetch(`${apiBaseUrl}/api/v1/orgs/${orgId}/members`, {
+            headers,
+            cache: "no-store",
+          });
+          const membersData = (await membersResponse.json().catch(() => ({}))) as {
+            items?: Array<OrgMemberItem>;
+            detail?: unknown;
+          };
+          if (!membersResponse.ok || !Array.isArray(membersData.items)) {
+            throw new Error(detailText(membersData.detail) || `HTTP ${membersResponse.status}`);
+          }
+          setOrgMembers(membersData.items);
+        } catch (error) {
+          addToast(error instanceof Error ? error.message : "成员列表加载失败", "error");
+        } finally {
+          setOrgMembersLoading(false);
+        }
+        try {
+          const ssoResponse = await fetch(`${apiBaseUrl}/api/v1/orgs/${orgId}/sso`, {
+            headers,
+            cache: "no-store",
+          });
+          const ssoData = (await ssoResponse.json().catch(() => ({}))) as {
+            item?: SsoConfigItem | null;
+            detail?: unknown;
+          };
+          if (!ssoResponse.ok) {
+            throw new Error(detailText(ssoData.detail) || `HTTP ${ssoResponse.status}`);
+          }
+          setOrgSsoConfig(ssoData.item ?? null);
+          if (ssoData.item) {
+            setOrgSsoForm({
+              provider_name: ssoData.item.provider_name,
+              client_id: ssoData.item.client_id,
+              client_secret: "",
+              issuer_url: ssoData.item.issuer_url,
+              scopes: ssoData.item.scopes,
+              default_role: ssoData.item.default_role,
+              jit_enabled: ssoData.item.jit_enabled,
+              enabled: ssoData.item.enabled,
+            });
+          } else {
+            setOrgSsoForm({
+              provider_name: "",
+              client_id: "",
+              client_secret: "",
+              issuer_url: "",
+              scopes: "openid email profile",
+              default_role: "client",
+              jit_enabled: true,
+              enabled: true,
+            });
+          }
+        } catch (error) {
+          addToast(error instanceof Error ? error.message : "SSO 配置加载失败", "error");
+        } finally {
+          setOrgSsoLoading(false);
+        }
+      };
+      void load();
+    },
+    [addToast, apiBaseUrl, authSession, settings]
+  );
+
+  const createOrg = async () => {
+    const slug = orgCreateForm.slug.trim().toLowerCase();
+    const name = orgCreateForm.name.trim();
+    if (!slug || !name) {
+      addToast("请填写组织标识与名称", "error");
+      return;
+    }
+    setOrgCreateBusy(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/orgs`, {
+        method: "POST",
+        headers: {
+          ...buildHeaders(settings, "admin", true, authSession),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ slug, name }),
+      });
+      const data = (await response.json().catch(() => ({}))) as { item?: OrgListItem; detail?: unknown };
+      if (!response.ok || !data.item) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }
+      addToast(`组织「${data.item.name}」已创建`, "success");
+      setOrgCreateForm({ slug: "", name: "" });
+      setOrgCreateOpen(false);
+      await loadOrgList();
+      await selectOrg(data.item.id);
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "组织创建失败", "error");
+    } finally {
+      setOrgCreateBusy(false);
+    }
+  };
+
+  const addOrgMember = async () => {
+    if (orgSelectedId === null) return;
+    const email = memberAddForm.email.trim().toLowerCase();
+    if (!email) {
+      addToast("请输入成员邮箱", "error");
+      return;
+    }
+    setMemberAddBusy(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/orgs/${orgSelectedId}/members`, {
+        method: "POST",
+        headers: {
+          ...buildHeaders(settings, "admin", true, authSession),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email, role: memberAddForm.role }),
+      });
+      const data = (await response.json().catch(() => ({}))) as { item?: OrgMemberItem; detail?: unknown };
+      if (!response.ok || !data.item) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }
+      setOrgMembers((current) => [...current, data.item!]);
+      setMemberAddForm({ email: "", role: "member" });
+      addToast(`已添加成员 ${data.item.email}`, "success");
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "成员添加失败", "error");
+    } finally {
+      setMemberAddBusy(false);
+    }
+  };
+
+  const updateOrgMemberRole = async (userId: number, role: string) => {
+    if (orgSelectedId === null) return;
+    setMemberBusyId(userId);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/orgs/${orgSelectedId}/members/${userId}`, {
+        method: "PATCH",
+        headers: {
+          ...buildHeaders(settings, "admin", true, authSession),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ role }),
+      });
+      const data = (await response.json().catch(() => ({}))) as { item?: OrgMemberItem; detail?: unknown };
+      if (!response.ok || !data.item) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }
+      setOrgMembers((current) => current.map((item) => (item.user_id === userId ? data.item! : item)));
+      addToast(`已更新 ${data.item.email} 的组织角色`, "success");
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "角色更新失败", "error");
+    } finally {
+      setMemberBusyId(null);
+    }
+  };
+
+  const removeOrgMember = async (userId: number, email: string) => {
+    if (orgSelectedId === null) return;
+    setMemberBusyId(userId);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/orgs/${orgSelectedId}/members/${userId}`, {
+        method: "DELETE",
+        headers: buildHeaders(settings, "admin", false, authSession),
+      });
+      const data = (await response.json().catch(() => ({}))) as { deleted?: boolean; detail?: unknown };
+      if (!response.ok || !data.deleted) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }
+      setOrgMembers((current) => current.filter((item) => item.user_id !== userId));
+      addToast(`已移除成员 ${email}`, "success");
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "成员移除失败", "error");
+    } finally {
+      setMemberBusyId(null);
+    }
+  };
+
+  const saveOrgSso = async () => {
+    if (orgSelectedId === null) return;
+    const providerName = orgSsoForm.provider_name.trim();
+    const clientId = orgSsoForm.client_id.trim();
+    const issuerUrl = orgSsoForm.issuer_url.trim().replace(/\/$/, "");
+    // A secret is only required when the connection does not exist yet.
+    const hasExistingSecret = Boolean(orgSsoConfig?.client_secret_masked);
+    const clientSecret = orgSsoForm.client_secret.trim();
+    if (!providerName || !clientId || !issuerUrl || (!clientSecret && !hasExistingSecret)) {
+      addToast("请填写 provider 名称、client_id、issuer 与 client_secret", "error");
+      return;
+    }
+    setOrgSsoBusy(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/orgs/${orgSelectedId}/sso`, {
+        method: "PUT",
+        headers: {
+          ...buildHeaders(settings, "admin", true, authSession),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          provider_name: providerName,
+          client_id: clientId,
+          // Empty secret keeps the stored one (backend treats "" as no-rotation).
+          client_secret: clientSecret,
+          issuer_url: issuerUrl,
+          scopes: orgSsoForm.scopes.trim() || "openid email profile",
+          default_role: orgSsoForm.default_role,
+          jit_enabled: orgSsoForm.jit_enabled,
+          enabled: orgSsoForm.enabled,
+        }),
+      });
+      const data = (await response.json().catch(() => ({}))) as { item?: SsoConfigItem; detail?: unknown };
+      if (!response.ok || !data.item) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }
+      setOrgSsoConfig(data.item);
+      setOrgSsoForm((current) => ({ ...current, client_secret: "" }));
+      addToast("SSO 配置已保存", "success");
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "SSO 配置保存失败", "error");
+    } finally {
+      setOrgSsoBusy(false);
+    }
+  };
+
+  const deleteOrgSso = async () => {
+    if (orgSelectedId === null || !orgSsoConfig) return;
+    setOrgSsoBusy(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/orgs/${orgSelectedId}/sso`, {
+        method: "DELETE",
+        headers: buildHeaders(settings, "admin", false, authSession),
+      });
+      const data = (await response.json().catch(() => ({}))) as { deleted?: boolean; detail?: unknown };
+      if (!response.ok || !data.deleted) {
+        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }
+      setOrgSsoConfig(null);
+      setOrgSsoForm({
+        provider_name: "",
+        client_id: "",
+        client_secret: "",
+        issuer_url: "",
+        scopes: "openid email profile",
+        default_role: "client",
+        jit_enabled: true,
+        enabled: true,
+      });
+      addToast("SSO 连接已删除", "success");
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "SSO 配置删除失败", "error");
+    } finally {
+      setOrgSsoBusy(false);
+    }
+  };
+
+  // Load the org list whenever the organizations view becomes active.
+  useEffect(() => {
+    if (!mounted || !user || effectiveView !== "orgs" || !hasAdminAccess) return;
+    const timer = window.setTimeout(() => {
+      void loadOrgList();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [effectiveView, hasAdminAccess, loadOrgList, mounted, user]);
 
   const savePolicies = () => {
     writeStorage(STORAGE_KEYS.policies, policies);
@@ -4018,6 +4564,43 @@ export default function Home() {
                 {authMode === "login" ? "进入控制台" : "创建账号并进入"}
               </button>
             </form>
+
+            {authMode === "login" ? (
+              <div className="mt-5 rounded-md border border-white/[0.08] bg-[var(--surface-raised)] p-3">
+                <div className="flex items-center gap-2 text-xs font-medium text-zinc-300">
+                  <Globe className="h-3.5 w-3.5 text-teal-200" aria-hidden />
+                  组织单点登录（SSO）
+                </div>
+                <div className="mt-2 flex gap-2">
+                  <input
+                    value={ssoSlug}
+                    onChange={(event) => setSsoSlug(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void startSsoLogin();
+                      }
+                    }}
+                    placeholder="组织标识，如 acme"
+                    className={`${inputBase} min-h-9`}
+                    aria-label="组织标识（slug）"
+                    autoComplete="off"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void startSsoLogin()}
+                    disabled={ssoBusy}
+                    className={`${buttonClass("secondary")} min-h-9 shrink-0`}
+                  >
+                    {ssoBusy ? "跳转中…" : "SSO 登录"}
+                  </button>
+                </div>
+                {ssoHint ? <p className="mt-2 text-xs leading-5 text-amber-200">{ssoHint}</p> : null}
+                <p className="mt-2 text-[11px] leading-5 text-zinc-500">
+                  已由组织管理员配置 OIDC 身份提供方的成员，可输入组织标识直达企业登录。
+                </p>
+              </div>
+            ) : null}
 
             <button type="button" onClick={enterDemo} className={`${buttonClass("secondary")} mt-3 w-full`}>
               <Sparkles className="h-4 w-4" aria-hidden />
@@ -6548,6 +7131,379 @@ export default function Home() {
     </div>
   );
 
+  const renderOrgs = () => {
+    if (!hasAdminAccess) {
+      return (
+        <section className={`${glassPanelClass} relative overflow-hidden p-6`}>
+          <PanelGlow />
+          <div className="relative flex items-start gap-3 text-sm leading-6 text-zinc-300">
+            <Shield className="mt-0.5 h-5 w-5 shrink-0 text-amber-200" aria-hidden />
+            <span>组织管理需要管理员权限。请使用管理员账号登录，或在「设置」中配置 Admin API Key 后重试。</span>
+          </div>
+        </section>
+      );
+    }
+
+    const selectedOrg = orgList.find((org) => org.id === orgSelectedId) ?? null;
+    const canManageSelected =
+      Boolean(selectedOrg) &&
+      (selectedOrg?.role === "owner" || selectedOrg?.role === "admin" || !hasConsoleToken);
+
+    return (
+      <div className="space-y-5">
+        <section className={`${glassPanelClass} relative overflow-hidden p-6`}>
+          <PanelGlow />
+          <div className="relative flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 className="text-base font-semibold text-white">组织（租户）</h2>
+              <p className="mt-1 text-sm leading-6 text-zinc-400">
+                每个组织拥有独立的日志、策略、自定义规则与托管密钥；平台管理员可见全部组织，组织管理员仅可见所属组织。
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => void loadOrgList()} disabled={orgListLoading} className={buttonClass("secondary")}>
+                <RefreshCcw className={`h-4 w-4 ${orgListLoading ? "animate-spin" : ""}`} aria-hidden />
+                刷新
+              </button>
+              <button type="button" onClick={() => setOrgCreateOpen((current) => !current)} className={buttonClass("primary")}>
+                <Plus className="h-4 w-4" aria-hidden />
+                创建组织
+              </button>
+            </div>
+          </div>
+
+          {orgCreateOpen ? (
+            <div className="relative mt-4 rounded-md border border-white/[0.08] bg-[var(--surface-raised)] p-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-2 block text-sm text-zinc-400">组织标识（slug，仅小写字母、数字、-、_）</span>
+                  <input
+                    value={orgCreateForm.slug}
+                    onChange={(event) => setOrgCreateForm((current) => ({ ...current, slug: event.target.value }))}
+                    className={inputBase}
+                    placeholder="acme"
+                    autoComplete="off"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-2 block text-sm text-zinc-400">组织名称</span>
+                  <input
+                    value={orgCreateForm.name}
+                    onChange={(event) => setOrgCreateForm((current) => ({ ...current, name: event.target.value }))}
+                    className={inputBase}
+                    placeholder="Acme Inc."
+                    autoComplete="off"
+                  />
+                </label>
+              </div>
+              <div className="mt-3 flex justify-end gap-2">
+                <button type="button" onClick={() => setOrgCreateOpen(false)} className={buttonClass("ghost")}>
+                  取消
+                </button>
+                <button type="button" onClick={() => void createOrg()} disabled={orgCreateBusy} className={buttonClass("primary")}>
+                  {orgCreateBusy ? "创建中…" : "创建"}
+                </button>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-zinc-500">
+                创建组织需要平台管理员或现有组织的 owner 角色；创建者将自动成为新组织的 owner。
+              </p>
+            </div>
+          ) : null}
+
+          {orgListError ? (
+            <p className="relative mt-4 rounded-md border border-red-300/25 bg-red-400/10 p-3 text-sm text-red-200">{orgListError}</p>
+          ) : null}
+
+          <div className="relative mt-4 grid gap-3">
+            {orgList.length === 0 && !orgListLoading ? (
+              <p className="rounded-md border border-white/[0.08] bg-[var(--surface-raised)] p-4 text-sm text-zinc-500">
+                暂无可见组织。
+              </p>
+            ) : null}
+            {orgList.map((org) => (
+              <button
+                key={org.id}
+                type="button"
+                onClick={() => selectOrg(org.id === orgSelectedId ? null : org.id)}
+                className={`flex min-h-14 w-full items-center gap-3 rounded-md border px-4 py-3 text-left transition focus:outline-none focus:ring-2 focus:ring-teal-300/60 ${
+                  org.id === orgSelectedId
+                    ? "border-teal-200/30 bg-teal-300/[0.08]"
+                    : "border-white/[0.08] bg-[var(--surface-raised)] hover:border-white/[0.16]"
+                }`}
+              >
+                <Building2 className="h-5 w-5 shrink-0 text-teal-200" aria-hidden />
+                <span className="min-w-0 flex-1">
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium text-white">{org.name}</span>
+                    <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">{org.slug}</span>
+                    {org.is_default ? (
+                      <span className="rounded border border-sky-300/30 bg-sky-400/10 px-1.5 py-0.5 text-[10px] text-sky-200">默认</span>
+                    ) : null}
+                    {org.sso_enabled ? (
+                      <span className="rounded border border-emerald-300/30 bg-emerald-400/10 px-1.5 py-0.5 text-[10px] text-emerald-200">
+                        SSO: {org.sso_provider || "已启用"}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="mt-1 block text-xs text-zinc-500">
+                    组织角色：{org.role || "member"}
+                    {typeof org.member_count === "number" ? ` · ${org.member_count} 名成员` : ""}
+                  </span>
+                </span>
+                <ChevronRight
+                  className={`h-4 w-4 shrink-0 text-zinc-500 transition ${org.id === orgSelectedId ? "rotate-90" : ""}`}
+                  aria-hidden
+                />
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {selectedOrg ? (
+          <div className="grid gap-5 xl:grid-cols-2">
+            <section className={`${glassPanelClass} relative overflow-hidden p-6`}>
+              <PanelGlow />
+              <div className="relative flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="flex items-center gap-2 text-base font-semibold text-white">
+                    <Users className="h-4 w-4 text-teal-200" aria-hidden />
+                    成员管理 · {selectedOrg.name}
+                  </h2>
+                  <p className="mt-1 text-xs leading-5 text-zinc-500">
+                    添加已有控制台账号并分配组织角色（owner / admin / member）。
+                  </p>
+                </div>
+              </div>
+
+              {canManageSelected ? (
+                <div className="relative mt-4 flex flex-col gap-2 sm:flex-row">
+                  <input
+                    value={memberAddForm.email}
+                    onChange={(event) => setMemberAddForm((current) => ({ ...current, email: event.target.value }))}
+                    className={inputBase}
+                    placeholder="成员邮箱（需已注册或经 SSO 开户）"
+                    aria-label="成员邮箱"
+                  />
+                  <div className="flex shrink-0 gap-2">
+                    <div className="w-32">
+                      <GlassSelect
+                        value={memberAddForm.role}
+                        options={[
+                          { value: "member", label: "member" },
+                          { value: "admin", label: "admin" },
+                          { value: "owner", label: "owner" },
+                        ]}
+                        onChange={(value) => setMemberAddForm((current) => ({ ...current, role: value }))}
+                        ariaLabel="成员角色"
+                      />
+                    </div>
+                    <button type="button" onClick={() => void addOrgMember()} disabled={memberAddBusy} className={buttonClass("primary")}>
+                      <Plus className="h-4 w-4" aria-hidden />
+                      {memberAddBusy ? "添加中…" : "添加"}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="relative mt-4 space-y-2">
+                {orgMembersLoading ? (
+                  <p className="text-sm text-zinc-500">成员加载中…</p>
+                ) : orgMembers.length === 0 ? (
+                  <p className="text-sm text-zinc-500">暂无成员。</p>
+                ) : (
+                  orgMembers.map((member) => (
+                    <div
+                      key={member.user_id}
+                      className="flex min-h-14 flex-wrap items-center gap-3 rounded-md border border-white/[0.08] bg-[var(--surface-raised)] px-4 py-3"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-medium text-white">{member.name || member.email}</span>
+                          {!member.is_active ? (
+                            <span className="rounded border border-red-300/30 bg-red-400/10 px-1.5 py-0.5 text-[10px] text-red-200">已停用</span>
+                          ) : null}
+                        </div>
+                        <div className="mt-0.5 truncate text-xs text-zinc-500">
+                          {member.email} · 平台角色 {member.platform_role}
+                        </div>
+                      </div>
+                      {canManageSelected ? (
+                        <div className="flex items-center gap-2">
+                          <div className="w-32">
+                            <GlassSelect
+                              value={member.org_role}
+                              options={[
+                                { value: "member", label: "member" },
+                                { value: "admin", label: "admin" },
+                                { value: "owner", label: "owner" },
+                              ]}
+                              onChange={(value) => void updateOrgMemberRole(member.user_id, value)}
+                              ariaLabel={`调整 ${member.email} 的组织角色`}
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void removeOrgMember(member.user_id, member.email)}
+                            disabled={memberBusyId === member.user_id}
+                            className={`${buttonClass("danger")} min-h-10 px-2.5`}
+                            aria-label={`移除成员 ${member.email}`}
+                          >
+                            <Trash2 className="h-4 w-4" aria-hidden />
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="rounded bg-white/10 px-2 py-1 text-xs text-zinc-300">{member.org_role}</span>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
+
+            <section className={`${glassPanelClass} relative overflow-hidden p-6`}>
+              <PanelGlow />
+              <div className="relative">
+                <h2 className="flex items-center gap-2 text-base font-semibold text-white">
+                  <Globe className="h-4 w-4 text-teal-200" aria-hidden />
+                  OIDC 单点登录 · {selectedOrg.slug}
+                </h2>
+                <p className="mt-1 text-xs leading-5 text-zinc-500">
+                  Authorization Code + PKCE；成员在登录页输入组织标识「{selectedOrg.slug}」即可直达企业 IdP 登录。
+                </p>
+
+                {orgSsoLoading ? (
+                  <p className="mt-4 text-sm text-zinc-500">SSO 配置加载中…</p>
+                ) : !canManageSelected ? (
+                  <p className="mt-4 text-sm text-zinc-500">需要组织 owner / admin 角色才能配置 SSO。</p>
+                ) : (
+                  <div className="mt-4 space-y-3">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span
+                        className={`rounded-md border px-2 py-1 ${
+                          orgSsoConfig?.enabled
+                            ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-200"
+                            : "border-white/[0.12] bg-white/[0.06] text-zinc-400"
+                        }`}
+                      >
+                        {orgSsoConfig?.enabled ? "已启用" : orgSsoConfig ? "已停用" : "未配置"}
+                      </span>
+                      {orgSsoConfig?.client_secret_masked ? (
+                        <span className="font-mono text-zinc-500">secret {orgSsoConfig.client_secret_masked}</span>
+                      ) : null}
+                    </div>
+
+                    <label className="block">
+                      <span className="mb-2 block text-sm text-zinc-400">Provider 名称（展示用）</span>
+                      <input
+                        value={orgSsoForm.provider_name}
+                        onChange={(event) => setOrgSsoForm((current) => ({ ...current, provider_name: event.target.value }))}
+                        className={inputBase}
+                        placeholder="Okta / Auth0 / Entra ID"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-2 block text-sm text-zinc-400">Issuer URL（支持 .well-known/openid-configuration）</span>
+                      <input
+                        value={orgSsoForm.issuer_url}
+                        onChange={(event) => setOrgSsoForm((current) => ({ ...current, issuer_url: event.target.value }))}
+                        className={inputBase}
+                        placeholder="https://login.acme.com"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="block">
+                        <span className="mb-2 block text-sm text-zinc-400">Client ID</span>
+                        <input
+                          value={orgSsoForm.client_id}
+                          onChange={(event) => setOrgSsoForm((current) => ({ ...current, client_id: event.target.value }))}
+                          className={inputBase}
+                          autoComplete="off"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="mb-2 block text-sm text-zinc-400">
+                          Client Secret{orgSsoConfig?.client_secret_masked ? "（留空保留原值）" : ""}
+                        </span>
+                        <input
+                          value={orgSsoForm.client_secret}
+                          onChange={(event) => setOrgSsoForm((current) => ({ ...current, client_secret: event.target.value }))}
+                          className={inputBase}
+                          type="password"
+                          autoComplete="new-password"
+                        />
+                      </label>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="block">
+                        <span className="mb-2 block text-sm text-zinc-400">Scopes</span>
+                        <input
+                          value={orgSsoForm.scopes}
+                          onChange={(event) => setOrgSsoForm((current) => ({ ...current, scopes: event.target.value }))}
+                          className={inputBase}
+                          autoComplete="off"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="mb-2 block text-sm text-zinc-400">SSO 新用户平台角色（JIT 开户）</span>
+                        <div className="min-h-10">
+                          <GlassSelect
+                            value={orgSsoForm.default_role}
+                            options={[
+                              { value: "client", label: "client" },
+                              { value: "admin", label: "admin" },
+                              { value: "security_admin", label: "security_admin" },
+                            ]}
+                            onChange={(value) => setOrgSsoForm((current) => ({ ...current, default_role: value }))}
+                            ariaLabel="SSO 新用户默认平台角色"
+                          />
+                        </div>
+                      </label>
+                    </div>
+                    <div className="flex flex-wrap gap-4">
+                      <label className="flex items-center gap-2 text-sm text-zinc-300">
+                        <input
+                          type="checkbox"
+                          checked={orgSsoForm.jit_enabled}
+                          onChange={(event) => setOrgSsoForm((current) => ({ ...current, jit_enabled: event.target.checked }))}
+                          className="h-4 w-4 rounded border-white/20 bg-white/10"
+                        />
+                        JIT 自动开户（首次 SSO 登录自动创建账号）
+                      </label>
+                      <label className="flex items-center gap-2 text-sm text-zinc-300">
+                        <input
+                          type="checkbox"
+                          checked={orgSsoForm.enabled}
+                          onChange={(event) => setOrgSsoForm((current) => ({ ...current, enabled: event.target.checked }))}
+                          className="h-4 w-4 rounded border-white/20 bg-white/10"
+                        />
+                        启用 SSO 登录
+                      </label>
+                    </div>
+
+                    <div className="flex flex-wrap justify-end gap-2 pt-1">
+                      {orgSsoConfig ? (
+                        <button type="button" onClick={() => void deleteOrgSso()} disabled={orgSsoBusy} className={buttonClass("danger")}>
+                          <Trash2 className="h-4 w-4" aria-hidden />
+                          删除连接
+                        </button>
+                      ) : null}
+                      <button type="button" onClick={() => void saveOrgSso()} disabled={orgSsoBusy} className={buttonClass("primary")}>
+                        <Save className="h-4 w-4" aria-hidden />
+                        {orgSsoBusy ? "保存中…" : orgSsoConfig ? "更新配置" : "保存并启用"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   const renderContent = () => {
     if (effectiveView === "chat") return renderChat();
     if (effectiveView === "metrics") return renderMetrics();
@@ -6555,6 +7511,7 @@ export default function Home() {
     if (effectiveView === "policies") return renderPolicies();
     if (effectiveView === "rules") return renderRules();
     if (effectiveView === "keys") return renderManagedKeys();
+    if (effectiveView === "orgs") return renderOrgs();
     if (effectiveView === "gateway") return renderGateway();
     if (effectiveView === "settings") return renderSettings();
     if (effectiveView === "help") return renderHelp();
@@ -6641,6 +7598,41 @@ export default function Home() {
             ) : null}
             <div className="text-sm font-medium text-white">{user.name}</div>
             <div className="mt-1 truncate text-xs text-zinc-500">{user.email}</div>
+
+            {hasConsoleToken && orgContext.orgs.length > 0 ? (
+              <div className="mt-3">
+                <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                  <Building2 className="h-3 w-3" aria-hidden />
+                  当前组织
+                  {orgContext.activeOrgRole ? (
+                    <span className="ml-auto rounded bg-white/10 px-1.5 py-0.5 text-[10px] normal-case text-zinc-400">
+                      {orgContext.activeOrgRole}
+                    </span>
+                  ) : null}
+                </div>
+                {orgContext.orgs.length > 1 ? (
+                  <GlassSelect
+                    value={String(orgContext.activeOrgId ?? orgContext.orgs[0]?.id ?? "")}
+                    options={orgContext.orgs.map((org) => ({
+                      value: String(org.id),
+                      label: org.name,
+                      description: `${org.slug}${org.is_default ? " · 默认组织" : ""} · ${org.role}`,
+                    }))}
+                    onChange={(value) => void switchActiveOrg(Number(value))}
+                    ariaLabel="切换当前组织"
+                    buttonClassName="min-h-9 text-sm"
+                  />
+                ) : (
+                  <div className="rounded-md border border-white/[0.1] bg-white/[0.055] px-3 py-2 text-sm text-zinc-200">
+                    {orgContext.orgs[0]?.name ?? "未加入组织"}
+                  </div>
+                )}
+                {orgSwitchBusy ? (
+                  <p className="mt-1.5 text-[11px] text-zinc-500">正在切换组织…</p>
+                ) : null}
+              </div>
+            ) : null}
+
             <button type="button" onClick={logout} className={`${buttonClass("ghost")} mt-3 w-full justify-start px-2`}>
               <LogOut className="h-4 w-4" aria-hidden />
               退出

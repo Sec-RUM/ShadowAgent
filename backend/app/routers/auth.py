@@ -27,10 +27,15 @@ from app.config import (
     _login_lockout_seconds,
     _login_max_failures,
 )
-from app.schemas import AuthLoginRequest, AuthRegisterRequest
+from app.schemas import AuthLoginRequest, AuthRegisterRequest, SwitchOrgRequest
+from app.tenancy import (
+    ensure_default_organization,
+    membership_role,
+    user_memberships,
+)
 from app.utils import _normalized_email
 from database import get_db
-from models import ConsoleUser
+from models import ConsoleUser, Organization, OrganizationMembership
 from security_controls import (
     Principal,
     hash_password,
@@ -141,7 +146,24 @@ async def register_console_user(
     db.add(user)
     db.commit()
     db.refresh(user)
-    return _auth_session_payload(user)
+
+    # Enroll in the default organization: the very first member becomes its
+    # owner so upgraded single-tenant deployments keep a full administrator.
+    default_org = ensure_default_organization(db)
+    existing_members = (
+        db.query(OrganizationMembership)
+        .filter(OrganizationMembership.org_id == default_org.id)
+        .count()
+    )
+    db.add(
+        OrganizationMembership(
+            user_id=user.id,
+            org_id=default_org.id,
+            role="owner" if existing_members == 0 else "member",
+        )
+    )
+    db.commit()
+    return _auth_session_payload(user, db)
 
 
 @router.post("/login")
@@ -194,7 +216,30 @@ async def login_console_user(
     login_throttle.record_success(email)
     _record_auth_event(db, "login_success", email)
     db.commit()
-    return _auth_session_payload(user)
+    return _auth_session_payload(user, db)
+
+
+def _org_context_payload(db: Session, user_id: int) -> dict[str, object]:
+    """Organizations the console user belongs to, plus the active one."""
+    memberships = user_memberships(db, user_id)
+    org_ids = [membership.org_id for membership in memberships]
+    orgs_by_id = {
+        org.id: org
+        for org in db.query(Organization).filter(Organization.id.in_(org_ids)).all()
+    } if org_ids else {}
+
+    orgs = [
+        {
+            "id": org.id,
+            "slug": org.slug,
+            "name": org.name,
+            "is_default": bool(org.is_default),
+            "role": membership.role,
+        }
+        for membership in memberships
+        if (org := orgs_by_id.get(membership.org_id)) is not None
+    ]
+    return {"orgs": orgs}
 
 
 @router.get("/me")
@@ -216,4 +261,84 @@ async def get_current_console_user(
             detail={"error": "user_not_found", "message": "Console user does not exist."},
         )
 
-    return {"user": _serialize_console_user(user)}
+    return {
+        "user": _serialize_console_user(user),
+        "org_id": principal.org_id,
+        "org_role": principal.org_role,
+        **_org_context_payload(db, user_id),
+    }
+
+
+@router.post("/switch-org")
+async def switch_active_organization(
+    payload: SwitchOrgRequest,
+    principal: Principal = Depends(require_client),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Re-issue the session token with another organization as active context."""
+    user_id = _principal_user_id(principal)
+    if user_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "console_auth_required", "message": "Console user token required."},
+        )
+
+    user = db.query(ConsoleUser).filter(ConsoleUser.id == user_id, ConsoleUser.is_active.is_(True)).one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "user_not_found", "message": "Console user does not exist."},
+        )
+
+    target_role = membership_role(db, user_id, payload.org_id)
+    if target_role is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "org_not_found",
+                "message": "You are not a member of that organization.",
+            },
+        )
+
+    _record_auth_event(db, "org_switched", user.email)
+    db.commit()
+    return _auth_session_payload_for_org(user, db, payload.org_id, target_role)
+
+
+def _auth_session_payload_for_org(
+    user: ConsoleUser,
+    db: Session,
+    org_id: int,
+    org_role: str,
+) -> dict[str, Any]:
+    from security_controls import create_jwt
+
+    token, expires_at = create_jwt(
+        subject=f"console-user:{user.id}",
+        role=user.role,
+        extra_claims={
+            "email": user.email,
+            "name": user.name,
+            "user_type": "console",
+            "org_id": org_id,
+            "org_role": org_role,
+        },
+    )
+    org = db.query(Organization).filter(Organization.id == org_id).one_or_none()
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_at": expires_at,
+        "user": _serialize_console_user(user),
+        "org": (
+            {
+                "id": org.id,
+                "slug": org.slug,
+                "name": org.name,
+                "is_default": bool(org.is_default),
+                "role": org_role,
+            }
+            if org is not None
+            else None
+        ),
+    }

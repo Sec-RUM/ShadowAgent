@@ -10,12 +10,65 @@ from sqlalchemy.orm import Session
 from app.audit import _record_admin_action
 from app.schemas import ToolPolicyUpsert
 from app.serializers import _serialize_tool_policy
+from app.tenancy import (
+    can_manage_row,
+    exact_org_filter,
+    new_row_org_id,
+    scoped_query,
+)
 from database import get_db
 from models import ToolPolicy
 from security_controls import Principal, require_admin
 from security_engine import ensure_default_tool_policies
 
 router = APIRouter(prefix="/api/v1/tool-policies", tags=["tool-policies"])
+
+
+def _tool_name_taken(
+    db: Session,
+    principal: Principal,
+    tool_name: str,
+    *,
+    exclude_id: int | None = None,
+) -> bool:
+    """Collision within the principal's own scope (org row or platform row).
+
+    An organization may override a platform-shared tool policy (separate
+    (org_id, tool_name) row), so only same-scope duplicates conflict.
+    """
+    query = db.query(ToolPolicy).filter(
+        exact_org_filter(ToolPolicy, principal.org_id),
+        ToolPolicy.tool_name == tool_name,
+    )
+    if exclude_id is not None:
+        query = query.filter(ToolPolicy.id != exclude_id)
+    return query.one_or_none() is not None
+
+
+def _load_tool_policy(db: Session, principal: Principal, policy_id: int) -> ToolPolicy:
+    policy = (
+        scoped_query(db, ToolPolicy, principal)
+        .filter(ToolPolicy.id == policy_id)
+        .one_or_none()
+    )
+    if policy is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "tool_policy_not_found", "message": "Tool policy does not exist."},
+        )
+    return policy
+
+
+def _assert_manageable(principal: Principal, policy: ToolPolicy) -> None:
+    """Org principals cannot modify platform-shared rows."""
+    if not can_manage_row(principal, policy):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "tool_policy_read_only",
+                "message": "Platform-shared tool policies are read-only for organization admins.",
+            },
+        )
 
 
 @router.get("")
@@ -25,7 +78,7 @@ async def list_tool_policies(
 ) -> dict[str, Any]:
     ensure_default_tool_policies(db)
     policies = (
-        db.query(ToolPolicy)
+        scoped_query(db, ToolPolicy, principal)
         .order_by(ToolPolicy.id.asc())
         .all()
     )
@@ -45,12 +98,7 @@ async def create_tool_policy(
 ) -> dict[str, Any]:
     ensure_default_tool_policies(db)
     normalized_name = payload.tool_name.strip().lower()
-    existing = (
-        db.query(ToolPolicy)
-        .filter(ToolPolicy.tool_name == normalized_name)
-        .one_or_none()
-    )
-    if existing is not None:
+    if _tool_name_taken(db, principal, normalized_name):
         raise HTTPException(
             status_code=409,
             detail={
@@ -60,6 +108,7 @@ async def create_tool_policy(
         )
 
     policy = ToolPolicy(
+        org_id=new_row_org_id(principal),
         tool_name=normalized_name,
         description=payload.description.strip(),
         allowed=payload.allowed,
@@ -86,23 +135,10 @@ async def update_tool_policy(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     ensure_default_tool_policies(db)
-    policy = db.query(ToolPolicy).filter(ToolPolicy.id == policy_id).one_or_none()
-    if policy is None:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "tool_policy_not_found",
-                "message": "Tool policy does not exist.",
-            },
-        )
+    policy = _load_tool_policy(db, principal, policy_id)
 
     normalized_name = payload.tool_name.strip().lower()
-    duplicate = (
-        db.query(ToolPolicy)
-        .filter(ToolPolicy.tool_name == normalized_name, ToolPolicy.id != policy_id)
-        .one_or_none()
-    )
-    if duplicate is not None:
+    if _tool_name_taken(db, principal, normalized_name, exclude_id=policy_id):
         raise HTTPException(
             status_code=409,
             detail={
@@ -111,6 +147,7 @@ async def update_tool_policy(
             },
         )
 
+    _assert_manageable(principal, policy)
     policy.tool_name = normalized_name
     policy.description = payload.description.strip()
     policy.allowed = payload.allowed
@@ -132,15 +169,8 @@ async def delete_tool_policy(
     principal: Principal = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    policy = db.query(ToolPolicy).filter(ToolPolicy.id == policy_id).one_or_none()
-    if policy is None:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "tool_policy_not_found",
-                "message": "Tool policy does not exist.",
-            },
-        )
+    policy = _load_tool_policy(db, principal, policy_id)
+    _assert_manageable(principal, policy)
     if policy.system_managed:
         raise HTTPException(
             status_code=400,
@@ -166,7 +196,14 @@ async def reset_tool_policies(
     principal: Principal = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    custom_policies = db.query(ToolPolicy).filter(ToolPolicy.system_managed.is_(False)).all()
+    custom_policies = (
+        db.query(ToolPolicy)
+        .filter(
+            exact_org_filter(ToolPolicy, principal.org_id),
+            ToolPolicy.system_managed.is_(False),
+        )
+        .all()
+    )
     for policy in custom_policies:
         db.delete(policy)
     _record_admin_action(
@@ -178,5 +215,9 @@ async def reset_tool_policies(
     )
     db.commit()
     ensure_default_tool_policies(db)
-    policies = db.query(ToolPolicy).order_by(ToolPolicy.id.asc()).all()
+    policies = (
+        scoped_query(db, ToolPolicy, principal)
+        .order_by(ToolPolicy.id.asc())
+        .all()
+    )
     return {"items": [_serialize_tool_policy(policy) for policy in policies]}

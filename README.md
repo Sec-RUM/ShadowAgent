@@ -19,8 +19,8 @@ client = OpenAI(base_url="http://127.0.0.1:8000/api/v1", api_key="sak_xxx.yyy")
 
 | 威胁 | 防御机制 |
 | --- | --- |
-| 直接/间接提示词注入 | 指令-数据解耦 + 多引擎检测（黑名单/语义意图/行为风险），支持**多轮会话全量审计**（不只看最后一条消息） |
-| 敏感数据外泄 | 凭据/密钥模式识别 + 输出脱敏（redaction） |
+| 直接/间接提示词注入 | 指令-数据解耦 + 多引擎检测（黑名单/正则签名 + **本地 ML 语义分类器**/行为风险），支持**多轮会话全量审计**（不只看最后一条消息） |
+| 敏感数据外泄 | 凭据/密钥模式识别 + 请求/响应**双向 DLP**（输出脱敏 redaction，四模式：off/monitor/redact/block） |
 | 危险工具调用 | 工具名+参数级策略引擎，高危操作（删除、外发）强制审批流 |
 | 越权访问 | RBAC（admin / security_admin / client / gateway）+ 托管 API Key（可吊销/可设期/角色绑定） |
 | 暴力破解 | 登录限速 + 账户锁定 + 登录枚举防护，JWT 可即时吊销 |
@@ -29,9 +29,11 @@ client = OpenAI(base_url="http://127.0.0.1:8000/api/v1", api_key="sak_xxx.yyy")
 
 - **安全运营控制台**：拦截日志、策略管理、审批工作流、密钥中心、攻击重放
 - **实时告警**：SSE 实时事件流 + 全屏 SOC 安全大屏 + Webhook 推送（Slack/飞书/钉钉，HMAC 签名 + 自动重试）
+- **多租户与 SSO**：组织级数据隔离（日志/策略/规则/密钥按 org 划界）、组织成员与角色管理、按组织配置 OIDC 单点登录（Authorization Code + PKCE，JIT 自动开户）
 - **可观测性**：Prometheus `/metrics`（请求计数/延迟直方图/清理指标），运行状态仪表盘
 - **合规就绪**：GDPR 日志保留期自动清理、管理操作全量审计、[等保 2.0 / GDPR 指引](./docs/compliance/)
-- **工程化**：50+ 测试用例、Alembic 迁移、Docker/compose 部署、CI 矩阵（Python 3.11–3.13）、压测基线（约 260 rps，p95 33ms）
+- **语义检测**：内置本地 ML 注入分类器（进程内推理、零网络依赖、零外部依赖），精确率优先阈值 + 覆盖率感知打分压低域外误报；[公开基准报告](./docs/benchmarks/injection-detection.md)（645 条标注语料，留出集评估）
+- **工程化**：140+ 测试用例、Alembic 迁移、Docker/compose 部署、CI 矩阵（Python 3.11–3.13）、压测基线（约 260 rps，p95 33ms）
 
 ## 架构
 
@@ -70,6 +72,7 @@ docker compose up -d --build
 | [快速开始](./docs/quickstart.md) | 5 分钟接入：Docker 启动 → 拿 Key → 三行代码 |
 | [后端手册](./backend/README.md) | 全部 API、环境变量、测试、迁移、部署 |
 | [SDK](./sdk/python/) | Python 客户端（同步/异步，拦截决策一等公民处理） |
+| [注入检测基准](./docs/benchmarks/injection-detection.md) | regex / ML / fused 三引擎指标、分语言召回、延迟与升级路线 |
 | [上线清单](./docs/launch-checklist.md) | 生产环境逐项核对（密钥/架构/合规/性能） |
 | [合规指引](./docs/compliance/) | GDPR 数据映射与等保 2.0 条款对照 |
 
@@ -81,8 +84,9 @@ docker compose up -d --build
 
 - [x] OpenAI SDK 兼容接入（Bearer 认证 + `/models`）
 - [x] 实时告警（SSE 大屏 + Webhook 推送）
-- [ ] 响应侧 DLP 扫描（模型输出中的敏感数据检测）
-- [ ] 自定义检测规则编辑器（正则/关键词/阈值）与规则包热更新
-- [ ] 语义级注入检测（embedding 相似度）
-- [ ] 多租户（组织/成员/密钥层级）与 SSO
-- [ ] 检测能力公开基准报告（注入语料库 + 检出率/误报率）
+- [x] 响应侧 DLP 扫描（模型输出中的敏感数据检测，四模式）
+- [x] 自定义检测规则编辑器（正则/关键词 + 动作组合、实时测试、导入导出）
+- [x] 语义级注入检测（本地 ML 分类器：哈希 n-gram + 逻辑回归 + 覆盖率感知打分）
+- [x] 检测能力公开基准报告（[injection-detection.md](./docs/benchmarks/injection-detection.md)）
+- [x] 多租户 + SSO（组织/成员/角色与数据隔离，每组织 OIDC 连接 + JIT 开户）
+- [ ] 语义检测升级：中文泛化与嵌入模型（见基准文档路线图）

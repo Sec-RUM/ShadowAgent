@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.semantic import semantic_ml_check
@@ -423,12 +424,19 @@ class ThreatMatch:
 
 
 def ensure_default_security_policies(db: Session) -> None:
-    """Seed built-in blacklist policies and keep system-managed metadata in sync."""
+    """Seed built-in blacklist policies and keep system-managed metadata in sync.
+
+    Defaults are platform-shared (``org_id IS NULL``) so every tenant sees
+    them; org-scoped rows with the same name are never touched here.
+    """
 
     default_by_name = {item["name"]: item for item in DEFAULT_SECURITY_POLICIES}
     existing_policies = (
         db.query(SecurityPolicy)
-        .filter(SecurityPolicy.name.in_(list(default_by_name)))
+        .filter(
+            SecurityPolicy.name.in_(list(default_by_name)),
+            SecurityPolicy.org_id.is_(None),
+        )
         .all()
     )
     existing_by_name = {policy.name: policy for policy in existing_policies}
@@ -458,12 +466,19 @@ def ensure_default_security_policies(db: Session) -> None:
 
 
 def ensure_default_tool_policies(db: Session) -> None:
-    """Seed built-in tool policies and keep system-managed metadata in sync."""
+    """Seed built-in tool policies and keep system-managed metadata in sync.
+
+    Only platform-shared (``org_id IS NULL``) rows are seeded/synced — an
+    organization's override for the same tool stays untouched.
+    """
 
     default_by_name = {item["tool_name"]: item for item in DEFAULT_TOOL_POLICIES}
     existing_policies = (
         db.query(ToolPolicy)
-        .filter(ToolPolicy.tool_name.in_(list(default_by_name)))
+        .filter(
+            ToolPolicy.tool_name.in_(list(default_by_name)),
+            ToolPolicy.org_id.is_(None),
+        )
         .all()
     )
     existing_by_name = {policy.tool_name: policy for policy in existing_policies}
@@ -500,19 +515,28 @@ def _compile_policy_pattern(pattern_text: str) -> re.Pattern[str] | None:
         return None
 
 
-def inspect_prompt(text: str, db: Session) -> AuditDecision:
-    """Inspect untrusted prompt text with DB-backed blacklist regex policies."""
+def inspect_prompt(
+    text: str,
+    db: Session,
+    org_id: int | None = None,
+) -> AuditDecision:
+    """Inspect untrusted prompt text with DB-backed blacklist regex policies.
+
+    When ``org_id`` is given only that organization's policies plus the
+    platform-shared (``org_id IS NULL``) policies apply; without it (platform
+    principals) every enabled policy is evaluated.
+    """
 
     if not text.strip():
         return AuditDecision(allowed=True, risk_score=0.0)
 
     ensure_default_security_policies(db)
-    policies = (
-        db.query(SecurityPolicy)
-        .filter(SecurityPolicy.enabled.is_(True))
-        .order_by(SecurityPolicy.id.asc())
-        .all()
-    )
+    query = db.query(SecurityPolicy).filter(SecurityPolicy.enabled.is_(True))
+    if org_id is not None:
+        query = query.filter(
+            or_(SecurityPolicy.org_id == org_id, SecurityPolicy.org_id.is_(None))
+        )
+    policies = query.order_by(SecurityPolicy.id.asc()).all()
 
     matched_rules: list[str] = []
     evidence: list[str] = []
@@ -633,8 +657,14 @@ def permission_control(
     tool_name: str | None,
     parameters: dict[str, Any] | None,
     db: Session | None = None,
+    org_id: int | None = None,
 ) -> AuditDecision:
-    """Validate whether a tool call is permitted by configured tool policy."""
+    """Validate whether a tool call is permitted by configured tool policy.
+
+    An org-scoped policy for the tool overrides the platform-shared default
+    for that organization's traffic (``org_id``); without an org context the
+    platform default (``org_id IS NULL``) applies.
+    """
 
     if not tool_name:
         return AuditDecision(allowed=True)
@@ -644,11 +674,23 @@ def permission_control(
 
     if db is not None:
         ensure_default_tool_policies(db)
-        policy = (
-            db.query(ToolPolicy)
-            .filter(ToolPolicy.tool_name == normalized_tool_name)
-            .one_or_none()
-        )
+        query = db.query(ToolPolicy).filter(ToolPolicy.tool_name == normalized_tool_name)
+        if org_id is not None:
+            # Organization-specific override wins over the shared default.
+            policy = (
+                query.filter(ToolPolicy.org_id == org_id)
+                .order_by(ToolPolicy.id.asc())
+                .first()
+            )
+            if policy is None:
+                policy = query.filter(ToolPolicy.org_id.is_(None)).one_or_none()
+        else:
+            # Platform traffic uses the shared default; upgraded single-tenant
+            # deployments whose policies were backfilled into an org fall back
+            # to that org's row so behavior is unchanged after the upgrade.
+            policy = query.filter(ToolPolicy.org_id.is_(None)).one_or_none()
+            if policy is None:
+                policy = query.order_by(ToolPolicy.id.asc()).first()
 
     if policy is None:
         fallback = next(

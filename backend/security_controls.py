@@ -55,9 +55,20 @@ MANAGED_API_KEY_PREFIX = "sak"
 
 @dataclass(frozen=True, slots=True)
 class Principal:
+    """Authenticated caller.
+
+    ``org_id`` / ``org_role`` carry the active tenant context: console JWTs
+    always include the organization the user switched into, managed API keys
+    resolve to the organization that owns them. ``org_id is None`` marks a
+    *platform* principal (static env keys, platform-managed keys) which keeps
+    pre-tenancy, see-everything behavior.
+    """
+
     subject: str
     role: str
     auth_method: str
+    org_id: int | None = None
+    org_role: str | None = None
 
 
 class InMemoryRateLimiter:
@@ -558,7 +569,27 @@ def _verify_jwt(token: str) -> Principal | None:
 
     role = str(payload.get("role", "client"))
     subject = str(payload.get("sub", "jwt-subject"))
-    return Principal(subject=subject, role=role, auth_method="jwt")
+
+    org_id: int | None = None
+    raw_org_id = payload.get("org_id")
+    if isinstance(raw_org_id, int):
+        org_id = raw_org_id
+    elif isinstance(raw_org_id, str) and raw_org_id.isdigit():
+        try:
+            org_id = int(raw_org_id)
+        except ValueError:
+            org_id = None
+
+    org_role = payload.get("org_role")
+    org_role = str(org_role) if org_role else None
+
+    return Principal(
+        subject=subject,
+        role=role,
+        auth_method="jwt",
+        org_id=org_id,
+        org_role=org_role,
+    )
 
 
 def _verify_api_key(request: Request, bearer_credentials: str = "") -> Principal | None:
@@ -617,6 +648,7 @@ def _verify_managed_api_key(request: Request, presented: str) -> Principal | Non
             subject=f"managed-api-key:{api_key.id}",
             role=api_key.role,
             auth_method="managed_api_key",
+            org_id=api_key.org_id,
         )
     finally:
         db.close()
@@ -639,7 +671,12 @@ def _managed_api_keys_configured() -> bool:
 
 
 def _verify_console_user_active(principal: Principal) -> Principal:
-    """Re-check console user state so disabled users lose access immediately."""
+    """Re-check console user state so disabled users lose access immediately.
+
+    Also re-validates the claimed organization: if the user was removed from
+    the organization (or the organization was deleted) the token's org claims
+    go stale, and every org-scoped request must be rejected.
+    """
 
     prefix = "console-user:"
     if not principal.subject.startswith(prefix):
@@ -653,6 +690,29 @@ def _verify_console_user_active(principal: Principal) -> Principal:
     db = SessionLocal()
     try:
         user = db.query(ConsoleUser).filter(ConsoleUser.id == user_id).one_or_none()
+        if user is not None and principal.org_id is not None:
+            from models import OrganizationMembership
+
+            membership = (
+                db.query(OrganizationMembership)
+                .filter(
+                    OrganizationMembership.user_id == user_id,
+                    OrganizationMembership.org_id == principal.org_id,
+                )
+                .one_or_none()
+            )
+            if membership is None:
+                raise _unauthorized(
+                    "Your account no longer has access to this organization."
+                )
+            if principal.org_role is not None and membership.role != principal.org_role:
+                principal = Principal(
+                    subject=principal.subject,
+                    role=principal.role,
+                    auth_method=principal.auth_method,
+                    org_id=principal.org_id,
+                    org_role=membership.role,
+                )
     finally:
         db.close()
 

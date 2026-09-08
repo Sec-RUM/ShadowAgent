@@ -219,11 +219,58 @@ class AuthUserResponse(BaseModel):
     created_at: str
 
 
+class AuthOrgResponse(BaseModel):
+    """Active organization context embedded in a console session."""
+
+    id: int
+    slug: str
+    name: str
+    role: str
+    is_default: bool = False
+
+
 class AuthSessionResponse(BaseModel):
     access_token: str
     token_type: str
     expires_at: int
     user: AuthUserResponse
+    org: AuthOrgResponse | None = None
+
+
+class SwitchOrgRequest(BaseModel):
+    org_id: int
+
+
+class OrgCreateRequest(BaseModel):
+    slug: str = Field(min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]{1,62}[a-zA-Z0-9]$")
+    name: str = Field(min_length=1, max_length=128)
+
+
+class OrgUpdateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+
+
+class OrgMemberAddRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    role: Literal["owner", "admin", "member"] = "member"
+
+
+class OrgMemberUpdateRequest(BaseModel):
+    role: Literal["owner", "admin", "member"]
+
+
+class SsoUpsertRequest(BaseModel):
+    """Per-organization OIDC connection (Authorization Code + PKCE)."""
+
+    provider_name: str = Field(min_length=1, max_length=128)
+    client_id: str = Field(min_length=1, max_length=255)
+    # Empty string keeps the stored secret (update flows never echo it back).
+    client_secret: str = Field(default="", max_length=512)
+    issuer_url: str = Field(min_length=1, max_length=512)
+    scopes: str = Field(default="openid email profile", max_length=255)
+    jit_enabled: bool = True
+    default_role: str = Field(default="client", min_length=1, max_length=32)
+    enabled: bool = True
 
 
 class ConsoleBootstrapStatusResponse(BaseModel):

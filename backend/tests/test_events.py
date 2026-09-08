@@ -16,6 +16,7 @@ from app.events import (
     unsubscribe,
 )
 from app.routers.monitoring import _sse_event_stream
+from security_controls import Principal
 
 
 def _parse_frame(frame: str) -> dict:
@@ -85,7 +86,9 @@ def test_sse_stream_generator_replays_history_and_emits_frames() -> None:
         # Seed history, then attach: the first frames must replay it.
         publish_event({"type": "intercept", "request_id": "replay-target", "risk_score": 0.8})
 
-        generator = _sse_event_stream()
+        generator = _sse_event_stream(
+            Principal(subject="platform-admin", role="admin", auth_method="static_key")
+        )
         try:
             # Consume replayed history until the target shows up.
             target_frame: str | None = None
@@ -148,3 +151,41 @@ def test_blocked_gateway_request_publishes_sse_event(
     assert latest["action_taken"] == "Blocked"
     assert latest["risk_score"] > 0
     assert latest["request_id"]
+
+
+def test_sse_stream_filters_events_by_organization() -> None:
+    """Org principals only receive their own org's events (plus platform ones)."""
+
+    async def scenario() -> None:
+        bind_main_loop(asyncio.get_running_loop())
+
+        org_principal = Principal(
+            subject="console-user:1",
+            role="admin",
+            auth_method="console_jwt",
+            org_id=42,
+            org_role="admin",
+        )
+        generator = _sse_event_stream(org_principal)
+        try:
+            # Events from another tenant, own org, and platform scope.
+            publish_event({"type": "intercept", "request_id": "foreign-1", "org_id": 7})
+            publish_event({"type": "intercept", "request_id": "own-1", "org_id": 42})
+            publish_event({"type": "intercept", "request_id": "platform-1", "org_id": None})
+
+            received: list[dict] = []
+            for _ in range(120):
+                frame = await asyncio.wait_for(generator.__anext__(), timeout=2)
+                received.append(_parse_frame(frame))
+                seen = {event["request_id"] for event in received}
+                if "own-1" in seen and "platform-1" in seen:
+                    break
+            ids = [event["request_id"] for event in received]
+            assert "own-1" in ids
+            assert "platform-1" in ids
+            assert "foreign-1" not in ids
+        finally:
+            await generator.aclose()
+        assert subscriber_count() == 0
+
+    asyncio.run(scenario())

@@ -4,16 +4,106 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
+
+
+class Organization(Base):
+    """Tenant entity: scopes policies, rules, keys, and runtime artifacts.
+
+    The seeded ``default`` organization (``is_default=True``) preserves
+    single-tenant behavior — every pre-existing row is backfilled into it on
+    first boot after the upgrade.
+    """
+
+    __tablename__ = "organizations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    slug: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+
+class OrganizationMembership(Base):
+    """User ↔ organization link with an org-level role.
+
+    role: ``owner`` (full control, includes deleting the org), ``admin``
+    (manage members/rules/keys/SSO), ``member`` (console access, no admin).
+    """
+
+    __tablename__ = "organization_memberships"
+    __table_args__ = (
+        UniqueConstraint("user_id", "org_id", name="uq_org_membership_user_org"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("console_users.id"), nullable=False, index=True
+    )
+    org_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(32), default="member", nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+
+class SsoConnection(Base):
+    """Per-organization OIDC identity provider (Authorization Code + PKCE).
+
+    ``client_secret`` is write-only through the API (never returned). It is
+    stored as-is at rest in v1 — deployments should protect the database
+    volume (documented in the launch checklist).
+    """
+
+    __tablename__ = "sso_connections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    org_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("organizations.id"), nullable=False, unique=True, index=True
+    )
+    provider_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    client_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    client_secret: Mapped[str] = mapped_column(String(512), nullable=False)
+    issuer_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    scopes: Mapped[str] = mapped_column(String(255), default="openid email profile", nullable=False)
+    jit_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    default_role: Mapped[str] = mapped_column(String(32), default="client", nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
 
 
 class InterceptLog(Base):
     __tablename__ = "intercept_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    org_id: Mapped[int] = mapped_column(Integer, nullable=True, index=True)
     request_id: Mapped[str] = mapped_column(
         String(96),
         default="",
@@ -36,6 +126,7 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    org_id: Mapped[int] = mapped_column(Integer, nullable=True, index=True)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
@@ -53,6 +144,7 @@ class SecurityPolicy(Base):
     __tablename__ = "security_policies"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    org_id: Mapped[int] = mapped_column(Integer, nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
     blacklist_keyword: Mapped[str] = mapped_column(String(512), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
@@ -73,13 +165,23 @@ class SecurityPolicy(Base):
 
 
 class ToolPolicy(Base):
+    """Tool access policy.
+
+    ``org_id IS NULL`` rows are platform defaults shared by every tenant; an
+    org-scoped row with the same ``tool_name`` overrides the default for that
+    organization's traffic only.
+    """
+
     __tablename__ = "tool_policies"
+    __table_args__ = (
+        UniqueConstraint("org_id", "tool_name", name="uq_tool_policy_org_tool"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    org_id: Mapped[int] = mapped_column(Integer, nullable=True, index=True)
     tool_name: Mapped[str] = mapped_column(
         String(128),
         nullable=False,
-        unique=True,
         index=True,
     )
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
@@ -117,6 +219,7 @@ class ApprovalRequest(Base):
     __tablename__ = "approval_requests"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    org_id: Mapped[int] = mapped_column(Integer, nullable=True, index=True)
     request_id: Mapped[str] = mapped_column(String(96), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
     threat_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -147,6 +250,7 @@ class AlertEvent(Base):
     __tablename__ = "alert_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    org_id: Mapped[int] = mapped_column(Integer, nullable=True, index=True)
     request_id: Mapped[str] = mapped_column(String(96), nullable=False, index=True)
     severity: Mapped[str] = mapped_column(String(32), default="medium", nullable=False, index=True)
     channel: Mapped[str] = mapped_column(String(32), default="console", nullable=False)
@@ -166,6 +270,7 @@ class ReplayRun(Base):
     __tablename__ = "replay_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    org_id: Mapped[int] = mapped_column(Integer, nullable=True, index=True)
     source_request_id: Mapped[str] = mapped_column(String(96), nullable=False, index=True)
     replay_request_id: Mapped[str] = mapped_column(String(96), nullable=False, unique=True, index=True)
     triggered_by: Mapped[str] = mapped_column(String(128), default="", nullable=False)
@@ -188,12 +293,20 @@ class CustomRule(Base):
     target: "prompt" (request side), "response" (model output / DLP), or "any".
     action: "block" (403 / terminate stream), "redact" (response side only,
     replaces the match with a placeholder), or "alert" (log only).
+
+    Names are unique per organization (``uq_custom_rule_org_name``); NULL-org
+    rows are platform-shared, whose name uniqueness is enforced at the
+    application layer because SQL NULL semantics exempt them from the index.
     """
 
     __tablename__ = "custom_rules"
+    __table_args__ = (
+        UniqueConstraint("org_id", "name", name="uq_custom_rule_org_name"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    org_id: Mapped[int] = mapped_column(Integer, nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     rule_type: Mapped[str] = mapped_column(String(16), default="regex", nullable=False, index=True)
     pattern: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -241,6 +354,7 @@ class ManagedApiKey(Base):
     __tablename__ = "managed_api_keys"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    org_id: Mapped[int] = mapped_column(Integer, nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     role: Mapped[str] = mapped_column(String(32), default="client", nullable=False, index=True)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
