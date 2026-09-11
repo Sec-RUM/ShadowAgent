@@ -21,31 +21,139 @@ CONTEXT_TAG_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-INJECTION_SIGNATURES = [
+# Layer-1 injection signatures, tiered by how much a match proves on its own.
+#
+# A *strong* signature states an override directive outright ("ignore previous
+# instructions"): one match is enough to block.  A *weak* signature is a bare
+# nominal — ``system prompt``, ``developer mode``, ``jailbreak`` — that appears
+# constantly in ordinary technical prose ("version the system prompt", "the
+# developer mode toggle").  A bare mention is not intent, so a weak match only
+# blocks when the same text also carries a directive verb ("append the system
+# prompt"); otherwise it falls through to the ML layer.  Before this tiering,
+# every mention of a bare nominal blocked the request, which is where the fused
+# engine's false positives all came from.
+INJECTION_STRONG_SIGNATURES = [
     "ignore previous instructions",
     "ignore all previous instructions",
     "disregard previous instructions",
-    "system prompt",
-    "bypass",
-    "you are now",
-    "developer mode",
-    "jailbreak",
     "reveal hidden instructions",
 ]
 
-INJECTION_PATTERNS = [
-    re.compile(re.escape(signature), re.IGNORECASE)
-    for signature in INJECTION_SIGNATURES
-] + [
-    re.compile(
-        r"\bignore (all )?(previous|prior|above) instructions\b",
-        re.IGNORECASE,
+# ``bypass`` is deliberately *not* here even though it reads like a nominal.
+# It is listed in ``INJECTION_DIRECTIVE_PATTERN`` below as a verb, so keeping it
+# in both places made a bare mention corroborate itself: any text containing the
+# word hard-blocked, including "He had coronary bypass surgery last year."
+# Because a weak signature's job here is to name an *artifact* that ordinary
+# prose mentions ("the system prompt"), and ``bypass`` is an action rather than
+# an artifact, the verb table is where it belongs. It still corroborates the
+# remaining nominals ("bypass the system prompt" blocks via ``system prompt``).
+INJECTION_WEAK_SIGNATURES = [
+    "system prompt",
+    "you are now",
+    "developer mode",
+    "jailbreak",
+]
+
+INJECTION_SIGNATURES = INJECTION_STRONG_SIGNATURES + INJECTION_WEAK_SIGNATURES
+
+# Expression-level variants of the strong directives (word order / synonyms).
+INJECTION_STRONG_REGEXES = [
+    r"\bignore (all )?(previous|prior|above) instructions\b",
+    r"\bdisregard (all )?(previous|prior|above) instructions\b",
+]
+
+# (pattern, is_strong, label) in scan order, so evidence lists decisive matches
+# first. ``label`` is the human-readable form used in audit evidence; the raw
+# pattern stays in ``matched_rules`` for backwards compatibility.
+_INJECTION_PATTERN_TIERS: list[tuple[re.Pattern[str], bool, str]] = [
+    *(
+        (re.compile(re.escape(signature), re.IGNORECASE), True, signature)
+        for signature in INJECTION_STRONG_SIGNATURES
     ),
-    re.compile(
-        r"\bdisregard (all )?(previous|prior|above) instructions\b",
-        re.IGNORECASE,
+    *(
+        (re.compile(re.escape(signature), re.IGNORECASE), False, signature)
+        for signature in INJECTION_WEAK_SIGNATURES
+    ),
+    *(
+        (re.compile(expression, re.IGNORECASE), True, expression)
+        for expression in INJECTION_STRONG_REGEXES
     ),
 ]
+
+INJECTION_PATTERNS = [pattern for pattern, _, _ in _INJECTION_PATTERN_TIERS]
+
+# Directive verbs that turn a mentioned artifact into an actual request.
+# Base (imperative) forms only: the trailing word boundary means descriptive
+# third-person forms — "the developer mode toggle only enables logging" — never
+# corroborate a weak signature.
+INJECTION_DIRECTIVE_PATTERN = re.compile(
+    r"\b(?:"
+    r"append|attach|reveal|show|print|output|display|list|dump|expose|"
+    r"leak|disclose|give|tell|send|share|repeat|translate|echo|copy|paste|"
+    r"quote|post|upload|forward|relay|"
+    r"ignore|disregard|forget|override|overrule|bypass|unlock|"
+    r"enable|activate|switch|enter|pretend|act|obey|comply|adopt|become"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Intra-word separator folding.
+#
+# An attacker can split a signature word with separators to slip past the
+# patterns: `instruc.tions`, `f-o-r-g-e-t`, `i.g.n.o.r.e a.l.l ...`.  Layer 1
+# therefore scans a second, *folded* view of the text in which separators inside
+# a token are collapsed (`instruc.tions` -> `instructions`).
+#
+# Two properties make this safe to add:
+#
+# * **Additive.** The original view is always scanned as well, so folding can
+#   only ever *add* a match, never remove one — no existing detection can be
+#   lost.  (The whole-corpus regression test pins this.)
+# * **Conservative.** A run is folded only when it has >= 2 separators
+#   (letter-by-letter obfuscation such as `a.l.l`, which the length rule alone
+#   misses because `all` is short) or when the collapsed form is >= 4 characters
+#   (`instruc.tions`, `sys.tem`).  That deliberately leaves the ordinary
+#   abbreviation class alone: `e.g.` -> `eg`, `i.e.` -> `ie`, `U.S.` -> `US`,
+#   `Ph.D.` -> `PhD`, `p.m.` -> `pm` are all under the length bar, and a trailing
+#   period (`Dr.`, `etc.`, `No.`) is not followed by an alphanumeric so it is
+#   never part of a run at all.
+#
+# Folding can also *manufacture* a weak nominal that the author did not write —
+# `by-pass` becomes `bypass` — so a weak label matched **only** in the folded
+# view must be corroborated by a directive verb that is not the label itself.
+# Without that, `by-pass` would corroborate its own weak signature and a benign
+# "by-pass valve" would hard-block.
+INJECTION_FOLD_SEPARATORS = "._-*"
+_INJECTION_FOLD_SEPARATOR_PATTERN = re.compile(
+    f"[{re.escape(INJECTION_FOLD_SEPARATORS)}]"
+)
+_INJECTION_FOLD_RUN_PATTERN = re.compile(
+    rf"[A-Za-z0-9]+(?:[{re.escape(INJECTION_FOLD_SEPARATORS)}][A-Za-z0-9]+)+"
+)
+INJECTION_FOLD_MIN_COLLAPSED_CHARS = 4
+INJECTION_FOLD_MIN_SEPARATORS = 2
+
+
+def fold_intra_word_separators(text: str) -> str:
+    """Collapse separators inside a token to defeat split-word obfuscation.
+
+    Returns a *view* of the text intended to be matched in addition to the
+    original, never instead of it.  See the block comment above for the rule and
+    for why the abbreviation class survives.
+    """
+
+    def _collapse(match: re.Match[str]) -> str:
+        span = match.group(0)
+        collapsed = _INJECTION_FOLD_SEPARATOR_PATTERN.sub("", span)
+        separators = len(span) - len(collapsed)
+        if (
+            separators >= INJECTION_FOLD_MIN_SEPARATORS
+            or len(collapsed) >= INJECTION_FOLD_MIN_COLLAPSED_CHARS
+        ):
+            return collapsed
+        return span
+
+    return _INJECTION_FOLD_RUN_PATTERN.sub(_collapse, text)
 
 COMMAND_PARAMETER_KEYS = {
     "command",
@@ -590,27 +698,93 @@ def separate_instruction_and_data(prompt: str, external_context: str | None) -> 
     }
 
 
-def semantic_intent_check(text: str) -> AuditDecision:
-    """Detect prompt-injection intent: regex signatures + local ML classifier.
+def _scan_injection_tiers(view: str) -> tuple[bool, list[str], list[str], list[str]]:
+    """Match every signature tier against one view of the text.
 
-    Layer 1 matches deterministic injection signatures (high precision,
-    English-centric). Layer 2 scores the text with the shipped local model
-    and applies the configured semantic mode (off / monitor / enforce) —
-    see ``app.semantic`` for the decision policy and artifact details.
+    Returns ``(strong_found, weak_labels, matched_rules, evidence)``.
+    """
+
+    strong_found = False
+    weak_labels: list[str] = []
+    matched_rules: list[str] = []
+    evidence: list[str] = []
+    for pattern, is_strong, label in _INJECTION_PATTERN_TIERS:
+        match = pattern.search(view)
+        if not match:
+            continue
+        matched_rules.append(pattern.pattern)
+        evidence.append(match.group(0)[:200])
+        if is_strong:
+            strong_found = True
+        else:
+            weak_labels.append(label)
+    return strong_found, weak_labels, matched_rules, evidence
+
+
+def regex_injection_check(text: str) -> AuditDecision:
+    """Layer 1 alone: deterministic injection signatures, no ML involved.
+
+    Strong signatures block on their own.  A weak signature (a bare nominal
+    such as ``system prompt``) only blocks when a directive verb appears in the
+    same text.  An uncorroborated weak match is *allowed* here but recorded in
+    ``evidence``, so the audit trail keeps visibility into near-misses and the
+    ML layer can still act on them.
+
+    Signatures are matched against the text **and** against a folded view whose
+    intra-word separators are collapsed (see
+    :func:`fold_intra_word_separators`), so `instruc.tions` cannot hide a
+    payload.  The original view is always scanned too, which makes folding
+    strictly additive: it can add a block but never remove one.
     """
 
     if not text:
         return AuditDecision(allowed=True)
 
+    folded = fold_intra_word_separators(text)
+    views = [text] if folded == text else [text, folded]
+
+    strong_found = False
+    weak_labels: list[str] = []
     matched_rules: list[str] = []
     evidence: list[str] = []
-    for pattern in INJECTION_PATTERNS:
-        match = pattern.search(text)
-        if match:
-            matched_rules.append(pattern.pattern)
-            evidence.append(match.group(0)[:200])
+    original_labels: set[str] = set()
 
-    if matched_rules:
+    for index, view in enumerate(views):
+        view_strong, view_weak, view_rules, view_evidence = _scan_injection_tiers(view)
+        strong_found = strong_found or view_strong
+        for rule in view_rules:
+            if rule not in matched_rules:
+                matched_rules.append(rule)
+        for line in view_evidence:
+            if line not in evidence:
+                evidence.append(line)
+        if index == 0:
+            original_labels = set(view_weak)
+        for label in view_weak:
+            if label not in weak_labels:
+                weak_labels.append(label)
+
+    # Legacy path, unchanged: a weak nominal written in the text is corroborated
+    # by any directive verb in the text.
+    corroborated = bool(original_labels) and (
+        INJECTION_DIRECTIVE_PATTERN.search(text) is not None
+    )
+
+    # A weak nominal that exists *only* because folding manufactured it must be
+    # corroborated by a directive verb other than itself (`by-pass` -> `bypass`).
+    if not corroborated:
+        folded_only = [label for label in weak_labels if label not in original_labels]
+        if folded_only:
+            verbs = {
+                match.group(0).lower()
+                for view in views
+                for match in INJECTION_DIRECTIVE_PATTERN.finditer(view)
+            }
+            corroborated = any(
+                verb != label.lower() for label in folded_only for verb in verbs
+            )
+
+    if strong_found or corroborated:
         return AuditDecision(
             allowed=False,
             reason="prompt_injection_detected",
@@ -622,10 +796,38 @@ def semantic_intent_check(text: str) -> AuditDecision:
             recommended_action="block",
         )
 
+    if weak_labels:
+        evidence.append(
+            "weak injection signature without a directive verb: "
+            + ", ".join(weak_labels[:3])
+        )
+    return AuditDecision(allowed=True, risk_score=0.05, evidence=evidence[:6])
+
+
+def semantic_intent_check(text: str) -> AuditDecision:
+    """Detect prompt-injection intent: regex signatures + local ML classifier.
+
+    Layer 1 matches deterministic injection signatures (high precision,
+    English-centric) with weak-tier corroboration — see
+    :func:`regex_injection_check`.  Layer 2 scores the text with the shipped
+    local model and applies the configured semantic mode (off / monitor /
+    enforce) — see ``app.semantic`` for the decision policy and artifact
+    details.
+    """
+
+    if not text:
+        return AuditDecision(allowed=True)
+
+    layer1 = regex_injection_check(text)
+    if not layer1.allowed:
+        return layer1
+
     ml = semantic_ml_check(text)
     if ml is not None and ml["suspected"]:
+        evidence = list(layer1.evidence)
         evidence.append(
             f"semantic_ml score={ml['score']} threshold={ml['threshold']} "
+            f"band_floor={ml['suspect_floor']} "
             f"mode={ml['mode']} model_version={ml['model_version']}"
         )
         if ml["block"]:
@@ -650,7 +852,7 @@ def semantic_intent_check(text: str) -> AuditDecision:
             recommended_action="review",
         )
 
-    return AuditDecision(allowed=True, risk_score=0.05)
+    return layer1
 
 
 def permission_control(

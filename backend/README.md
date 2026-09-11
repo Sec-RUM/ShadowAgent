@@ -25,10 +25,11 @@ backend/
       rules.py       #   /api/v1/rules* (custom rules + dlp-status)
       gateway.py     #   /api/v1/analyze, /api/v1/chat/completions
     semantic.py      # request-side ML injection classifier (runtime)
-    semantic_corpus.py # labeled training corpus (645 samples)
+    semantic_corpus.py # labeled bilingual training corpus (979 samples)
     semantic_model.json # trained model artifact (loaded in-process)
     dlp.py           # response-side DLP engine + streaming scanner
-  tools/             # train_semantic_model.py, bench_semantic.py
+  tools/             # train_semantic_model.py, bench_semantic.py,
+                     # ablate_ngram_scope.py
   alembic/           # migration environment + versions
   security_engine.py # policy/permission/risk engines
   security_controls.py # auth, rate limiting, redaction
@@ -112,11 +113,47 @@ callers can distinguish intercepts from upstream failures.
 Prompt-injection detection runs as a two-layer fusion inside
 `security_engine.semantic_intent_check`:
 
-1. **regex signatures** — deterministic `INJECTION_PATTERNS` (high precision)
+1. **regex signatures** — deterministic `INJECTION_PATTERNS`, tiered by how much
+   a match proves. *Strong* signatures (`ignore/disregard previous instructions`,
+   `reveal hidden instructions`) block on their own. *Weak* ones are bare
+   nominals — `system prompt`, `developer mode`, `jailbreak`, `you are now` —
+   that occur constantly in ordinary technical prose, so they
+   only block when the same text also carries a directive verb ("append the
+   system prompt"). That removes the false positives caused by benign research
+   text merely *quoting* an attack phrase, without losing a single detection:
+   the tiered rule's blocks are a strict subset of the old ones.
+
+   Signatures are matched against the text **and** against a folded view whose
+   intra-word separators are collapsed (`instruc.tions` -> `instructions`,
+   `i.g.n.o.r.e` -> `ignore`), so splitting a keyword cannot hide a payload. The
+   fold is *additive* — the original text is always scanned too, so it can only
+   add a block, never drop one — and *bounded*: a run folds only at >= 2
+   separators or >= 4 collapsed characters, which leaves `e.g.` / `U.S.` /
+   `Ph.D.` / `p.m.` / `Dr.` untouched. A weak nominal that folding manufactured
+   (`by-pass` -> `bypass`) may not corroborate itself.
+   
+   A weak nominal may never *also* be a directive verb. When `bypass` sat in
+   both tables, a bare mention corroborated itself and layer 1 hard-blocked
+   "He had coronary bypass surgery last year."; it now lives only in the verb
+   table (where it still corroborates the remaining nominals). The invariant is
+   pinned by a test, since it is exactly what allowed the bug to hide.
+   
+   Known open layer-1 false positives are registered in
+   `app/semantic_corpus.KNOWN_FALSE_POSITIVES` and tracked by the benchmark
+   instead of going unmeasured. The register is currently empty.
 2. **local ML classifier** — `app/semantic.py` scores the text with a shipped
-   logistic-regression model over hashed word/char n-gram features
-   (`app/semantic_model.json`). In-process, zero network access, zero
-   dependencies beyond the stdlib; ~60µs per text at P95.
+   logistic-regression model over hashed n-gram features
+   (`app/semantic_model.json`). Latin-script text uses word 1/2-grams plus
+   within-word character n-grams, the latter only for *non-word* tokens (those
+   containing digits or non-ASCII characters) — applying them to plain words
+   merely memorises generic English substrings and drags benign text toward the
+   threshold. CJK/Kana/Hangul runs use character 1/2/3-grams, because those
+   scripts have no word delimiters to tokenize on.
+   Input is NFKC-normalized first, so full-width / mathematical-alphanumeric /
+   circled obfuscation (`Ｉｇｎｏｒｅ`, `𝐈𝐠𝐧𝐨𝐫𝐞`, `Ⓘⓖⓝⓞⓡⓔ`) cannot hide a payload
+   from the tokenizer.
+   In-process, zero network access, zero dependencies beyond the stdlib;
+   ~0.1 ms per text at P95.
 
 Runtime configuration (read lazily, same pattern as the DLP engine):
 
@@ -130,20 +167,44 @@ Runtime configuration (read lazily, same pattern as the DLP engine):
 Operational endpoints (admin credentials required):
 
 - `GET /api/v1/semantic-status` — mode, threshold, `model_loaded`,
-  `model_version`, `trained_at`, train metrics.
+  `model_version`, `trained_at`, train metrics, and the embedded
+  `model_config` (feature scheme, coverage trust floor).
 - `GET /api/v1/rules/dlp-status` — response-side DLP mode/pattern counts.
 
-Known limitation: recall on paraphrased **Chinese** injections is low
-(held-out ~5%); see the benchmark for mitigation and the upgrade roadmap.
+Held-out performance (model v4, 205-sample split): ML-layer precision 100%,
+recall 91.9% Chinese / 61.4% English. The production fused engine reaches 95.9%
+precision / 74.5% recall after signature tiering, with Chinese precision 100%
+and English precision 92.3%. Unicode compatibility obfuscation — which
+previously produced an empty feature vector and scored 0.000, i.e. a one-key
+bypass — is now detected, as is keyword splitting (`instruc.tions`), which the
+signature layer catches in the folded view without losing a single detection.
+
+Two things are worth reading carefully. First, **the blocking threshold is not a
+constant**: the trainer calibrates it above the worst score of an *external*
+benign probe set (`BENIGN_CALIBRATION_PROBES`, 46 legitimate requests kept out
+of the corpus), so "no false positive on the probes" is a derived property of a
+measurement rather than a hand-picked floor. Held-out precision is deliberately
+not the headline — with only ~200 samples it flatters the model: v3 reported
+"ML precision 100%" on the held-out split while the external probes showed
+benign text scoring 0.96. Second, a **suspect band** one margin below the
+threshold (`[0.6051, 0.7551)`) is allowed through but flagged as
+`semantic_injection_suspected`, landing in the audit trail and the live console
+as a `Monitored` event — on the held-out split that surfaces 11 of the 25
+misses. The four remaining false positives are research text that quotes a
+canonical attack phrase; see the benchmark for the residual analysis and the
+roadmap.
 
 ### Retraining & benchmarking
 
 ```powershell
 # 1. extend the labeled corpus (keep tags balanced across the stratified split)
 #    backend/app/semantic_corpus.py
-# 2. retrain — writes backend/app/semantic_model.json
+# 2. retrain — writes backend/app/semantic_model.json (calibrates the threshold)
 python tools\train_semantic_model.py
-# 3. regenerate the published benchmark (docs/benchmarks/injection-detection.md)
+# 3. feature changes only: ablate the n-gram scope (asserts probes/corpus are
+#    disjoint, reports max recall at zero false positives for each policy)
+python tools\ablate_ngram_scope.py
+# 4. regenerate the published benchmark (docs/benchmarks/injection-detection.md)
 python tools\bench_semantic.py
 ```
 
