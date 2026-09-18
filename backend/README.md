@@ -131,6 +131,15 @@ Prompt-injection detection runs as a two-layer fusion inside
    separators or >= 4 collapsed characters, which leaves `e.g.` / `U.S.` /
    `Ph.D.` / `p.m.` / `Dr.` untouched. A weak nominal that folding manufactured
    (`by-pass` -> `bypass`) may not corroborate itself.
+
+   A third view carries compatibility-character normalization: signatures are
+   matched against the NFKC form of the text too, so full-width (`Ｉｇｎｏｒｅ`),
+   mathematical-alphanumeric (`𝐈𝐠𝐧𝐨𝐫𝐞`) and circled (`Ⓘⓖⓝⓞⓡⓔ`) obfuscation
+   cannot slip a payload past the signatures either. It follows the same
+   contract — additive and bounded (NFKC is idempotent) — and is applied **only
+   to the detection view**, never to the payload forwarded upstream, because
+   NFKC also folds legitimate compatibility characters (full-width CJK
+   punctuation, ligatures) onto their canonical forms.
    
    A weak nominal may never *also* be a directive verb. When `bypass` sat in
    both tables, a bare mention corroborated itself and layer 1 hard-blocked

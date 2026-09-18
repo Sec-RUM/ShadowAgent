@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
@@ -10,7 +11,7 @@ from typing import Any
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.semantic import semantic_ml_check
+from app.semantic import UNICODE_NORMALIZATION, semantic_ml_check
 from models import SecurityPolicy, ToolPolicy
 
 
@@ -154,6 +155,54 @@ def fold_intra_word_separators(text: str) -> str:
         return span
 
     return _INJECTION_FOLD_RUN_PATTERN.sub(_collapse, text)
+
+
+# Compatibility-character normalization — the second obfuscation axis.
+#
+# Folding handles separators *between* letters (`instruc.tions`); NFKC handles
+# letters that are not the ASCII letters they look like. Full-width
+# ("Ｉｇｎｏｒｅ"), mathematical-alphanumeric ("𝐈𝐠𝐧𝐨𝐫𝐞") and circled
+# ("Ⓘⓖⓝⓞⓡⓔ") scripts all fold onto ASCII under NFKC, so an obfuscated
+# `Ｉｇｎｏｒｅ all previous instructions` becomes matchable by layer 1.
+#
+# It is applied as an extra *view* for signature matching, never as a rewrite of
+# the text that gets forwarded upstream. NFKC also maps legitimate compatibility
+# characters — full-width CJK punctuation, typographic ligatures — onto their
+# canonical forms, so normalizing the payload itself would silently change what
+# the model receives. Scanning a view keeps the change additive instead.
+#
+# The ML layer already NFKC-normalizes inside ``extract_features``; layer 1 is
+# the one that was blind to these scripts.
+def normalize_compatibility(text: str) -> str:
+    """NFKC view of ``text`` (see the block comment above)."""
+
+    return unicodedata.normalize(UNICODE_NORMALIZATION, text)
+
+
+def layer_one_views(text: str) -> list[str]:
+    """Distinct text views layer 1 matches its signatures against.
+
+    The original is always first and always present, so every additional view
+    can only *add* a match — no existing detection can be lost (the whole-corpus
+    regression test pins this). Each base text (raw, then NFKC) is also scanned
+    folded, so a payload that is both compatibility-masked and separator-split
+    (`Ｉｇｎｏｒｅ` / `instruc.tions`) is still caught.
+    """
+
+    views: list[str] = []
+    bases = [text]
+    if not text.isascii():
+        # NFKC is the identity on ASCII, so skip it for the common case to keep
+        # the hot path cheap.
+        normalized = normalize_compatibility(text)
+        if normalized != text:
+            bases.append(normalized)
+    for base in bases:
+        for candidate in (base, fold_intra_word_separators(base)):
+            if candidate not in views:
+                views.append(candidate)
+    return views
+
 
 COMMAND_PARAMETER_KEYS = {
     "command",
@@ -730,18 +779,18 @@ def regex_injection_check(text: str) -> AuditDecision:
     ``evidence``, so the audit trail keeps visibility into near-misses and the
     ML layer can still act on them.
 
-    Signatures are matched against the text **and** against a folded view whose
-    intra-word separators are collapsed (see
-    :func:`fold_intra_word_separators`), so `instruc.tions` cannot hide a
-    payload.  The original view is always scanned too, which makes folding
-    strictly additive: it can add a block but never remove one.
+    Signatures are matched against several views of the text (see
+    :func:`layer_one_views`): the original, a folded view whose intra-word
+    separators are collapsed (see :func:`fold_intra_word_separators`), and the
+    NFKC-normalized forms of both, so neither `instruc.tions` nor `Ｉｇｎｏｒｅ`
+    can hide a payload.  The original view is always scanned, which makes the
+    extra views strictly additive: they can add a block but never remove one.
     """
 
     if not text:
         return AuditDecision(allowed=True)
 
-    folded = fold_intra_word_separators(text)
-    views = [text] if folded == text else [text, folded]
+    views = layer_one_views(text)
 
     strong_found = False
     weak_labels: list[str] = []
@@ -764,24 +813,28 @@ def regex_injection_check(text: str) -> AuditDecision:
             if label not in weak_labels:
                 weak_labels.append(label)
 
-    # Legacy path, unchanged: a weak nominal written in the text is corroborated
-    # by any directive verb in the text.
-    corroborated = bool(original_labels) and (
-        INJECTION_DIRECTIVE_PATTERN.search(text) is not None
-    )
+    # Directive verbs are collected across every view, so a verb written in a
+    # compatibility script ("Ｒｅｖｅａｌ") or split by separators ("re-veal")
+    # also corroborates a weak nominal.
+    verbs = {
+        match.group(0).lower()
+        for view in views
+        for match in INJECTION_DIRECTIVE_PATTERN.finditer(view)
+    }
 
-    # A weak nominal that exists *only* because folding manufactured it must be
-    # corroborated by a directive verb other than itself (`by-pass` -> `bypass`).
+    # Legacy path: a weak nominal written in the text is corroborated by any
+    # directive verb in any view.
+    corroborated = bool(original_labels) and bool(verbs)
+
+    # A weak nominal that exists *only* because a view manufactured it must be
+    # corroborated by a directive verb other than itself — folding `by-pass` ->
+    # `bypass`, or NFKC `ｓｙｓｔｅｍ` -> `system`. The self-corroboration guard
+    # survives verbatim: it is what keeps "A by-pass valve..." unblocked.
     if not corroborated:
-        folded_only = [label for label in weak_labels if label not in original_labels]
-        if folded_only:
-            verbs = {
-                match.group(0).lower()
-                for view in views
-                for match in INJECTION_DIRECTIVE_PATTERN.finditer(view)
-            }
+        manufactured = [label for label in weak_labels if label not in original_labels]
+        if manufactured:
             corroborated = any(
-                verb != label.lower() for label in folded_only for verb in verbs
+                verb != label.lower() for label in manufactured for verb in verbs
             )
 
     if strong_found or corroborated:
