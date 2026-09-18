@@ -344,7 +344,7 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
         {/* Header */}
         <header className="flex items-center justify-between gap-4 border-b border-teal-300/10 px-6 py-4">
           <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-md border border-teal-300/30 bg-teal-400/10 shadow-[0_0_28px_rgba(45,212,191,0.25)]">
+            <span className="flex h-11 w-11 items-center justify-center rounded-xl border border-teal-300/30 bg-teal-400/10 shadow-[0_0_28px_rgba(45,212,191,0.25)]">
               <ShieldCheck className="h-6 w-6 text-teal-200" aria-hidden />
             </span>
             <div>
@@ -364,10 +364,10 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
             <button
               type="button"
               onClick={onExit}
-              className="flex h-9 items-center gap-2 rounded-md border border-white/10 bg-white/[0.04] px-3 text-sm text-zinc-300 transition hover:border-rose-300/40 hover:bg-rose-400/10 hover:text-rose-100 focus:outline-none focus:ring-2 focus:ring-teal-300/60"
+              className="flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 text-sm text-zinc-300 transition-all duration-200 ease-out hover:border-rose-300/40 hover:bg-rose-400/10 hover:text-rose-100 focus:outline-none focus:ring-2 focus:ring-teal-300/60 active:scale-[0.98]"
             >
               <X className="h-4 w-4" aria-hidden />
-              退出大屏 <kbd className="hidden rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 sm:inline">ESC</kbd>
+              退出大屏 <kbd className="hidden rounded-lg bg-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 sm:inline">ESC</kbd>
             </button>
           </div>
         </header>
@@ -377,37 +377,37 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
           {/* Left column: KPIs + threat distribution */}
           <div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
             <section className="grid grid-cols-2 gap-3">
-              <div className="relative overflow-hidden rounded-lg border border-teal-300/15 bg-white/[0.03] p-4">
+              <div className="relative overflow-hidden rounded-2xl border border-teal-300/15 bg-white/[0.035] p-4.5 backdrop-blur-md">
                 <div className="text-xs text-zinc-500">实时拦截</div>
                 <motion.div key={`events-${events.length}`} initial={{ opacity: 0.4, y: 5 }} animate={{ opacity: 1, y: 0 }} className="mt-1 font-mono text-3xl font-bold tabular-nums text-rose-300">
                   {events.length}
                 </motion.div>
-                <ShieldAlert className="absolute right-3 top-3 h-4 w-4 text-rose-300/60" aria-hidden />
+                <ShieldAlert className="absolute right-3.5 top-3.5 h-4 w-4 text-rose-300/60" aria-hidden />
               </div>
-              <div className="relative overflow-hidden rounded-lg border border-teal-300/15 bg-white/[0.03] p-4">
+              <div className="relative overflow-hidden rounded-2xl border border-teal-300/15 bg-white/[0.035] p-4.5 backdrop-blur-md">
                 <div className="text-xs text-zinc-500">网关请求</div>
                 <div className="mt-1 font-mono text-3xl font-bold tabular-nums text-teal-200">
                   {metrics ? metrics.totalRequests.toLocaleString("zh-CN") : "—"}
                 </div>
-                <Activity className="absolute right-3 top-3 h-4 w-4 text-teal-200/60" aria-hidden />
+                <Activity className="absolute right-3.5 top-3.5 h-4 w-4 text-teal-200/60" aria-hidden />
               </div>
-              <div className="relative overflow-hidden rounded-lg border border-teal-300/15 bg-white/[0.03] p-4">
+              <div className="relative overflow-hidden rounded-2xl border border-teal-300/15 bg-white/[0.035] p-4.5 backdrop-blur-md">
                 <div className="text-xs text-zinc-500">累计阻断 403</div>
                 <div className="mt-1 font-mono text-3xl font-bold tabular-nums text-amber-200">
                   {metrics ? metrics.blocked.toLocaleString("zh-CN") : "—"}
                 </div>
-                <Zap className="absolute right-3 top-3 h-4 w-4 text-amber-200/60" aria-hidden />
+                <Zap className="absolute right-3.5 top-3.5 h-4 w-4 text-amber-200/60" aria-hidden />
               </div>
-              <div className="relative overflow-hidden rounded-lg border border-teal-300/15 bg-white/[0.03] p-4">
+              <div className="relative overflow-hidden rounded-2xl border border-teal-300/15 bg-white/[0.035] p-4.5 backdrop-blur-md">
                 <div className="text-xs text-zinc-500">平均延迟</div>
                 <div className="mt-1 font-mono text-3xl font-bold tabular-nums text-sky-200">
                   {avgLatencyMs !== null ? `${avgLatencyMs.toFixed(0)}ms` : "—"}
                 </div>
-                <Timer className="absolute right-3 top-3 h-4 w-4 text-sky-200/60" aria-hidden />
+                <Timer className="absolute right-3.5 top-3.5 h-4 w-4 text-sky-200/60" aria-hidden />
               </div>
             </section>
 
-            <section className="rounded-lg border border-teal-300/15 bg-white/[0.03] p-4">
+            <section className="rounded-2xl border border-teal-300/15 bg-white/[0.03] p-4.5 backdrop-blur-md">
               <h2 className="text-sm font-semibold text-zinc-100">威胁类型分布</h2>
               <div className="mt-4 space-y-3">
                 {threatDistribution.length === 0 && (
@@ -432,15 +432,15 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
               </div>
             </section>
 
-            <section className="rounded-lg border border-teal-300/15 bg-white/[0.03] p-4">
+            <section className="rounded-2xl border border-teal-300/15 bg-white/[0.03] p-4.5 backdrop-blur-md">
               <h2 className="text-sm font-semibold text-zinc-100">风险等级</h2>
-              <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+              <div className="mt-4 grid grid-cols-3 gap-2.5 text-center">
                 {[
                   { label: "高危", value: riskDistribution.high, className: "border-rose-300/25 bg-rose-400/10 text-rose-200" },
                   { label: "中危", value: riskDistribution.medium, className: "border-amber-300/25 bg-amber-400/10 text-amber-200" },
                   { label: "低危", value: riskDistribution.low, className: "border-teal-300/25 bg-teal-400/10 text-teal-200" },
                 ].map((item) => (
-                  <div key={item.label} className={`rounded-md border px-2 py-3 ${item.className}`}>
+                  <div key={item.label} className={`rounded-xl border px-2 py-3 ${item.className}`}>
                     <div className="font-mono text-2xl font-bold tabular-nums">{item.value}</div>
                     <div className="mt-1 text-xs opacity-80">{item.label}</div>
                   </div>
@@ -450,7 +450,7 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
           </div>
 
           {/* Center column: live event stream */}
-          <section className="flex min-h-0 flex-col rounded-lg border border-teal-300/15 bg-white/[0.02]">
+          <section className="flex min-h-0 flex-col rounded-2xl border border-teal-300/15 bg-white/[0.02] backdrop-blur-md">
             <div className="flex items-center justify-between border-b border-teal-300/10 px-4 py-3">
               <h2 className="text-sm font-semibold text-zinc-100">实时拦截事件流</h2>
               <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500">
@@ -483,11 +483,11 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
                     <motion.article
                       key={event.key}
                       layout
-                      initial={{ opacity: 0, x: -24, scale: 0.98 }}
+                      initial={{ opacity: 0, x: -18, scale: 0.98 }}
                       animate={{ opacity: 1, x: 0, scale: 1 }}
-                      exit={{ opacity: 0, x: 24 }}
+                      exit={{ opacity: 0, x: 18 }}
                       transition={{ type: "spring", stiffness: 320, damping: 30 }}
-                      className={`rounded-md border px-3.5 py-3 ${levelStyle}`}
+                      className={`rounded-xl border px-3.5 py-3 transition-all duration-200 ${levelStyle}`}
                     >
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-2">
@@ -496,7 +496,7 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
                             aria-hidden
                           />
                           <span className="truncate text-sm font-semibold text-white">{event.threatType}</span>
-                          <span className="shrink-0 rounded border border-white/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-zinc-400">
+                          <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-zinc-400">
                             {level}
                           </span>
                         </div>
@@ -506,7 +506,7 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
                       </div>
                       <div className="mt-1.5 flex items-center gap-2 text-[11px] text-zinc-500">
                         <span className="truncate font-mono">req {event.requestId}</span>
-                        <span className="shrink-0 rounded bg-white/[0.06] px-1.5 py-0.5 font-mono">{(event.riskScore * 100).toFixed(0)}%</span>
+                        <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-0.5 font-mono">{(event.riskScore * 100).toFixed(0)}%</span>
                         {event.layer && <span className="shrink-0 truncate">{event.layer}</span>}
                       </div>
                       {event.reason && (
@@ -521,11 +521,11 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
 
           {/* Right column: recent request ids + stream info */}
           <div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
-            <section className="rounded-lg border border-teal-300/15 bg-white/[0.03] p-4">
+            <section className="rounded-2xl border border-teal-300/15 bg-white/[0.03] p-4.5 backdrop-blur-md">
               <h2 className="text-sm font-semibold text-zinc-100">最近拦截对象</h2>
               <div className="mt-3 space-y-1.5">
                 {events.slice(0, 10).map((event) => (
-                  <div key={`rid-${event.key}`} className="flex items-center justify-between gap-2 rounded border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5 font-mono text-[11px]">
+                  <div key={`rid-${event.key}`} className="flex items-center justify-between gap-2 rounded-xl border border-white/[0.06] bg-white/[0.025] px-3 py-2 font-mono text-[11px] transition-colors hover:bg-white/[0.05]">
                     <span className="truncate text-zinc-400">{event.requestId}</span>
                     <span
                       className={`shrink-0 ${(riskLevel(event.riskScore)) === "high" ? "text-rose-300" : "text-zinc-500"}`}
@@ -538,9 +538,9 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
               </div>
             </section>
 
-            <section className="rounded-lg border border-teal-300/15 bg-white/[0.03] p-4 text-xs leading-6 text-zinc-400">
+            <section className="rounded-2xl border border-teal-300/15 bg-white/[0.03] p-4.5 text-xs leading-6 text-zinc-400 backdrop-blur-md">
               <h2 className="text-sm font-semibold text-zinc-100">数据通道</h2>
-              <dl className="mt-3 space-y-2">
+              <dl className="mt-3 space-y-2.5">
                 <div className="flex items-center justify-between gap-3">
                   <dt className="text-zinc-500">实时事件</dt>
                   <dd className="truncate font-mono text-[11px] text-teal-200">GET /api/v1/events/stream</dd>
@@ -558,7 +558,7 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
                   <dd className="ml-2 truncate font-mono text-[11px] text-zinc-300">{apiBase}</dd>
                 </div>
               </dl>
-              <p className="mt-4 border-t border-white/[0.06] pt-3 text-[11px] leading-5 text-zinc-600">
+              <p className="mt-4 border-t border-white/[0.06] pt-3 text-[11px] leading-5 text-zinc-500">
                 事件来自策略引擎的实时判定，断线自动重连（最长 30s 退避）；持久记录以数据库审计日志为准。
               </p>
             </section>

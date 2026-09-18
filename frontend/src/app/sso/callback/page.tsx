@@ -78,9 +78,9 @@ export default function SsoCallbackPage() {
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background text-foreground">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,var(--page-glow-a),transparent_32rem),radial-gradient(circle_at_86%_16%,var(--page-glow-b),transparent_32rem)]" />
-      <section className="relative w-full max-w-md rounded-md border border-[var(--panel-border)] bg-[var(--panel-bg)] p-6 shadow-[var(--panel-shadow)] backdrop-blur-[26px]">
+      <section className="relative w-full max-w-md rounded-2xl border border-[var(--panel-border)] bg-[var(--panel-bg)] p-6 shadow-[var(--panel-shadow)] backdrop-blur-[28px]">
         <div className="flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-md border border-teal-300/30 bg-teal-400/10">
+          <span className="flex h-11 w-11 items-center justify-center rounded-xl border border-teal-300/30 bg-teal-400/10 shadow-[0_0_24px_rgba(45,212,191,0.15)]">
             <Shield className="h-5 w-5 text-teal-200" aria-hidden />
           </span>
           <div>
@@ -96,7 +96,7 @@ export default function SsoCallbackPage() {
           </div>
         ) : (
           <div className="mt-6 space-y-4">
-            <div className="flex items-start gap-3 rounded-md border border-amber-300/25 bg-amber-400/10 p-3 text-sm leading-6 text-amber-100">
+            <div className="flex items-start gap-3 rounded-xl border border-amber-300/25 bg-amber-400/10 p-3.5 text-sm leading-6 text-amber-100">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
               <span>
                 {ERROR_MESSAGES[error?.code ?? ""] || "单点登录失败，请重新发起登录。"}
@@ -108,7 +108,7 @@ export default function SsoCallbackPage() {
             <button
               type="button"
               onClick={() => window.location.replace("/")}
-              className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-md border border-teal-200/40 bg-teal-300 px-3 text-sm font-medium text-zinc-950 transition hover:border-teal-100/70 hover:bg-teal-200"
+              className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-teal-200/40 bg-teal-300 px-4 text-sm font-medium text-zinc-950 shadow-[0_0_20px_rgba(45,212,191,0.2)] transition-all duration-200 ease-out hover:border-teal-100/70 hover:bg-teal-200 hover:shadow-[0_0_28px_rgba(45,212,191,0.3)] active:scale-[0.985]"
             >
               <ArrowLeft className="h-4 w-4" aria-hidden />
               返回登录页

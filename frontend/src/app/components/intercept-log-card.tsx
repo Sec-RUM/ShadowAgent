@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import { AlertTriangle, Clock, Copy, Fingerprint, ShieldAlert, Sparkles } from "lucide-react";
@@ -38,15 +38,14 @@ const listVariants: Variants = {
 };
 
 const cardVariants: Variants = {
-  hidden: { opacity: 0, y: 24, filter: "blur(10px)", scale: 0.985 },
+  hidden: { opacity: 0, y: 14, scale: 0.99 },
   show: {
     opacity: 1,
     y: 0,
-    filter: "blur(0px)",
     scale: 1,
-    transition: { type: "spring", stiffness: 420, damping: 34, mass: 0.72 },
+    transition: { type: "spring", stiffness: 320, damping: 28, mass: 0.6 },
   },
-  exit: { opacity: 0, y: 14, filter: "blur(8px)", transition: { duration: 0.16 } },
+  exit: { opacity: 0, y: 8, transition: { duration: 0.15 } },
 };
 
 function detailText(value: unknown): string {
@@ -115,9 +114,9 @@ function riskMeta(score: number) {
     return {
       label: "High",
       caption: "高危",
-      ring: "border-rose-300/35 bg-rose-500/12 text-[var(--tone-danger-text)] shadow-[0_0_24px_rgba(244,63,94,0.25)]",
+      ring: "border-rose-300/35 bg-rose-500/12 text-[var(--tone-danger-text)] shadow-[0_0_20px_rgba(244,63,94,0.18)] rounded-full",
       glow: "from-rose-400/28 via-orange-300/12 to-transparent",
-      dot: "bg-rose-300 shadow-[0_0_12px_rgba(253,164,175,0.85)]",
+      dot: "bg-rose-400 shadow-[0_0_8px_rgba(253,164,175,0.85)]",
       reason: "检测到覆盖系统指令、泄露隐藏上下文、绕过工具权限或诱导代理执行越权动作的强信号。",
     };
   }
@@ -126,9 +125,9 @@ function riskMeta(score: number) {
     return {
       label: "Medium",
       caption: "中危",
-      ring: "border-amber-200/35 bg-amber-400/12 text-[var(--tone-warning-text)] shadow-[0_0_20px_rgba(251,191,36,0.18)]",
+      ring: "border-amber-200/35 bg-amber-400/12 text-[var(--tone-warning-text)] shadow-[0_0_16px_rgba(251,191,36,0.14)] rounded-full",
       glow: "from-amber-300/24 via-yellow-200/10 to-transparent",
-      dot: "bg-amber-200 shadow-[0_0_12px_rgba(253,230,138,0.72)]",
+      dot: "bg-amber-300 shadow-[0_0_8px_rgba(253,230,138,0.72)]",
       reason: "命中了可疑提示模式，需要结合来源、上下文隔离和工具权限继续审计。",
     };
   }
@@ -136,9 +135,9 @@ function riskMeta(score: number) {
   return {
     label: "Low",
     caption: "低危",
-    ring: "border-emerald-200/30 bg-emerald-400/10 text-[var(--tone-success-text)] shadow-[0_0_18px_rgba(52,211,153,0.16)]",
+    ring: "border-emerald-200/30 bg-emerald-400/10 text-[var(--tone-success-text)] shadow-[0_0_14px_rgba(52,211,153,0.12)] rounded-full",
     glow: "from-emerald-300/18 via-cyan-200/8 to-transparent",
-    dot: "bg-emerald-200 shadow-[0_0_12px_rgba(167,243,208,0.64)]",
+    dot: "bg-emerald-300 shadow-[0_0_8px_rgba(167,243,208,0.64)]",
     reason: "当前风险信号较弱，但仍保留审计记录，便于追踪间接提示词注入链路。",
   };
 }
@@ -179,7 +178,7 @@ export function AnimatedInterceptLogList({
       variants={listVariants}
       initial="hidden"
       animate="show"
-      className={compact ? "space-y-3 p-4" : "space-y-3 p-4 sm:p-5"}
+      className={compact ? "space-y-3 p-4" : "space-y-3.5 p-4 sm:p-5"}
     >
       <AnimatePresence mode="popLayout">
         {logs.map((log, index) => (
@@ -229,25 +228,25 @@ export function GlassInterceptLogCard({
       aria-label={`查看拦截日志 ${requestId}`}
       onClick={() => onSelect(log)}
       onKeyDown={handleKeyDown}
-      whileHover={{ y: -2, scale: 1.003 }}
-      whileTap={{ scale: 0.995 }}
-      className="group relative isolate cursor-pointer overflow-visible rounded-md border border-[var(--panel-border-soft)] bg-[var(--panel-bg)] p-px shadow-[var(--panel-shadow)] outline-none backdrop-blur-[28px] transition duration-300 hover:border-[var(--panel-border-strong)] hover:shadow-[var(--panel-shadow-hover)] focus-visible:ring-2 focus-visible:ring-teal-200/45"
+      whileHover={{ y: -2, scale: 1.002 }}
+      whileTap={{ scale: 0.994 }}
+      className="group relative isolate cursor-pointer overflow-visible rounded-2xl border border-[var(--panel-border-soft)] bg-[var(--panel-bg)] p-px shadow-[var(--panel-shadow)] outline-none backdrop-blur-[28px] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-[var(--panel-border-strong)] hover:shadow-[var(--panel-shadow-hover)] focus-visible:ring-2 focus-visible:ring-teal-200/50"
     >
       <div className={`pointer-events-none absolute inset-x-8 -top-px h-px bg-gradient-to-r ${meta.glow}`} />
-      <div className="pointer-events-none absolute -inset-px rounded-md bg-[radial-gradient(circle_at_18%_0%,rgba(20,184,166,0.17),transparent_38%),radial-gradient(circle_at_96%_10%,rgba(244,63,94,0.12),transparent_34%)] opacity-70 transition group-hover:opacity-100" />
-      <div className="relative rounded-[7px] bg-[var(--log-card-inner)] px-4 py-4 ring-1 ring-[var(--panel-border-soft)] sm:px-5">
+      <div className="pointer-events-none absolute -inset-px rounded-2xl bg-[radial-gradient(circle_at_18%_0%,rgba(20,184,166,0.14),transparent_38%),radial-gradient(circle_at_96%_10%,rgba(244,63,94,0.1),transparent_34%)] opacity-60 transition-opacity duration-300 group-hover:opacity-100" />
+      <div className="relative rounded-[15px] bg-[var(--log-card-inner)] px-4 py-4 ring-1 ring-[var(--panel-border-soft)] sm:px-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-2 rounded-md border border-cyan-200/18 bg-cyan-300/[0.06] px-2.5 py-1 text-xs font-medium text-[var(--tone-info-text)]">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-cyan-200/20 bg-cyan-300/[0.08] px-2.5 py-1 text-xs font-medium text-[var(--tone-info-text)]">
                 <ShieldAlert className="h-3.5 w-3.5" aria-hidden />
                 {log.threat_type || "Prompt Injection"}
               </span>
-              <span className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.045] px-2 py-1 font-mono text-[11px] text-[var(--text-secondary)]">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.05] px-2.5 py-1 font-mono text-[11px] text-[var(--text-secondary)]">
                 <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
                 {layer}
               </span>
-              <span className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.035] px-2 py-1 text-[11px] text-[var(--text-muted)]">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[11px] text-[var(--text-muted)]">
                 <Clock className="h-3.5 w-3.5" aria-hidden />
                 <span title={buildTimeTooltip(log.timestamp)}>{formatBeijingTime(log.timestamp)} CST</span>
               </span>
@@ -258,11 +257,11 @@ export function GlassInterceptLogCard({
             </p>
 
             <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
-              <span className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-[var(--surface-raised)] px-2.5 py-1 font-mono text-[var(--text-secondary)]">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-[var(--surface-raised)] px-2.5 py-1 font-mono text-[var(--text-secondary)]">
                 <Fingerprint className="h-3.5 w-3.5 text-[var(--tone-accent-text)]" aria-hidden />
                 <span className="max-w-[15rem] truncate" title={requestId}>{requestId}</span>
               </span>
-              <span className="inline-flex items-center gap-1.5 rounded-md border border-rose-200/18 bg-rose-500/[0.075] px-2.5 py-1 text-[var(--tone-danger-text)]">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-200/20 bg-rose-500/[0.08] px-2.5 py-1 text-[var(--tone-danger-text)]">
                 <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
                 {log.action_taken || "Blocked"}
               </span>
@@ -273,7 +272,7 @@ export function GlassInterceptLogCard({
                     event.stopPropagation();
                     onCopyRequestId(requestId);
                   }}
-                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.04] px-2 text-[var(--text-secondary)] transition hover:border-teal-200/25 hover:bg-teal-300/[0.08] hover:text-[var(--tone-accent-text)] focus:outline-none focus:ring-2 focus:ring-teal-200/40"
+                  className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2 text-[var(--text-secondary)] transition-all duration-150 ease-out hover:border-teal-200/30 hover:bg-teal-300/[0.1] hover:text-[var(--tone-accent-text)] focus:outline-none focus:ring-2 focus:ring-teal-200/40 active:scale-95"
                   aria-label={`复制请求 ID ${requestId}`}
                   title="复制请求 ID"
                 >
@@ -292,17 +291,17 @@ export function GlassInterceptLogCard({
                   event.stopPropagation();
                   onSelect(log);
                 }}
-                className={`peer inline-flex min-w-24 items-center justify-center gap-2 rounded-md border px-3 py-2 font-mono text-xs font-semibold tracking-normal transition hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-teal-200/40 ${meta.ring}`}
+                className={`peer inline-flex min-w-24 items-center justify-center gap-2 border px-3 py-1.5 font-mono text-xs font-semibold tracking-normal transition-all duration-200 ease-out hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-teal-200/40 ${meta.ring}`}
                 aria-describedby={tooltipId}
               >
                 <Sparkles className="h-3.5 w-3.5" aria-hidden />
                 {meta.label}
-                <span className="text-[11px] opacity-70">{score.toFixed(2)}</span>
+                <span className="text-[11px] opacity-75">{score.toFixed(2)}</span>
               </button>
               <div
                 id={tooltipId}
                 role="tooltip"
-                className="pointer-events-none absolute right-0 top-[calc(100%+0.7rem)] z-30 w-72 translate-y-1 whitespace-pre-line rounded-md border border-[var(--tooltip-border)] bg-[var(--tooltip-bg)] px-3.5 py-3 text-left text-xs leading-5 text-[var(--tooltip-fg)] opacity-0 shadow-[var(--tooltip-shadow)] backdrop-blur-[22px] transition duration-200 peer-hover:translate-y-0 peer-hover:opacity-100 peer-focus:translate-y-0 peer-focus:opacity-100"
+                className="pointer-events-none absolute right-0 top-[calc(100%+0.7rem)] z-30 w-72 translate-y-1 whitespace-pre-line rounded-xl border border-[var(--tooltip-border)] bg-[var(--tooltip-bg)] px-3.5 py-3 text-left text-xs leading-5 text-[var(--tooltip-fg)] opacity-0 shadow-[var(--tooltip-shadow)] backdrop-blur-[24px] transition-all duration-200 ease-out peer-hover:translate-y-0 peer-hover:opacity-100 peer-focus:translate-y-0 peer-focus:opacity-100"
               >
                 <div className="mb-1.5 font-medium text-[var(--text-primary)]">{meta.caption}风险说明</div>
                 {tooltip}
