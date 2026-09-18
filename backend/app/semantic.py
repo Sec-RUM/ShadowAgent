@@ -325,15 +325,22 @@ OOD_PRIOR_LOGIT = -1.2
 # Coverage at which the raw logit is trusted in full (see ``score_features``).
 # Below it the score ramps linearly down to ``OOD_PRIOR_LOGIT`` at 0% coverage.
 #
-# Why a floor instead of the original ``coverage * logit`` ramp: natural
-# coverage is script-dependent. Latin text reuses shared words, so in-corpus
-# English sits at ~0.8 coverage; CJK character n-grams are far more specific,
-# so equally in-distribution Chinese sits at ~0.7. A linear ramp therefore
-# taxed Chinese twice — once for the vocabulary being sparse, once for the
-# ramp — and pushed genuinely malicious Chinese below the threshold. Measured
-# on the held-out split, moving to a floor raises Chinese recall from 50% to
-# 86% with zero new false positives, while still shrinking genuinely
-# out-of-domain text (which lands well under the floor).
+# Why a floor instead of the original ``coverage * logit`` ramp: a linear ramp
+# taxed genuinely out-of-domain text twice — once for an unfamiliar vocabulary,
+# once for the ramp — and on the held-out split moving to a floor raised Chinese
+# recall from 50% to 86% with zero new false positives. Text that really is from
+# another domain (other languages, SQL, code, LaTeX) still lands well under the
+# floor and gets shrunk.
+#
+# Correction (measured, roadmap item 8): the original rationale for the floor
+# claimed CJK character n-grams have "naturally lower" coverage than Latin word
+# features, so a uniform floor implicitly penalised Chinese. That is **not**
+# supported by the data — in-corpus median coverage is 1.000 for both zh and en,
+# and on the held-out split the *lowest*-coverage injections are English
+# (zh min 0.500 vs en min 0.263), not Chinese. Normalising coverage per script
+# was evaluated and rejected: it drops 24 held-out injection detections to buy a
+# 0.12 improvement in the worst-probe margin. The floor is kept as a uniform
+# value; it discriminates on content-level out-of-domain-ness, not on language.
 COVERAGE_TRUST_FLOOR = 0.5
 
 

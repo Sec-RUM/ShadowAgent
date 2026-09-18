@@ -1,6 +1,11 @@
 # 签名层强弱分档（signature tiering）：消除「引用攻击短语」误报
 
 > 变更记录 · 2026-09-11 · 相关：[注入检测基准](./injection-detection.md)、[中文泛化升级](./zh-generalization-upgrade.md)
+>
+> **本文是当时那次变更快照，其中的语料条数与指标均为当日实测值，不再随语料增长更新**
+> （例如「979 条」现已是 1105 条）。当前权威指标请以
+> [injection-detection.md](./injection-detection.md) 为准 —— 该文件由 `bench_semantic.py`
+> 生成，数字为生成时的实时测量。
 
 ## 摘要
 
