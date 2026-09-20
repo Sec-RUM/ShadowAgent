@@ -1669,13 +1669,18 @@ function Switch({
           : "border-[var(--panel-border)] bg-[var(--surface-raised)]"
       }`}
     >
-      {/* 滑块必须与轨道恒有对比：不能用 --accent-on-solid（深色主题下它是近黑色
-          oklch(19%)，压在 oklch(24%) 的轨道上几乎不可见 —— 实测截图为空胶囊）。
-          改用 --text-primary：深色主题亮(95%)、浅色主题暗(24%)，两种主题下都成立。 */}
+      {/* 滑块配色必须**按选中态分叉**，单一颜色在 4 组（2 主题 × 2 状态）里必然有一组不达标：
+          · 未选中：轨道 = --surface-raised（深色主题 oklch24% 深灰 / 浅色主题 纯白）
+            → 滑块用 --text-primary（深色主题亮 95% / 浅色主题暗 24%）恒有对比。
+          · 选中：轨道 = --accent-solid（深色主题亮青 66% / 浅色主题深青 43%）
+            → 滑块必须用 --accent-on-solid（其语义本就是「实心强调色底上的前景色」）。
+          ⚠️ 曾把两种情况都用 --text-primary：实测选中态对比度 深色主题 2.52:1、浅色主题 2.16:1，
+          均低于 WCAG 1.4.11 对非文本 UI 组件要求的 3:1（浅色主题下近黑滑块压深青轨道，几乎看不见边界）。
+          改后 4 组分别为 6.26 / 14.20 / 7.44 / 16.51，全部达标。改这两个值前请重算这 4 组对比度。 */}
       <span
         aria-hidden
-        className={`h-5 w-5 rounded-full bg-[var(--text-primary)] shadow-[var(--panel-shadow-soft)] transition-transform duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] ${
-          checked ? "translate-x-5" : "translate-x-0.5"
+        className={`h-5 w-5 rounded-full shadow-[var(--panel-shadow-soft)] transition-transform duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] ${
+          checked ? "bg-[var(--accent-on-solid)] translate-x-5" : "bg-[var(--text-primary)] translate-x-0.5"
         }`}
       />
     </button>
