@@ -1775,6 +1775,9 @@ export default function Home() {
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authForm, setAuthForm] = useState({ name: "", email: "", password: "", confirmPassword: "", bootstrapToken: "", inviteToken: "" });
   const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatus | null>(null);
+  // null 的 bootstrapStatus 有歧义：既可能是「还没加载完」，也可能是「后端连不上」。
+  // 这两者必须分开——否则连不上后端时，横幅会谎报成「注册已关闭」这类确定性策略结论。
+  const [bootstrapUnreachable, setBootstrapUnreachable] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
   const [ssoSlug, setSsoSlug] = useState("");
@@ -1990,11 +1993,16 @@ export default function Home() {
         const data = (await response.json().catch(() => null)) as BootstrapStatus | null;
         if (!response.ok || !data) {
           setBootstrapStatus(null);
+          setBootstrapUnreachable(false);
           return;
         }
         setBootstrapStatus(data);
+        setBootstrapUnreachable(false);
       } catch {
+        // AbortError = 组件卸载 / 依赖变更导致的正常中止，不是「连不上后端」，别误报。
+        if (signal?.aborted) return;
         setBootstrapStatus(null);
+        setBootstrapUnreachable(true);
       }
     },
     [apiBaseUrl]
@@ -3257,8 +3265,21 @@ export default function Home() {
         "success"
       );
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : authMode === "login" ? "登录失败" : "注册失败";
+      // 网络层失败（后端没起 / 端口不通）时浏览器只给一句 "Failed to fetch"，
+      // 对用户毫无指向性 → 翻译成可执行的排查提示，并顺手点亮横幅的「后端不可达」状态。
+      const isNetworkFailure =
+        error instanceof TypeError ||
+        (error instanceof Error && /failed to fetch|network ?error|load failed/i.test(error.message));
+      if (isNetworkFailure) {
+        setBootstrapUnreachable(true);
+      }
+      const message = isNetworkFailure
+        ? `无法连接后端服务（${apiBaseUrl}），请确认后端已启动后重试`
+        : error instanceof Error
+          ? error.message
+          : authMode === "login"
+            ? "登录失败"
+            : "注册失败";
       setAuthError(message);
       addToast(message, "error");
     } finally {
@@ -4634,19 +4655,27 @@ export default function Home() {
               </button>
             </div>
 
-            {authMode === "register" ? (
-              <div className={`${glassPanelSoftClass} mt-4 px-3 py-3 text-[length:var(--text-micro)] leading-6 text-[var(--text-secondary)]`}>
-                {bootstrapStatus?.bootstrap_required
-                  ? bootstrapStatus.bootstrap_token_configured
-                    ? "当前后端还没有管理员账号。请在注册时填写 bootstrap token，完成首个管理员初始化。"
-                    : bootstrapStatus.demo_override_enabled
-                      ? "当前后端还没有管理员账号，但已开启本地 demo 直通模式，可直接完成首个管理员注册。"
-                      : "当前后端还没有管理员账号，且尚未配置 bootstrap token。请先在后端环境变量中设置 SHADOW_AGENT_CONSOLE_BOOTSTRAP_TOKEN。"
-                  : bootstrapStatus?.open_registration_enabled
-                    ? "注册已开放，新账号将默认获得 client 角色。"
-                    : bootstrapStatus?.invite_token_configured
-                      ? "注册为邀请制，请在下方填写管理员提供的邀请码。"
-                      : "注册已关闭。请联系管理员获取邀请码，或由管理员签发托管 API Key。"}
+            {bootstrapUnreachable || authMode === "register" ? (
+              <div
+                className={
+                  bootstrapUnreachable
+                    ? "mt-4 rounded-[var(--radius-xs)] border border-[color-mix(in_oklab,var(--tone-danger)_30%,transparent)] bg-[var(--tone-danger-surface)] px-3 py-3 text-[length:var(--text-micro)] leading-6 text-[var(--tone-danger-text)]"
+                    : `${glassPanelSoftClass} mt-4 px-3 py-3 text-[length:var(--text-micro)] leading-6 text-[var(--text-secondary)]`
+                }
+              >
+                {bootstrapUnreachable
+                  ? `无法连接后端服务（${apiBaseUrl}）。页面能打开不代表后端在线——请先确认后端已启动，否则登录与注册都会以「Failed to fetch」失败。`
+                  : bootstrapStatus?.bootstrap_required
+                    ? bootstrapStatus.bootstrap_token_configured
+                      ? "当前后端还没有管理员账号。请在注册时填写 bootstrap token，完成首个管理员初始化。"
+                      : bootstrapStatus.demo_override_enabled
+                        ? "当前后端还没有管理员账号，但已开启本地 demo 直通模式，可直接完成首个管理员注册。"
+                        : "当前后端还没有管理员账号，且尚未配置 bootstrap token。请先在后端环境变量中设置 SHADOW_AGENT_CONSOLE_BOOTSTRAP_TOKEN。"
+                    : bootstrapStatus?.open_registration_enabled
+                      ? "注册已开放，新账号将默认获得 client 角色。"
+                      : bootstrapStatus?.invite_token_configured
+                        ? "注册为邀请制，请在下方填写管理员提供的邀请码。"
+                        : "注册已关闭。请联系管理员获取邀请码，或由管理员签发托管 API Key。"}
               </div>
             ) : null}
 
