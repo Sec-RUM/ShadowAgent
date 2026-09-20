@@ -3,6 +3,7 @@
 import {
   Activity,
   AlertTriangle,
+  ArrowRight,
   Bot,
   Bell,
   Building2,
@@ -26,6 +27,7 @@ import {
   MessageSquare,
   Network,
   Monitor,
+  Pencil,
   Play,
   Plus,
   RefreshCcw,
@@ -50,7 +52,7 @@ import {
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import type { FormEvent, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AnimatedInterceptLogList, GlassInterceptLogCard } from "./components/intercept-log-card";
+import { AnimatedInterceptLogList, GlassInterceptLogCard, LogListSkeleton } from "./components/intercept-log-card";
 import { GlassSelect, type GlassSelectOption } from "./components/glass-select";
 import SecurityDashboard from "./components/security-dashboard";
 import { buildTimeTooltip, formatBeijingTime, formatRelativeTime, parseDateValue } from "./time-utils";
@@ -765,32 +767,31 @@ const VIEW_ITEMS: Array<{
 ];
 
 const buttonBase =
-  "inline-flex min-h-10 max-w-full items-center justify-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium whitespace-normal break-words transition-all duration-200 ease-out active:scale-[0.982] focus:outline-none focus:ring-2 focus:ring-teal-300/60 disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex min-h-9 max-w-full shrink-0 items-center justify-center gap-2 rounded-[var(--radius-sm)] px-3.5 py-1.5 text-[length:var(--text-caption)] font-medium whitespace-nowrap transition-colors duration-[var(--dur-fast)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tone-accent)] disabled:cursor-not-allowed disabled:opacity-50";
 
 const inputBase =
-  "min-h-10 w-full rounded-xl border border-white/[0.1] bg-white/[0.055] px-3.5 py-2 text-sm text-zinc-100 outline-none backdrop-blur-[18px] transition-all duration-200 ease-out placeholder:text-zinc-500 hover:border-white/[0.16] focus:border-teal-300/70 focus:bg-white/[0.08] focus:ring-2 focus:ring-teal-300/25";
+  "min-h-9 w-full min-w-0 rounded-[var(--radius-sm)] border border-[var(--field-border)] bg-[var(--field-bg)] px-3 py-1.5 text-[length:var(--text-caption)] text-[var(--text-primary)] outline-none transition-colors duration-[var(--dur-fast)] placeholder:text-[var(--text-muted)] hover:border-[var(--field-border-strong)] focus:border-[var(--tone-accent)] focus:ring-2 focus:ring-[var(--tone-accent-surface)]";
 
 const glassPanelClass =
-  "rounded-2xl border border-[var(--panel-border)] bg-[var(--panel-bg)] shadow-[var(--panel-shadow)] backdrop-blur-[28px]";
+  "rounded-[var(--radius-lg)] border border-[var(--panel-border)] bg-[var(--panel-bg)] shadow-[var(--panel-shadow)] backdrop-blur-[var(--blur-glass)]";
 
 const glassPanelSoftClass =
-  "rounded-xl border border-[var(--panel-border-soft)] bg-[var(--panel-bg-soft)] shadow-[var(--panel-shadow-soft)] backdrop-blur-[20px]";
+  "rounded-[var(--radius-md)] border border-[var(--panel-border-soft)] bg-[var(--panel-bg-soft)] shadow-[var(--panel-shadow-soft)]";
 
 const glassPanelMotionClass =
-  "group relative overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:border-[var(--panel-border-strong)] hover:bg-[var(--panel-hover-bg)] hover:shadow-[var(--panel-shadow-hover)] hover:-translate-y-0.5";
+  "group relative overflow-hidden transition-[border-color,background-color,box-shadow] duration-[240ms] ease-[var(--ease-out-quart)] hover:border-[var(--panel-border-strong)] hover:bg-[var(--panel-hover-bg)] hover:shadow-[var(--panel-shadow-hover)]";
 
 const floatingGlassMenuClass =
-  "overflow-hidden rounded-2xl border border-[var(--panel-border-strong)] bg-[var(--tooltip-bg)] p-1.5 shadow-[var(--tooltip-shadow)] backdrop-blur-[28px]";
+  "overflow-hidden rounded-[var(--radius-md)] border border-[var(--panel-border-strong)] bg-[var(--tooltip-bg)] p-1.5 shadow-[var(--tooltip-shadow)] backdrop-blur-[var(--blur-glass-lg)]";
 
 const viewVariants: Variants = {
-  hidden: { opacity: 0, y: 6, scale: 0.995 },
+  hidden: { opacity: 0, y: 6 },
   show: {
     opacity: 1,
     y: 0,
-    scale: 1,
-    transition: { type: "spring", stiffness: 280, damping: 28, mass: 0.6 },
+    transition: { duration: 0.24, ease: [0.16, 1, 0.3, 1] },
   },
-  exit: { opacity: 0, y: -4, transition: { duration: 0.14 } },
+  exit: { opacity: 0, y: -4, transition: { duration: 0.16, ease: [0.4, 0, 1, 1] } },
 };
 
 const THEME_OPTIONS = [
@@ -813,7 +814,7 @@ const ROLE_SHOWCASE_DEFINITIONS: RoleShowcaseDefinition[] = [
     badge: "全链路运营",
     description: "用于演示审批、策略、密钥和证据导出，适合评委查看完整闭环。",
     icon: ShieldCheck,
-    tone: "border-rose-300/30 bg-rose-500/10 text-rose-100",
+    tone: "border-[color-mix(in_oklab,var(--tone-danger)_28%,transparent)] bg-[var(--tone-danger-surface)] text-[var(--tone-danger-text)]",
     authHint: "控制台管理员登录，或签发 admin / security_admin 托管密钥。",
     judgeFocus: "看“攻击进入后如何被识别、拦截、留痕并复盘”的完整运营链路。",
     suitableFor: "答辩演示、SOC 运维、安全管理员、策略维护人员。",
@@ -826,7 +827,7 @@ const ROLE_SHOWCASE_DEFINITIONS: RoleShowcaseDefinition[] = [
     badge: "业务调用",
     description: "面向普通业务接入方，只保留安全网关调用能力，避免接触后台运营面。",
     icon: KeyRound,
-    tone: "border-emerald-300/30 bg-emerald-500/10 text-emerald-100",
+    tone: "border-[color-mix(in_oklab,var(--tone-success)_28%,transparent)] bg-[var(--tone-success-surface)] text-[var(--tone-success-text)]",
     authHint: "登录后的普通用户 Token，或独立签发的 client 托管密钥。",
     judgeFocus: "看“正常业务可通过、危险请求被阻断”，同时避免误开放管理权限。",
     suitableFor: "业务系统、测试同学、普通 Agent 调用方。",
@@ -839,7 +840,7 @@ const ROLE_SHOWCASE_DEFINITIONS: RoleShowcaseDefinition[] = [
     badge: "代理入口",
     description: "适合作为统一代理层或中间服务身份，在转发前先完成安全审计。",
     icon: Network,
-    tone: "border-cyan-300/30 bg-cyan-500/10 text-cyan-100",
+    tone: "border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--tone-accent-surface)] text-[var(--tone-info-text)]",
     authHint: "独立签发的 gateway 托管密钥，适合服务到服务调用。",
     judgeFocus: "看“代理层先拦截后转发”，并把来源标记和证据链沉淀下来。",
     suitableFor: "API Gateway、代理层、中间件、统一接入服务。",
@@ -915,12 +916,12 @@ function activeViewFromHash() {
 function buttonClass(variant: "primary" | "secondary" | "ghost" | "danger" = "secondary") {
   const variants = {
     primary:
-      "border border-teal-200/50 bg-teal-300 text-zinc-950 shadow-[0_0_24px_rgba(45,212,191,0.22)] hover:border-teal-100/80 hover:bg-teal-200 hover:shadow-[0_0_36px_rgba(45,212,191,0.35)]",
+      "bg-[var(--accent-solid)] text-[var(--accent-on-solid)] shadow-[var(--panel-shadow-soft)] hover:bg-[var(--accent-solid-hover)]",
     secondary:
-      "border border-white/[0.1] bg-white/[0.055] text-zinc-100 backdrop-blur-[18px] hover:border-white/[0.18] hover:bg-white/[0.09] hover:shadow-[0_4px_16px_rgba(0,0,0,0.06)]",
-    ghost: "text-zinc-300 hover:bg-white/[0.07] hover:text-white",
+      "border border-[var(--panel-border)] bg-[var(--field-bg)] text-[var(--text-primary)] hover:border-[var(--panel-border-strong)] hover:bg-[var(--panel-hover-bg)]",
+    ghost: "text-[var(--text-secondary)] hover:bg-[var(--surface-sunken)] hover:text-[var(--text-primary)]",
     danger:
-      "border border-red-300/35 bg-red-500/10 text-red-100 hover:border-red-200/50 hover:bg-red-500/18 hover:shadow-[0_0_20px_rgba(244,63,94,0.18)]",
+      "border border-[color-mix(in_oklab,var(--tone-danger)_35%,transparent)] bg-[var(--tone-danger-surface)] text-[var(--tone-danger-text)] hover:border-[color-mix(in_oklab,var(--tone-danger)_55%,transparent)]",
   };
 
   return `${buttonBase} ${variants[variant]}`;
@@ -936,9 +937,9 @@ function asNumber(value: unknown, fallback = 0) {
 }
 
 function riskTone(score = 0) {
-  if (score >= 0.9) return "border-red-300/40 bg-red-500/10 text-red-100";
-  if (score >= 0.75) return "border-amber-300/40 bg-amber-500/10 text-amber-100";
-  return "border-emerald-300/40 bg-emerald-500/10 text-emerald-100";
+  if (score >= 0.9) return "border-[color-mix(in_oklab,var(--tone-danger)_28%,transparent)] bg-[var(--tone-danger-surface)] text-[var(--tone-danger-text)]";
+  if (score >= 0.75) return "border-[color-mix(in_oklab,var(--tone-warning)_28%,transparent)] bg-[var(--tone-warning-surface)] text-[var(--tone-warning-text)]";
+  return "border-[color-mix(in_oklab,var(--tone-success)_28%,transparent)] bg-[var(--tone-success-surface)] text-[var(--tone-success-text)]";
 }
 
 function riskLabel(score = 0) {
@@ -1049,29 +1050,47 @@ function managedKeyStatus(item: ManagedApiKeyItem) {
   const expiresAt = expiresDate ? expiresDate.getTime() : Number.POSITIVE_INFINITY;
   if (!item.is_active) {
     return {
-      tone: "border-red-300/35 bg-red-500/10 text-red-100",
+      tone: "border-[color-mix(in_oklab,var(--tone-danger)_28%,transparent)] bg-[var(--tone-danger-surface)] text-[var(--tone-danger-text)]",
+      chip: "chip-danger",
       label: "已停用",
       hint: "当前密钥已被后台停用，无法再调用受保护接口。",
     };
   }
   if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
     return {
-      tone: "border-amber-300/35 bg-amber-500/10 text-amber-100",
+      tone: "border-[color-mix(in_oklab,var(--tone-warning)_28%,transparent)] bg-[var(--tone-warning-surface)] text-[var(--tone-warning-text)]",
+      chip: "chip-warning",
       label: "已过期",
       hint: "当前密钥已经过期，需要轮换后才会重新签发新密钥。",
     };
   }
   return {
-    tone: "border-emerald-300/35 bg-emerald-500/10 text-emerald-100",
+    tone: "border-[color-mix(in_oklab,var(--tone-success)_28%,transparent)] bg-[var(--tone-success-surface)] text-[var(--tone-success-text)]",
+    chip: "chip-success",
     label: "生效中",
     hint: "当前密钥可正常使用。",
   };
 }
 
 function severityClass(severity: PolicyRule["severity"]) {
-  if (severity === "high") return "border-red-300/35 bg-red-500/10 text-red-100";
-  if (severity === "medium") return "border-amber-300/35 bg-amber-500/10 text-amber-100";
-  return "border-emerald-300/35 bg-emerald-500/10 text-emerald-100";
+  if (severity === "high") return "chip chip-danger";
+  if (severity === "medium") return "chip chip-warning";
+  return "chip chip-success";
+}
+
+/* 只返回语义色变体（不带 chip 基类），供已经手写 `chip` 基类的元素拼接，
+   避免出现 "chip chip-danger chip chip-danger" 这种重复基类。 */
+function severityChipClass(severity: PolicyRule["severity"]) {
+  if (severity === "high") return "chip-danger";
+  if (severity === "medium") return "chip-warning";
+  return "chip-success";
+}
+
+/* 风险档位竖条：与拦截日志行同一套语义色，跨视图保持一致的「颜色=风险」心智。 */
+function severityTick(severity: PolicyRule["severity"]) {
+  if (severity === "high") return "bg-[var(--tone-danger)]";
+  if (severity === "medium") return "bg-[var(--tone-warning)]";
+  return "bg-[var(--tone-success)]";
 }
 
 function detailText(value: unknown) {
@@ -1114,8 +1133,20 @@ function extractChatContent(value: unknown) {
 }
 
 function sanitizeSettingsForStorage(settings: AppSettings): AppSettings {
+  // 关键：localStorage 里可能存着旧版本、被手改、或部分字段缺失的对象。
+  // 之前直接 {...settings} 会让缺失的 apiBase 变成 undefined，
+  // 然后 settings.apiBase.replace(...) 直接抛异常把整页打挂。
+  // 这里对每个字段做兜底，保证返回的一定是结构完整的 AppSettings。
+  const merged = { ...DEFAULT_SETTINGS, ...(settings ?? {}) };
   return {
-    ...settings,
+    ...merged,
+    apiBase: typeof merged.apiBase === "string" && merged.apiBase.trim() ? merged.apiBase : DEFAULT_API_BASE,
+    themeMode:
+      merged.themeMode === "light" || merged.themeMode === "dark" ? merged.themeMode : "system",
+    refreshInterval:
+      Number.isFinite(merged.refreshInterval) && merged.refreshInterval > 0
+        ? merged.refreshInterval
+        : DEFAULT_SETTINGS.refreshInterval,
     adminApiKey: "",
     clientApiKey: "",
   };
@@ -1324,7 +1355,7 @@ function Sparkline({
   strokeWidth?: number;
 }) {
   if (points.length < 2) {
-    return <div className={`h-full w-full rounded-[inherit] bg-white/[0.04] ${className}`} aria-hidden />;
+    return <div className={`h-full w-full rounded-[inherit] bg-[var(--surface-raised)] ${className}`} aria-hidden />;
   }
 
   const width = 100;
@@ -1632,33 +1663,43 @@ function Switch({
       aria-label={label}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition duration-200 focus:outline-none focus:ring-2 focus:ring-teal-300/60 disabled:cursor-not-allowed disabled:opacity-50 ${
+      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition duration-[var(--dur-fast)] focus:outline-none focus:ring-2 focus:ring-[var(--tone-accent)] disabled:cursor-not-allowed disabled:opacity-50 ${
         checked
-          ? "border-teal-200/60 bg-teal-300 shadow-[0_0_20px_rgba(45,212,191,0.24)]"
-          : "border-white/[0.12] bg-white/[0.06]"
+          ? "border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--accent-solid)] shadow-[var(--panel-shadow-hover)]"
+          : "border-[var(--panel-border)] bg-[var(--surface-raised)]"
       }`}
     >
-      <span className={`h-5 w-5 rounded-full bg-white shadow transition duration-200 ${checked ? "translate-x-5" : "translate-x-0.5"}`} />
+      {/* 滑块必须与轨道恒有对比：不能用 --accent-on-solid（深色主题下它是近黑色
+          oklch(19%)，压在 oklch(24%) 的轨道上几乎不可见 —— 实测截图为空胶囊）。
+          改用 --text-primary：深色主题亮(95%)、浅色主题暗(24%)，两种主题下都成立。 */}
+      <span
+        aria-hidden
+        className={`h-5 w-5 rounded-full bg-[var(--text-primary)] shadow-[var(--panel-shadow-soft)] transition-transform duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] ${
+          checked ? "translate-x-5" : "translate-x-0.5"
+        }`}
+      />
     </button>
   );
 }
 
 function EmptyState({ icon: Icon, title, children }: { icon: IconComponent; title: string; children: ReactNode }) {
   return (
-    <div className="flex min-h-48 flex-col items-center justify-center rounded-2xl border border-dashed border-white/[0.12] bg-[var(--surface-raised)] px-5 py-8 text-center backdrop-blur-[14px]">
+    <div className="flex min-h-48 flex-col items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-[var(--panel-border)] bg-[var(--surface-raised)] px-5 py-8 text-center backdrop-blur-[14px]">
       <Icon className="h-8 w-8 text-[var(--text-muted)]" aria-hidden />
-      <h3 className="mt-3 text-base font-semibold text-[var(--text-primary)]">{title}</h3>
-      <div className="mt-2 max-w-xl text-sm leading-6 text-[var(--text-secondary)]">{children}</div>
+      <h3 className="mt-3 text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">{title}</h3>
+      <div className="mt-2 max-w-xl text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">{children}</div>
     </div>
   );
 }
 
 function PanelGlow() {
+  // 面板顶部的 1px 高光分界线：编辑风的「栏线」，不是装饰性发光。
+  // 用语义 token 而非 teal/rose 硬编码 —— 浅色主题下同样成立。
   return (
-    <>
-      <div className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-teal-200/35 to-transparent" />
-      <div className="pointer-events-none absolute -right-12 -top-12 h-36 w-36 rounded-full bg-teal-300/10 blur-3xl transition-colors duration-500 ease-out group-hover:bg-rose-300/10" />
-    </>
+    <div
+      aria-hidden
+      className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-[color-mix(in_oklab,var(--tone-accent)_45%,transparent)] to-transparent"
+    />
   );
 }
 
@@ -1678,23 +1719,23 @@ function ThemePreview({
     <button
       type="button"
       onClick={onClick}
-      className={`flex w-full items-center justify-between rounded-xl border px-3.5 py-3 text-left transition-all duration-200 ease-out active:scale-[0.99] ${
+      className={`flex w-full items-center justify-between rounded-[var(--radius-md)] border px-3.5 py-3 text-left transition-[color,background-color,border-color,box-shadow,transform,opacity] duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] active:scale-[0.98] ${
         active
-          ? "border-teal-300/40 bg-teal-300/10 text-[var(--text-primary)] shadow-[0_0_20px_rgba(45,212,191,0.14)]"
+          ? "border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--tone-accent-surface)] text-[var(--text-primary)] shadow-[var(--panel-shadow-soft)]"
           : "border-[var(--panel-border-soft)] bg-[var(--surface-elevated)] text-[var(--text-primary)] hover:border-[var(--panel-border-strong)] hover:bg-[var(--panel-bg-soft)]"
       }`}
       aria-expanded={active}
     >
       <span className="inline-flex items-center gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--panel-border-soft)] bg-[var(--field-bg)]">
+        <span className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-md)] border border-[var(--panel-border-soft)] bg-[var(--field-bg)]">
           <Icon className="h-5 w-5" aria-hidden />
         </span>
         <span>
-          <span className="block text-sm font-medium">{option.label}</span>
-          <span className="block text-xs text-[var(--text-secondary)]">{option.description}</span>
+          <span className="block text-[length:var(--text-body)] font-medium">{option.label}</span>
+          <span className="block text-[length:var(--text-micro)] text-[var(--text-secondary)]">{option.description}</span>
         </span>
       </span>
-      <ChevronDown className={`h-4 w-4 transition-transform duration-200 ${active ? "rotate-180" : ""}`} aria-hidden />
+      <ChevronDown className={`h-4 w-4 transition-transform duration-[var(--dur-fast)] ${active ? "rotate-180" : ""}`} aria-hidden />
     </button>
   );
 }
@@ -1814,7 +1855,7 @@ export default function Home() {
   const [validationResults, setValidationResults] = useState<ValidationSuiteItem[]>(createInitialValidationResults);
   const [validationHistory, setValidationHistory] = useState<ValidationRunRecord[]>([]);
   const [roleShowcase, setRoleShowcase] = useState<RoleShowcaseId>("admin");
-  const apiBaseUrl = settings.apiBase.replace(/\/$/, "");
+  const apiBaseUrl = (settings.apiBase || DEFAULT_API_BASE).replace(/\/$/, "");
   const securityConfigKey = `${apiBaseUrl}|${settings.adminApiKey}|${authSession?.accessToken ?? ""}|${user?.id ?? ""}`;
   const hasConsoleToken = isAuthSessionValid(authSession);
   const hasConsoleAdmin = Boolean(hasConsoleToken && isAdminRole(user?.role));
@@ -1970,8 +2011,8 @@ export default function Home() {
 
         const isPersisted = /^\d+$/.test(policy.id);
         const endpoint = isPersisted
-          ? `${settings.apiBase.replace(/\/$/, "")}/api/v1/policies/${policy.id}`
-          : `${settings.apiBase.replace(/\/$/, "")}/api/v1/policies`;
+          ? `${apiBaseUrl}/api/v1/policies/${policy.id}`
+          : `${apiBaseUrl}/api/v1/policies`;
         const method = isPersisted ? "PUT" : "POST";
         const response = await fetch(endpoint, {
           method,
@@ -1987,7 +2028,7 @@ export default function Home() {
       for (const policy of policies) {
         const wasPersisted = /^\d+$/.test(policy.id);
         if (!wasPersisted || nextById.has(policy.id)) continue;
-        const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/policies/${policy.id}`, {
+        const response = await fetch(`${apiBaseUrl}/api/v1/policies/${policy.id}`, {
           method: "DELETE",
           headers: buildHeaders(settings, "admin", false, authSession),
         });
@@ -2012,7 +2053,7 @@ export default function Home() {
 
       for (const tool of nextTools) {
         if (!/^\d+$/.test(tool.id)) continue;
-        const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/tool-policies/${tool.id}`, {
+        const response = await fetch(`${apiBaseUrl}/api/v1/tool-policies/${tool.id}`, {
           method: "PUT",
           headers: buildHeaders(settings, "admin", true, authSession),
           body: JSON.stringify({
@@ -2041,7 +2082,7 @@ export default function Home() {
     const timer = window.setTimeout(() => controller.abort(), 5000);
 
     try {
-      const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/health`, {
+      const response = await fetch(`${apiBaseUrl}/health`, {
         signal: controller.signal,
         cache: "no-store",
       });
@@ -2084,7 +2125,7 @@ export default function Home() {
     const timer = window.setTimeout(() => controller.abort(), 7000);
 
     try {
-      const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/logs?limit=80`, {
+      const response = await fetch(`${apiBaseUrl}/api/v1/logs?limit=80`, {
         headers: buildHeaders(settings, "admin", false, authSession),
         signal: controller.signal,
         cache: "no-store",
@@ -2124,7 +2165,7 @@ export default function Home() {
       const timer = window.setTimeout(() => controller.abort(), 7000);
 
       try {
-        const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/metrics`, {
+        const response = await fetch(`${apiBaseUrl}/metrics`, {
           headers: buildHeaders(settings, "admin", false, authSession),
           signal: controller.signal,
           cache: "no-store",
@@ -2188,15 +2229,15 @@ export default function Home() {
 
     try {
       const [approvalResponse, alertResponse, replayResponse] = await Promise.all([
-        fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/approvals?status=pending`, {
+        fetch(`${apiBaseUrl}/api/v1/approvals?status=pending`, {
           headers: buildHeaders(settings, "admin", false, authSession),
           cache: "no-store",
         }),
-        fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/alerts`, {
+        fetch(`${apiBaseUrl}/api/v1/alerts`, {
           headers: buildHeaders(settings, "admin", false, authSession),
           cache: "no-store",
         }),
-        fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/replays`, {
+        fetch(`${apiBaseUrl}/api/v1/replays`, {
           headers: buildHeaders(settings, "admin", false, authSession),
           cache: "no-store",
         }),
@@ -2528,12 +2569,12 @@ export default function Home() {
 
     try {
       const [policyResponse, toolResponse] = await Promise.all([
-        fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/policies`, {
+        fetch(`${apiBaseUrl}/api/v1/policies`, {
           headers: buildHeaders(settings, "admin", false, authSession),
           signal: controller.signal,
           cache: "no-store",
         }),
-        fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/tool-policies`, {
+        fetch(`${apiBaseUrl}/api/v1/tool-policies`, {
           headers: buildHeaders(settings, "admin", false, authSession),
           signal: controller.signal,
           cache: "no-store",
@@ -2651,7 +2692,7 @@ export default function Home() {
     const controller = new AbortController();
     void (async () => {
       try {
-        const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/auth/me`, {
+        const response = await fetch(`${apiBaseUrl}/api/v1/auth/me`, {
           headers: buildHeaders(settings, "client", false, authSession),
           signal: controller.signal,
           cache: "no-store",
@@ -2743,10 +2784,10 @@ export default function Home() {
     const enabledPolicies = policies.filter((policy) => policy.enabled).length;
 
     return [
-      { label: "总拦截次数", value: totalBlocked, icon: AlertTriangle, tone: "text-red-200" },
-      { label: "提示词注入", value: promptInjections, icon: Activity, tone: "text-teal-200" },
-      { label: "高危事件", value: highRisk, icon: Gauge, tone: "text-amber-200" },
-      { label: "启用策略", value: `${enabledPolicies}/${policies.length}`, icon: ShieldCheck, tone: "text-emerald-200" },
+      { label: "总拦截次数", value: totalBlocked, icon: AlertTriangle, tone: "text-[var(--tone-danger-text)]" },
+      { label: "提示词注入", value: promptInjections, icon: Activity, tone: "text-[var(--tone-accent-text)]" },
+      { label: "高危事件", value: highRisk, icon: Gauge, tone: "text-[var(--tone-warning-text)]" },
+      { label: "启用策略", value: `${enabledPolicies}/${policies.length}`, icon: ShieldCheck, tone: "text-[var(--tone-success-text)]" },
     ];
   }, [logs, policies]);
 
@@ -2774,17 +2815,17 @@ export default function Home() {
       {
         label: "间接提示词注入",
         count: logs.filter((log) => /prompt|injection/i.test(log.threat_type)).length,
-        tone: "text-cyan-100",
+        tone: "text-[var(--tone-info-text)]",
       },
       {
         label: "敏感信息外传",
         count: logs.filter((log) => /exfiltration|credential/i.test(log.threat_type)).length,
-        tone: "text-rose-100",
+        tone: "text-[var(--tone-danger-text)]",
       },
       {
         label: "内网与工具越权",
         count: logs.filter((log) => /network|tool|command/i.test(log.threat_type)).length,
-        tone: "text-amber-100",
+        tone: "text-[var(--tone-warning-text)]",
       },
     ],
     [logs]
@@ -2793,6 +2834,30 @@ export default function Home() {
   const validationSummary = useMemo(() => {
     return summarizeValidationResults(validationResults);
   }, [validationResults]);
+
+  /* 检测层命中分布：从真实日志与策略推导，不是写死的宣传数字。
+     层一（签名）/ 层二（语义）/ DLP / 工具权限四路各自的可观测计数。
+     日志里没有 layer 字段时（老事件），退化为按威胁类型归类，
+     保证四路计数始终反映"当前这套规则实际在拦什么"。 */
+  const detectionLayerStats = useMemo(() => {
+    const layerOf = (log: InterceptLog) => detailText(log.details.layer).toLowerCase();
+    const signature = logs.filter((log) => {
+      const l = layerOf(log);
+      return l.includes("signature") || l.includes("regex") || l.includes("blacklist");
+    }).length;
+    const semantic = logs.filter((log) => {
+      const l = layerOf(log);
+      return l.includes("semantic") || l.includes("ml") || l.includes("model");
+    }).length;
+    const dlp = logs.filter((log) => {
+      const l = layerOf(log);
+      return l.includes("dlp") || l.includes("response");
+    }).length;
+    const tool = logs.filter((log) =>
+      /tool_permission|tool_denied/i.test(`${log.threat_type} ${detailText(log.details.category)}`)
+    ).length;
+    return { signature, semantic, dlp, tool };
+  }, [logs]);
 
   const managedKeyStats = useMemo(() => {
     const active = managedKeys.filter((item) => managedKeyStatus(item).label === "生效中").length;
@@ -3090,8 +3155,8 @@ export default function Home() {
     try {
       const endpoint =
         authMode === "login"
-          ? `${settings.apiBase.replace(/\/$/, "")}/api/v1/auth/login`
-          : `${settings.apiBase.replace(/\/$/, "")}/api/v1/auth/register`;
+          ? `${apiBaseUrl}/api/v1/auth/login`
+          : `${apiBaseUrl}/api/v1/auth/register`;
       const bootstrapToken = authForm.bootstrapToken.trim();
       const inviteToken = authForm.inviteToken.trim();
       const response = await fetch(endpoint, {
@@ -3588,11 +3653,11 @@ export default function Home() {
       void (async () => {
         try {
           const [policyResponse, toolResponse] = await Promise.all([
-            fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/policies/reset`, {
+            fetch(`${apiBaseUrl}/api/v1/policies/reset`, {
               method: "POST",
               headers: buildHeaders(settings, "admin", false, authSession),
             }),
-            fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/tool-policies/reset`, {
+            fetch(`${apiBaseUrl}/api/v1/tool-policies/reset`, {
               method: "POST",
               headers: buildHeaders(settings, "admin", false, authSession),
             }),
@@ -3659,7 +3724,7 @@ export default function Home() {
     if (hasAdminAccess && /^\d+$/.test(policyId)) {
       void (async () => {
         try {
-          const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/policies/${policyId}`, {
+          const response = await fetch(`${apiBaseUrl}/api/v1/policies/${policyId}`, {
             method: "DELETE",
             headers: buildHeaders(settings, "admin", false, authSession),
           });
@@ -3679,7 +3744,7 @@ export default function Home() {
   const saveSettings = () => {
     const normalized: AppSettings = {
       ...settings,
-      apiBase: settings.apiBase.trim().replace(/\/$/, "") || DEFAULT_API_BASE,
+      apiBase: (settings.apiBase || "").trim().replace(/\/$/, "") || DEFAULT_API_BASE,
       refreshInterval: Math.max(10, Number(settings.refreshInterval) || 30),
     };
     setSettings(normalized);
@@ -3924,7 +3989,7 @@ export default function Home() {
     }
 
     try {
-      const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/approvals/${approvalId}/review`, {
+      const response = await fetch(`${apiBaseUrl}/api/v1/approvals/${approvalId}/review`, {
         method: "POST",
         headers: buildHeaders(settings, "admin", true, authSession),
         body: JSON.stringify({
@@ -3948,7 +4013,7 @@ export default function Home() {
     }
 
     try {
-      const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/replays`, {
+      const response = await fetch(`${apiBaseUrl}/api/v1/replays`, {
         method: "POST",
         headers: buildHeaders(settings, "admin", true, authSession),
         body: JSON.stringify({ request_id: requestId }),
@@ -4122,7 +4187,7 @@ export default function Home() {
       }
 
       try {
-        const analyzeResponse = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/analyze`, {
+        const analyzeResponse = await fetch(`${apiBaseUrl}/api/v1/analyze`, {
           method: "POST",
           headers: buildHeaders(settings, "client", true, authSession),
           body: JSON.stringify({
@@ -4250,7 +4315,7 @@ export default function Home() {
     const timer = window.setTimeout(() => controller.abort(), 10000);
 
     try {
-      const analyzeResponse = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/analyze`, {
+      const analyzeResponse = await fetch(`${apiBaseUrl}/api/v1/analyze`, {
         method: "POST",
         headers: buildHeaders(settings, "client", true, authSession),
         signal: controller.signal,
@@ -4291,7 +4356,7 @@ export default function Home() {
         return;
       }
 
-      const response = await fetch(`${settings.apiBase.replace(/\/$/, "")}/api/v1/chat/completions`, {
+      const response = await fetch(`${apiBaseUrl}/api/v1/chat/completions`, {
         method: "POST",
         headers: buildHeaders(settings, "client", true, authSession),
         signal: controller.signal,
@@ -4394,20 +4459,36 @@ export default function Home() {
   };
 
   const renderToasts = () => (
-    <div className="fixed right-4 top-4 z-50 grid w-[min(360px,calc(100vw-2rem))] gap-2.5">
+    <div
+      className="fixed right-4 top-4 z-[var(--z-toast)] grid w-[min(360px,calc(100vw-2rem))] gap-2.5"
+      role="region"
+      aria-label="通知"
+    >
+      {/* 屏幕阅读器需要被主动告知：错误用 assertive，其余用 polite */}
+      <div className="sr-only" aria-live="polite" aria-atomic="false">
+        {toasts.map((toast) => (
+          <p key={toast.id}>{toast.message}</p>
+        ))}
+      </div>
       <AnimatePresence>
         {toasts.map((toast) => (
           <motion.div
             key={toast.id}
-            initial={{ opacity: 0, y: -10, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1, transition: { type: "spring", stiffness: 420, damping: 28 } }}
-            exit={{ opacity: 0, y: -8, scale: 0.96, transition: { duration: 0.18, ease: "easeOut" } }}
-            className={`rounded-2xl border px-4 py-3 text-sm shadow-[0_16px_40px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.15)] backdrop-blur-[24px] ${
+            initial={{ opacity: 0, y: -10, scale: 0.97 }}
+            animate={{
+              opacity: 1,
+              y: 0,
+              scale: 1,
+              transition: { duration: 0.24, ease: [0.16, 1, 0.3, 1] },
+            }}
+            exit={{ opacity: 0, y: -8, scale: 0.97, transition: { duration: 0.16, ease: [0.4, 0, 1, 1] } }}
+            role={toast.type === "error" ? "alert" : "status"}
+            className={`rounded-[var(--radius-lg)] border px-4 py-3 text-[length:var(--text-body)] shadow-[var(--panel-shadow)] backdrop-blur-[var(--blur-glass)] ${
               toast.type === "success"
-                ? "border-emerald-300/35 bg-emerald-500/15 text-emerald-100"
+                ? "border-[color-mix(in_oklab,var(--tone-success)_36%,transparent)] bg-[var(--tone-success-surface)] text-[var(--tone-success-text)]"
                 : toast.type === "error"
-                  ? "border-red-300/35 bg-red-500/15 text-red-100"
-                  : "border-white/[0.14] bg-[var(--surface-elevated)] text-[var(--text-primary)]"
+                  ? "border-[color-mix(in_oklab,var(--tone-danger)_36%,transparent)] bg-[var(--tone-danger-surface)] text-[var(--tone-danger-text)]"
+                  : "border-[var(--panel-border)] bg-[var(--surface-elevated)] text-[var(--text-primary)]"
             }`}
           >
             {toast.message}
@@ -4418,46 +4499,67 @@ export default function Home() {
   );
 
   const renderAuthScreen = () => (
-    <main className="relative min-h-screen overflow-hidden bg-background text-foreground">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,var(--page-glow-a),transparent_32rem),radial-gradient(circle_at_86%_16%,var(--page-glow-b),transparent_32rem),linear-gradient(135deg,rgba(255,255,255,0.04),transparent_40%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(var(--page-grid)_1px,transparent_1px),linear-gradient(90deg,var(--page-grid)_1px,transparent_1px)] bg-[size:64px_64px] opacity-25" />
-      <div className="relative mx-auto grid min-h-screen w-full max-w-6xl items-center gap-8 px-5 py-10 xl:grid-cols-[minmax(0,1fr)_minmax(320px,440px)]">
-        <section>
-          <div className="inline-flex items-center gap-2 rounded-full border border-teal-200/25 bg-teal-300/10 px-3.5 py-1.5 text-sm font-medium text-[var(--tone-accent-text)] backdrop-blur-[18px]">
-            <Shield className="h-4 w-4" aria-hidden />
+    <main className="relative min-h-[100dvh] overflow-hidden bg-background text-foreground">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,var(--page-glow-a),transparent_32rem),radial-gradient(circle_at_86%_16%,var(--page-glow-b),transparent_32rem)]" aria-hidden />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(var(--page-grid)_1px,transparent_1px),linear-gradient(90deg,var(--page-grid)_1px,transparent_1px)] bg-[size:64px_64px] opacity-60 [mask-image:radial-gradient(ellipse_at_30%_10%,black,transparent_75%)]" aria-hidden />
+      <div className="relative mx-auto grid min-h-[100dvh] w-full max-w-6xl items-center gap-10 px-5 py-12 lg:gap-14 xl:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
+        <section className="max-w-2xl">
+          <div className="inline-flex items-center gap-2 rounded-full border border-[color-mix(in_oklab,var(--tone-accent)_26%,transparent)] bg-[var(--tone-accent-surface)] px-3 py-1 text-[length:var(--text-micro)] font-semibold uppercase tracking-[0.14em] text-[var(--tone-accent-text)]">
+            <Shield className="h-3.5 w-3.5" aria-hidden />
             Shadow Agent Runtime Security
           </div>
-          <h1 className="mt-5 max-w-3xl text-4xl font-semibold leading-tight text-[var(--text-primary)] sm:text-6xl">
-            把不可信上下文挡在 Agent 执行链路之外
+          <h1 className="mt-6 text-[length:var(--text-display)] font-bold leading-[1.08] tracking-[-0.03em] text-balance text-[var(--text-primary)] sm:text-[length:var(--text-display)] lg:text-[length:var(--text-display)] lg:leading-[1.04]">
+            把不可信上下文挡在
+            <br />
+            Agent 执行链路之外
           </h1>
-          <p className="mt-5 max-w-2xl text-base leading-7 text-[var(--text-secondary)]">
+          <p className="mt-6 max-w-xl text-[length:var(--text-lead)] leading-8 text-[var(--text-secondary)]">
             登录后可以直接进入模型对话；管理员账号还可以使用日志审计、策略配置、密钥治理和网关安全测试。首次初始化管理员时，需要提供后端配置的 bootstrap token。
           </p>
-          <div className="mt-7 grid max-w-3xl gap-3.5 sm:grid-cols-3">
+          {/* 不用「三特性卡」——反 AI 味检查表 #3 的逐字命中。
+              换成从入口到阻断的真实链路，带序号与语义色：
+              读者一眼看懂数据怎么流动，这是产品特有的信息，不是通用卖点。 */}
+          <ol className="mt-9 max-w-2xl space-y-0">
             {[
-              ["间接注入", "外部检索与插件结果隔离"],
-              ["工具权限", "危险工具默认阻断"],
-              ["审计留痕", "请求 ID 与规则命中追踪"],
-            ].map(([title, body]) => (
-              <div key={title} className={`${glassPanelSoftClass} p-4.5`}>
-                <div className="text-sm font-semibold text-[var(--text-primary)]">{title}</div>
-                <div className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">{body}</div>
-              </div>
+              { step: "1", title: "外部内容进入", body: "检索结果、插件输出、工具返回值一律标记为不可信", tone: "var(--tone-warning)" },
+              { step: "2", title: "分层审计", body: "确定性签名 → 语义模型 → 工具权限，逐层判定", tone: "var(--tone-info)" },
+              { step: "3", title: "处置与留痕", body: "放行 / 告警 / 脱敏 / 阻断，事件带请求 ID 入库", tone: "var(--tone-danger)" },
+            ].map((item, index) => (
+              <li key={item.step} className="relative flex gap-4 pb-5 last:pb-0">
+                {/* 连接线：最后一项不画 */}
+                {index < 2 ? (
+                  <span
+                    aria-hidden
+                    className="absolute left-[11px] top-7 h-[calc(100%-1.25rem)] w-px bg-[var(--divider)]"
+                  />
+                ) : null}
+                <span
+                  aria-hidden
+                  className="relative z-10 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border bg-[var(--panel-bg-solid)] text-[length:var(--text-micro)] font-semibold"
+                  style={{ borderColor: item.tone, color: item.tone }}
+                >
+                  {item.step}
+                </span>
+                <span className="min-w-0 pt-0.5">
+                  <span className="block text-[length:var(--text-caption)] font-semibold text-[var(--text-primary)]">{item.title}</span>
+                  <span className="mt-1 block text-[length:var(--text-micro)] leading-5 text-[var(--text-muted)]">{item.body}</span>
+                </span>
+              </li>
             ))}
-          </div>
+          </ol>
         </section>
 
-        <section className={`${glassPanelClass} relative overflow-hidden p-6 sm:p-7 shadow-[var(--panel-shadow)]`}>
+        <section className={`${glassPanelClass} relative overflow-hidden p-6 sm:p-7`}>
           <PanelGlow />
           <div className="relative">
-            <div className="flex rounded-2xl border border-white/[0.08] bg-[var(--surface-raised)] p-1.5 shadow-[inset_0_1px_2px_rgba(0,0,0,0.04)]">
+            <div className="flex gap-1 rounded-[var(--radius-sm)] border border-[var(--panel-border-soft)] bg-[var(--surface-sunken)] p-1">
               <button
                 type="button"
                 onClick={() => setAuthMode("login")}
-                className={`min-h-10 flex-1 rounded-xl text-sm font-medium transition-all duration-200 ease-out ${
+                className={`min-h-9 flex-1 rounded-[var(--radius-xs)] text-[length:var(--text-caption)] font-semibold transition-colors duration-[var(--dur-fast)] ${
                   authMode === "login"
-                    ? "bg-teal-300 text-zinc-950 shadow-[0_0_24px_rgba(45,212,191,0.22)]"
-                    : "text-[var(--text-secondary)] hover:bg-white/[0.06] hover:text-[var(--text-primary)]"
+                    ? "border border-[var(--panel-border)] bg-[var(--panel-bg-solid)] text-[var(--text-primary)] shadow-[var(--panel-shadow-soft)]"
+                    : "border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]"
                 }`}
               >
                 登录
@@ -4465,10 +4567,10 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => setAuthMode("register")}
-                className={`min-h-10 flex-1 rounded-xl text-sm font-medium transition-all duration-200 ease-out ${
+                className={`min-h-9 flex-1 rounded-[var(--radius-xs)] text-[length:var(--text-caption)] font-semibold transition-colors duration-[var(--dur-fast)] ${
                   authMode === "register"
-                    ? "bg-teal-300 text-zinc-950 shadow-[0_0_24px_rgba(45,212,191,0.22)]"
-                    : "text-[var(--text-secondary)] hover:bg-white/[0.06] hover:text-[var(--text-primary)]"
+                    ? "border border-[var(--panel-border)] bg-[var(--panel-bg-solid)] text-[var(--text-primary)] shadow-[var(--panel-shadow-soft)]"
+                    : "border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]"
                 }`}
               >
                 注册
@@ -4476,7 +4578,7 @@ export default function Home() {
             </div>
 
             {authMode === "register" ? (
-              <div className={`${glassPanelSoftClass} mt-4 px-3 py-3 text-xs leading-6 text-[var(--text-secondary)]`}>
+              <div className={`${glassPanelSoftClass} mt-4 px-3 py-3 text-[length:var(--text-micro)] leading-6 text-[var(--text-secondary)]`}>
                 {bootstrapStatus?.bootstrap_required
                   ? bootstrapStatus.bootstrap_token_configured
                     ? "当前后端还没有管理员账号。请在注册时填写 bootstrap token，完成首个管理员初始化。"
@@ -4494,7 +4596,7 @@ export default function Home() {
             <form onSubmit={handleAuth} className="mt-5 space-y-4">
               {authMode === "register" ? (
                 <label className="block">
-                  <span className="mb-2 block text-sm text-[var(--text-secondary)]">姓名</span>
+                  <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">姓名</span>
                   <input
                     value={authForm.name}
                     onChange={(event) => setAuthForm((current) => ({ ...current, name: event.target.value }))}
@@ -4504,7 +4606,7 @@ export default function Home() {
                 </label>
               ) : null}
               <label className="block">
-                <span className="mb-2 block text-sm text-[var(--text-secondary)]">邮箱</span>
+                <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">邮箱</span>
                 <input
                   value={authForm.email}
                   onChange={(event) => setAuthForm((current) => ({ ...current, email: event.target.value }))}
@@ -4514,7 +4616,7 @@ export default function Home() {
                 />
               </label>
               <label className="block">
-                <span className="mb-2 block text-sm text-[var(--text-secondary)]">密码</span>
+                <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">密码</span>
                 <input
                   value={authForm.password}
                   onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
@@ -4525,7 +4627,7 @@ export default function Home() {
               </label>
               {authMode === "register" ? (
                 <label className="block">
-                  <span className="mb-2 block text-sm text-[var(--text-secondary)]">确认密码</span>
+                  <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">确认密码</span>
                   <input
                     value={authForm.confirmPassword}
                     onChange={(event) => setAuthForm((current) => ({ ...current, confirmPassword: event.target.value }))}
@@ -4537,7 +4639,7 @@ export default function Home() {
               ) : null}
               {authMode === "register" && bootstrapStatus?.bootstrap_required ? (
                 <label className="block">
-                  <span className="mb-2 block text-sm text-[var(--text-secondary)]">Bootstrap Token（首次管理员初始化）</span>
+                  <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">Bootstrap Token（首次管理员初始化）</span>
                   <input
                     value={authForm.bootstrapToken}
                     onChange={(event) => setAuthForm((current) => ({ ...current, bootstrapToken: event.target.value }))}
@@ -4549,7 +4651,7 @@ export default function Home() {
               ) : null}
               {authMode === "register" && !bootstrapStatus?.bootstrap_required && bootstrapStatus?.invite_token_configured ? (
                 <label className="block">
-                  <span className="mb-2 block text-sm text-[var(--text-secondary)]">邀请码（由管理员提供）</span>
+                  <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">邀请码（由管理员提供）</span>
                   <input
                     value={authForm.inviteToken}
                     onChange={(event) => setAuthForm((current) => ({ ...current, inviteToken: event.target.value }))}
@@ -4566,12 +4668,12 @@ export default function Home() {
             </form>
 
             {authMode === "login" ? (
-              <div className="mt-5 rounded-2xl border border-white/[0.08] bg-[var(--surface-raised)] p-4 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
-                <div className="flex items-center gap-2 text-xs font-medium text-zinc-300">
-                  <Globe className="h-3.5 w-3.5 text-teal-200" aria-hidden />
+              <div className="mt-4 rounded-[var(--radius-md)] border border-[var(--panel-border-soft)] bg-[var(--surface-sunken)] p-4">
+                <div className="flex items-center gap-2 text-[length:var(--text-micro)] font-semibold uppercase tracking-[0.1em] text-[var(--text-muted)]">
+                  <Globe className="h-3.5 w-3.5 text-[var(--tone-info-text)]" aria-hidden />
                   组织单点登录（SSO）
                 </div>
-                <div className="mt-2.5 flex gap-2">
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                   <input
                     value={ssoSlug}
                     onChange={(event) => setSsoSlug(event.target.value)}
@@ -4582,7 +4684,7 @@ export default function Home() {
                       }
                     }}
                     placeholder="组织标识，如 acme"
-                    className={`${inputBase} min-h-9`}
+                    className={`${inputBase} min-h-9 sm:flex-1`}
                     aria-label="组织标识（slug）"
                     autoComplete="off"
                   />
@@ -4590,25 +4692,35 @@ export default function Home() {
                     type="button"
                     onClick={() => void startSsoLogin()}
                     disabled={ssoBusy}
-                    className={`${buttonClass("secondary")} min-h-9 shrink-0`}
+                    className={`${buttonClass("secondary")} min-h-9 shrink-0 whitespace-nowrap sm:w-auto`}
                   >
                     {ssoBusy ? "跳转中…" : "SSO 登录"}
                   </button>
                 </div>
-                {ssoHint ? <p className="mt-2 text-xs leading-5 text-amber-200">{ssoHint}</p> : null}
-                <p className="mt-2 text-[11px] leading-5 text-zinc-500">
+                {ssoHint ? <p className="mt-2 text-[length:var(--text-micro)] leading-5 text-[var(--tone-warning-text)]">{ssoHint}</p> : null}
+                <p className="mt-2 text-[length:var(--text-micro)] leading-5 text-[var(--text-muted)]">
                   已由组织管理员配置 OIDC 身份提供方的成员，可输入组织标识直达企业登录。
                 </p>
               </div>
             ) : null}
 
-            <button type="button" onClick={enterDemo} className={`${buttonClass("secondary")} mt-3 w-full`}>
+            <div className="mt-4 flex items-center gap-3" aria-hidden>
+              <span className="h-px flex-1 bg-[var(--divider)]" />
+              <span className="text-[length:var(--text-micro)] font-medium uppercase tracking-[0.1em] text-[var(--text-muted)]">或</span>
+              <span className="h-px flex-1 bg-[var(--divider)]" />
+            </div>
+
+            <button type="button" onClick={enterDemo} className={`${buttonClass("secondary")} mt-4 w-full`}>
               <Sparkles className="h-4 w-4" aria-hidden />
               使用本地验证数据进入
             </button>
 
-            <div className="mt-5 rounded-2xl border border-white/[0.08] bg-[var(--surface-raised)] p-3.5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
-              <GlassInterceptLogCard log={SAMPLE_LOGS[0]} compact onSelect={enterDemo} />
+            <div className="mt-5 border-t border-[var(--divider)] pt-5">
+              <div className="mb-3 flex items-center justify-between">
+                <span className="text-[length:var(--text-micro)] font-semibold uppercase tracking-[0.1em] text-[var(--text-muted)]">拦截样例</span>
+                <span className="chip chip-danger">Blocked</span>
+              </div>
+              <GlassInterceptLogCard log={SAMPLE_LOGS[0]} compact dense onSelect={enterDemo} />
             </div>
           </div>
         </section>
@@ -4622,8 +4734,8 @@ export default function Home() {
       return (
         <section className={`${glassPanelClass} relative overflow-hidden p-6`}>
           <PanelGlow />
-          <div className="relative flex items-start gap-3 text-sm leading-6 text-zinc-300">
-            <Shield className="mt-0.5 h-5 w-5 shrink-0 text-amber-200" aria-hidden />
+          <div className="relative flex items-start gap-3 text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">
+            <Shield className="mt-0.5 h-5 w-5 shrink-0 text-[var(--tone-warning-text)]" aria-hidden />
             <span>
               运行状态页需要管理员权限。请使用管理员账号登录，或在「设置」中配置 Admin API Key 后重试。
             </span>
@@ -4662,12 +4774,21 @@ export default function Home() {
     const statusItems = Array.from(statusGroups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
     const statusTotal = statusItems.reduce((sum, [, count]) => sum + count, 0);
 
-    const statusTone = (status: string) => {
-      if (status.startsWith("2")) return "border-emerald-300/25 bg-emerald-300/10 text-emerald-200";
-      if (status === "403") return "border-rose-300/25 bg-rose-300/10 text-rose-200";
-      if (status.startsWith("4")) return "border-amber-300/25 bg-amber-300/10 text-amber-200";
-      if (status.startsWith("5")) return "border-red-400/25 bg-red-400/10 text-red-200";
-      return "border-white/15 bg-white/[0.06] text-zinc-300";
+    /* 状态码 → 语义 chip。原先手写 emerald/rose/amber/red 调色板在浅色主题下
+       部分组合对比度不达标；语义 token 两主题都安全（见 globals.css 的 chip-*）。 */
+    const statusChipClass = (status: string) => {
+      if (status.startsWith("2")) return "chip-success";
+      if (status === "403") return "chip-danger";
+      if (status.startsWith("4")) return "chip-warning";
+      if (status.startsWith("5")) return "chip-danger";
+      return "chip-neutral";
+    };
+    /* 分布条填充色：需要实心而非 chip 的浅底，用 --tone-* 实心色。 */
+    const statusBarClass = (status: string) => {
+      if (status.startsWith("2")) return "bg-[var(--tone-success)]";
+      if (status === "403" || status.startsWith("5")) return "bg-[var(--tone-danger)]";
+      if (status.startsWith("4")) return "bg-[var(--tone-warning)]";
+      return "bg-[var(--divider-strong)]";
     };
 
     const retentionEntries = metricsSnapshot
@@ -4679,28 +4800,28 @@ export default function Home() {
         label: "累计请求",
         value: metricsSnapshot ? formatMetricsCount(metricsSnapshot.totalRequests) : "—",
         icon: Activity,
-        tone: "text-teal-200",
+        tone: "text-[var(--tone-accent-text)]",
         hint: metricsSnapshot ? `${metricsSnapshot.routes.length} 个路由` : "尚未采集",
       },
       {
         label: "安全阻断 (403)",
         value: metricsSnapshot ? formatMetricsCount(metricsSnapshot.blockedRequests) : "—",
         icon: ShieldCheck,
-        tone: metricsSnapshot && metricsSnapshot.blockedRequests > 0 ? "text-rose-200" : "text-emerald-200",
+        tone: metricsSnapshot && metricsSnapshot.blockedRequests > 0 ? "text-[var(--tone-danger-text)]" : "text-[var(--tone-success-text)]",
         hint: "被策略引擎拦截的请求",
       },
       {
         label: "服务端错误 (5xx)",
         value: metricsSnapshot ? formatMetricsCount(metricsSnapshot.serverErrors) : "—",
         icon: AlertTriangle,
-        tone: metricsSnapshot && metricsSnapshot.serverErrors > 0 ? "text-red-300" : "text-zinc-200",
+        tone: metricsSnapshot && metricsSnapshot.serverErrors > 0 ? "text-[var(--tone-danger-text)]" : "text-[var(--text-primary)]",
         hint: metricsSnapshot && metricsSnapshot.serverErrors > 0 ? "需要立即关注" : "运行正常",
       },
       {
         label: "平均响应延迟",
         value: avgLatency !== null ? formatMetricsLatency(avgLatency / 1000) : "—",
         icon: Gauge,
-        tone: "text-sky-200",
+        tone: "text-[var(--tone-info-text)]",
         hint: metricsSnapshot ? `${formatMetricsCount(metricsSnapshot.latencyCount)} 次采样` : "尚未采集",
       },
     ];
@@ -4712,27 +4833,27 @@ export default function Home() {
           <div className="absolute inset-y-0 right-0 hidden w-[34%] bg-[radial-gradient(circle_at_top,rgba(45,212,191,0.16),transparent_52%),radial-gradient(circle_at_bottom,rgba(56,189,248,0.14),transparent_50%)] lg:block" />
           <div className="relative flex flex-wrap items-start justify-between gap-4">
             <div className="space-y-3">
-              <div className="inline-flex items-center gap-2 rounded-full border border-teal-200/20 bg-teal-300/10 px-3 py-1 text-xs font-medium text-[var(--tone-accent-text)]">
+              <div className="inline-flex items-center gap-2 rounded-full border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--tone-accent-surface)] px-3 py-1 text-[length:var(--text-micro)] font-medium text-[var(--tone-accent-text)]">
                 <Sparkles className="h-3.5 w-3.5" aria-hidden />
                 实时遥测 · 每 5 秒自动采集
               </div>
-              <h2 className="text-2xl font-semibold leading-tight text-white sm:text-3xl">网关运行状态</h2>
-              <p className="max-w-2xl text-sm leading-7 text-zinc-300">
-                数据来自后端 <span className="font-mono text-teal-200">/metrics</span>（Prometheus 格式）：请求计数、延迟直方图与保留清理计数。切换到其他页面时自动停止采集。
+              <h2 className="text-[length:var(--text-title)] font-semibold leading-tight text-[var(--text-primary)] sm:text-[length:var(--text-title)]">网关运行状态</h2>
+              <p className="max-w-2xl text-[length:var(--text-body)] leading-7 text-[var(--text-secondary)]">
+                数据来自后端 <span className="font-mono text-[var(--tone-accent-text)]">/metrics</span>（Prometheus 格式）：请求计数、延迟直方图与保留清理计数。切换到其他页面时自动停止采集。
               </p>
-              <div className="flex flex-wrap items-center gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2 text-[length:var(--text-micro)]">
                 <span
                   className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${
                     health.status === "online"
-                      ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-200"
-                      : "border-amber-300/25 bg-amber-300/10 text-amber-200"
+                      ? "border-[color-mix(in_oklab,var(--tone-success)_28%,transparent)] bg-[var(--tone-success-surface)] text-[var(--tone-success-text)]"
+                      : "border-[color-mix(in_oklab,var(--tone-warning)_28%,transparent)] bg-[var(--tone-warning-surface)] text-[var(--tone-warning-text)]"
                   }`}
                 >
                   <Network className="h-3 w-3" aria-hidden />
                   {health.status === "online" ? `网关在线${health.message ? ` · ${health.message}` : ""}` : "网关未检测"}
                 </span>
                 {metricsSnapshot && (
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.06] px-2.5 py-1 text-zinc-300">
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--panel-border)] bg-[var(--surface-raised)] px-2.5 py-1 text-[var(--text-secondary)]">
                     <Database className="h-3 w-3" aria-hidden />
                     数据库保留清理已移除 {formatMetricsCount(Object.values(metricsSnapshot.retentionPurged).reduce((sum, count) => sum + count, 0))} 行
                   </span>
@@ -4763,106 +4884,96 @@ export default function Home() {
 
         {metricsError && !metricsSnapshot && (
           <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
-            <PanelGlow />
-            <div className="relative flex items-start gap-3 text-sm leading-6 text-rose-200">
+            <div className="relative flex items-start gap-3 text-[length:var(--text-body)] leading-6 text-[var(--tone-danger-text)]">
               <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" aria-hidden />
               <span>指标拉取失败：{metricsError}。请确认后端已启动、管理员凭证有效，然后点击「立即刷新」。</span>
             </div>
           </section>
         )}
 
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {/* 四张同构指标卡 → 一条被分隔线切开的指标带。
+            原先每张都带 PanelGlow 光斑 + hover 上浮，四个光斑同屏是纯噪声。 */}
+        <div className="grid gap-px overflow-hidden rounded-[var(--radius-lg)] border border-[var(--panel-border)] bg-[var(--divider)] sm:grid-cols-2 xl:grid-cols-4">
           {statCards.map((card) => (
-            <motion.section key={card.label} whileHover={{ y: -3 }} className={`${glassPanelClass} ${glassPanelMotionClass} relative overflow-hidden p-5`}>
-              <PanelGlow />
-              <div className="relative flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-xs font-medium tracking-wide text-zinc-400">{card.label}</div>
-                  <div className={`mt-2 font-mono text-3xl font-semibold ${card.tone}`}>{card.value}</div>
-                  <div className="mt-2 text-xs text-zinc-500">{card.hint}</div>
+            <div key={card.label} className="bg-[var(--panel-bg)] p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[length:var(--text-micro)] font-medium uppercase tracking-[0.08em] text-[var(--text-muted)]">{card.label}</div>
+                  <div className={`tnum mt-2 font-mono text-[length:var(--text-title)] font-semibold ${card.tone}`}>{card.value}</div>
+                  <div className="mt-1.5 text-[length:var(--text-micro)] text-[var(--text-muted)]">{card.hint}</div>
                 </div>
-                <card.icon className={`h-5 w-5 shrink-0 ${card.tone}`} aria-hidden />
+                <card.icon className={`h-4 w-4 shrink-0 ${card.tone}`} aria-hidden />
               </div>
-            </motion.section>
+            </div>
           ))}
         </div>
 
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(300px,1fr)]">
           <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
-            <PanelGlow />
             <div className="relative flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-sm font-semibold text-white">请求吞吐趋势</h3>
-                <p className="mt-1 text-xs text-zinc-500">
+                <h3 className="text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">请求吞吐趋势</h3>
+                <p className="mt-1 text-[length:var(--text-micro)] text-[var(--text-muted)]">
                   相邻两次采集的计数差分，窗口约 {metricsHistory.length * 5}s
                   {metricsHistory.length > 0 &&
                     ` · 始于 ${new Date(metricsHistory[0].ts).toLocaleTimeString("zh-CN", { hour12: false })}`}
                 </p>
               </div>
               <div className="text-right">
-                <div className="font-mono text-2xl font-semibold text-teal-200">{currentQps.toFixed(1)}</div>
-                <div className="text-xs text-zinc-500">req/s</div>
+                <div className="font-mono text-[length:var(--text-title)] font-semibold text-[var(--tone-accent-text)]">{currentQps.toFixed(1)}</div>
+                <div className="text-[length:var(--text-micro)] text-[var(--text-muted)]">req/s</div>
               </div>
             </div>
-            <div className="relative mt-4 h-36 rounded-xl border border-white/[0.08] bg-white/[0.03] p-2.5">
+            <div className="relative mt-4 h-36 rounded-[var(--radius-md)] border border-[var(--panel-border)] bg-[var(--surface-sunken)] p-2.5">
               <Sparkline points={qpsSeries} strokeWidth={2} />
             </div>
-            <div className="relative mt-4 grid grid-cols-2 gap-3 text-xs text-zinc-500 sm:grid-cols-4">
+            <div className="relative mt-4 grid grid-cols-2 gap-3 text-[length:var(--text-micro)] text-[var(--text-muted)] sm:grid-cols-4">
               <div>
-                <div className="text-zinc-400">窗口峰值</div>
-                <div className="mt-1 font-mono text-sm text-zinc-200">
+                <div className="text-[var(--text-secondary)]">窗口峰值</div>
+                <div className="mt-1 font-mono text-[length:var(--text-body)] text-[var(--text-primary)]">
                   {qpsSeries.length > 0 ? `${Math.max(...qpsSeries).toFixed(1)} req/s` : "—"}
                 </div>
               </div>
               <div>
-                <div className="text-zinc-400">窗口均值</div>
-                <div className="mt-1 font-mono text-sm text-zinc-200">
+                <div className="text-[var(--text-secondary)]">窗口均值</div>
+                <div className="mt-1 font-mono text-[length:var(--text-body)] text-[var(--text-primary)]">
                   {qpsSeries.length > 0 ? `${(qpsSeries.reduce((sum, value) => sum + value, 0) / qpsSeries.length).toFixed(1)} req/s` : "—"}
                 </div>
               </div>
               <div>
-                <div className="text-zinc-400">延迟趋势</div>
-                <div className="mt-1 font-mono text-sm text-zinc-200">
+                <div className="text-[var(--text-secondary)]">延迟趋势</div>
+                <div className="mt-1 font-mono text-[length:var(--text-body)] text-[var(--text-primary)]">
                   {latencySeries.length > 0 ? formatMetricsLatency(latencySeries[latencySeries.length - 1] / 1000) : "—"}
                 </div>
               </div>
               <div>
-                <div className="text-zinc-400">采集点数</div>
-                <div className="mt-1 font-mono text-sm text-zinc-200">{metricsHistory.length}</div>
+                <div className="text-[var(--text-secondary)]">采集点数</div>
+                <div className="mt-1 font-mono text-[length:var(--text-body)] text-[var(--text-primary)]">{metricsHistory.length}</div>
               </div>
             </div>
           </section>
 
           <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
-            <PanelGlow />
-            <h3 className="relative text-sm font-semibold text-white">状态码分布</h3>
-            <p className="relative mt-1 text-xs text-zinc-500">自后端启动以来的全部请求</p>
+            <h3 className="relative text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">状态码分布</h3>
+            <p className="relative mt-1 text-[length:var(--text-micro)] text-[var(--text-muted)]">自后端启动以来的全部请求</p>
             <div className="relative mt-4 space-y-2.5">
               {statusItems.length === 0 && (
-                <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-6 text-center text-sm text-zinc-500">
+                <div className="rounded-[var(--radius-md)] border border-[var(--panel-border)] bg-[var(--surface-sunken)] px-3 py-6 text-center text-[length:var(--text-body)] text-[var(--text-muted)]">
                   暂无请求数据，等待下一次采集
                 </div>
               )}
               {statusItems.map(([status, count]) => (
                 <div key={status} className="space-y-1">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono ${statusTone(status)}`}>{status}</span>
-                    <span className="font-mono text-zinc-300">
+                  <div className="flex items-center justify-between text-[length:var(--text-micro)]">
+                    <span className={`chip font-mono ${statusChipClass(status)}`}>{status}</span>
+                    <span className="font-mono text-[var(--text-secondary)]">
                       {formatMetricsCount(count)}
-                      {statusTotal > 0 && <span className="ml-1.5 text-zinc-500">{((count / statusTotal) * 100).toFixed(1)}%</span>}
+                      {statusTotal > 0 && <span className="ml-1.5 text-[var(--text-muted)]">{((count / statusTotal) * 100).toFixed(1)}%</span>}
                     </span>
                   </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+                  <div className="h-1.5 overflow-hidden rounded-full bg-[var(--surface-sunken)]">
                     <div
-                      className={`h-full rounded-full ${
-                        status === "403"
-                          ? "bg-rose-300/80"
-                          : status.startsWith("2")
-                            ? "bg-emerald-300/80"
-                            : status.startsWith("5")
-                              ? "bg-red-400/80"
-                              : "bg-amber-300/80"
-                      }`}
+                      className={`h-full rounded-full ${statusBarClass(status)}`}
                       style={{ width: `${statusTotal > 0 ? Math.max(2, (count / statusTotal) * 100) : 0}%` }}
                     />
                   </div>
@@ -4873,16 +4984,15 @@ export default function Home() {
         </div>
 
         <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
-          <PanelGlow />
           <div className="relative flex items-start justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold text-white">路由明细</h3>
-              <p className="mt-1 text-xs text-zinc-500">按请求量排序 · 平均延迟来自延迟直方图 sum/count</p>
+              <h3 className="text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">路由明细</h3>
+              <p className="mt-1 text-[length:var(--text-micro)] text-[var(--text-muted)]">按请求量排序 · 平均延迟来自延迟直方图 sum/count</p>
             </div>
           </div>
           <div className="relative mt-4 overflow-x-auto">
-            <div className="min-w-[640px] space-y-1.5">
-              <div className="grid grid-cols-[minmax(0,1.5fr)_90px_110px_minmax(120px,1fr)] gap-3 px-3 py-2 text-xs font-medium text-zinc-500">
+            <div className="min-w-[640px]">
+              <div className="grid grid-cols-[minmax(0,1.5fr)_90px_110px_minmax(120px,1fr)] gap-3 border-b border-[var(--panel-border)] px-3 py-2 text-[length:var(--text-micro)] font-medium uppercase tracking-[0.08em] text-[var(--text-muted)]">
                 <span>路由</span>
                 <span className="text-right">请求数</span>
                 <span className="text-right">平均延迟</span>
@@ -4893,22 +5003,26 @@ export default function Home() {
                   const routeAvg = route.latencyCount > 0 ? route.latencySum / route.latencyCount : null;
                   const maxRequests = metricsSnapshot.routes[0]?.requests ?? 1;
                   return (
-                    <div key={route.route} className={`${glassPanelSoftClass} grid grid-cols-[minmax(0,1.5fr)_90px_110px_minmax(120px,1fr)] items-center gap-3 px-3 py-2.5`}>
+                    <div
+                      key={route.route}
+                      className={`grid grid-cols-[minmax(0,1.5fr)_90px_110px_minmax(120px,1fr)] items-center gap-3 px-3 py-2.5 ${ledgerRowClass}`}
+                    >
                       <div className="min-w-0">
-                        <div className="truncate font-mono text-sm text-zinc-200">{route.route}</div>
-                        <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-white/[0.06]">
-                          <div className="h-full rounded-full bg-teal-300/70" style={{ width: `${Math.max(2, (route.requests / Math.max(1, maxRequests)) * 100)}%` }} />
+                        <div className="truncate font-mono text-[length:var(--text-body)] text-[var(--text-primary)]">{route.route}</div>
+                        {/* 请求量条：h-1 的细线即可，不必包一层容器盒 */}
+                        <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--surface-sunken)]">
+                          <div className="h-full rounded-full bg-[var(--accent-solid)]" style={{ width: `${Math.max(2, (route.requests / Math.max(1, maxRequests)) * 100)}%` }} />
                         </div>
                       </div>
-                      <span className="text-right font-mono text-sm text-zinc-200">{formatMetricsCount(route.requests)}</span>
-                      <span className="text-right font-mono text-sm text-zinc-200">
+                      <span className="tnum text-right font-mono text-[length:var(--text-body)] text-[var(--text-primary)]">{formatMetricsCount(route.requests)}</span>
+                      <span className="tnum text-right font-mono text-[length:var(--text-body)] text-[var(--text-primary)]">
                         {routeAvg !== null ? formatMetricsLatency(routeAvg) : "—"}
                       </span>
                       <div className="flex flex-wrap justify-end gap-1.5">
                         {Object.entries(route.statusCodes)
                           .sort((a, b) => a[0].localeCompare(b[0]))
                           .map(([status, count]) => (
-                            <span key={status} className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-xs ${statusTone(status)}`}>
+                            <span key={status} className={`chip font-mono ${statusChipClass(status)}`}>
                               {status}
                               <span className="opacity-75">{formatMetricsCount(count)}</span>
                             </span>
@@ -4918,9 +5032,9 @@ export default function Home() {
                   );
                 })
               ) : (
-                <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-8 text-center text-sm text-zinc-500">
+                <p className="border-b border-[var(--divider)] px-3 py-8 text-center text-[length:var(--text-body)] text-[var(--text-muted)]">
                   暂无路由数据。切换到「网关测试」发送几次请求，或等待自动采集。
-                </div>
+                </p>
               )}
             </div>
           </div>
@@ -4928,19 +5042,18 @@ export default function Home() {
 
         {retentionEntries.length > 0 && (
           <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
-            <PanelGlow />
-            <div className="relative flex items-center gap-2 text-sm font-semibold text-white">
-              <Database className="h-4 w-4 text-teal-200" aria-hidden />
+            <div className="relative flex items-center gap-2 text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">
+              <Database className="h-4 w-4 text-[var(--tone-accent-text)]" aria-hidden />
               日志保留清理记录
             </div>
-            <p className="relative mt-1 text-xs text-zinc-500">
+            <p className="relative mt-1 text-[length:var(--text-micro)] text-[var(--text-muted)]">
               满足 GDPR 数据最小化：过期的拦截/审计/告警/重放日志会被周期性删除。
             </p>
             <div className="relative mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               {retentionEntries.map(([table, count]) => (
                 <div key={table} className={`${glassPanelSoftClass} flex items-center justify-between px-3 py-2.5`}>
-                  <span className="font-mono text-sm text-zinc-300">{table}</span>
-                  <span className="font-mono text-sm font-semibold text-teal-200">-{formatMetricsCount(count)} 行</span>
+                  <span className="font-mono text-[length:var(--text-body)] text-[var(--text-secondary)]">{table}</span>
+                  <span className="font-mono text-[length:var(--text-body)] font-semibold text-[var(--tone-accent-text)]">-{formatMetricsCount(count)} 行</span>
                 </div>
               ))}
             </div>
@@ -4959,51 +5072,47 @@ export default function Home() {
       <div className="space-y-5">
         <section className={`${glassPanelClass} relative overflow-hidden p-6`}>
           <PanelGlow />
-          <div className="absolute inset-y-0 right-0 hidden w-[38%] bg-[radial-gradient(circle_at_top,rgba(45,212,191,0.18),transparent_52%),radial-gradient(circle_at_bottom,rgba(251,113,133,0.16),transparent_50%)] lg:block" />
           <div className="relative grid gap-6 2xl:grid-cols-[minmax(0,1.35fr)_minmax(300px,360px)]">
             <div className="space-y-5">
-              <div className="inline-flex items-center gap-2 rounded-full border border-teal-200/20 bg-teal-300/10 px-3 py-1 text-xs font-medium text-[var(--tone-accent-text)]">
+              <div className="inline-flex items-center gap-2 rounded-full border border-[color-mix(in_oklab,var(--tone-accent)_26%,transparent)] bg-[var(--tone-accent-surface)] px-3 py-1 text-[length:var(--text-micro)] font-semibold uppercase tracking-[0.12em] text-[var(--tone-accent-text)]">
                 <Sparkles className="h-3.5 w-3.5" aria-hidden />
                 安全验证总览
               </div>
               <div className="space-y-3">
-                <h2 className="max-w-4xl text-3xl font-semibold leading-tight text-white sm:text-4xl">
+                <h2 className="max-w-4xl text-[length:var(--text-title)] font-bold leading-[1.15] tracking-[-0.025em] text-[var(--text-primary)] sm:text-[length:var(--text-title)]">
                   不是简单拦 Prompt，而是在 Agent 运行时切断
-                  <span className="text-teal-200"> 不可信上下文到危险执行 </span>
+                  <span className="text-[var(--tone-accent-text)]"> 不可信上下文到危险执行 </span>
                   的整条链路
                 </h2>
-                <p className="max-w-3xl text-sm leading-7 text-zinc-300 sm:text-base">
+                <p className="max-w-3xl text-[length:var(--text-body)] leading-7 text-[var(--text-secondary)] sm:text-[length:var(--text-heading)]">
                   Shadow Agent 把检索结果、插件输出、工具返回值视为不可信数据，并在真正调用大模型或工具前完成分层审计、权限校验、危险行为识别与证据留痕。
                 </p>
               </div>
 
-              <div className="grid gap-3 lg:grid-cols-3">
+              {/* 不用「三特性卡」——那是反 AI 味检查表 #3 的逐字命中。
+                 换成产品特有的东西：真实的检测层清单 + 各自当前命中数。
+                 这是"只有 ShadowAgent 才有的一块"，换 Logo 不会变成别家。 */}
+              <dl className="grid gap-x-6 gap-y-0 border-y border-[var(--divider)] sm:grid-cols-2">
                 {[
-                  {
-                    title: "为什么有差异化",
-                    body: "把 Prompt 防护扩展到了工具权限、内网访问、凭据外传和回放审计，不是单点检测器。",
-                    icon: Shield,
-                  },
-                  {
-                    title: "场景化验证",
-                    body: "同一页面可以切换正常样本与高风险样本，快速验证阻断、告警和日志链路是否一致。",
-                    icon: Eye,
-                  },
-                  {
-                    title: "证据可追踪",
-                    body: "每一次拦截都带 request id、命中规则、风险分和证据摘要，方便排查与回放。",
-                    icon: Fingerprint,
-                  },
+                  { layer: "层一 · 确定性签名", detail: "强档独立阻断；弱档需指令动词佐证", count: detectionLayerStats.signature },
+                  { layer: "层二 · 语义检测", detail: "词袋模型 + 探针标定阈值，灰带留痕", count: detectionLayerStats.semantic },
+                  { layer: "响应侧 · DLP", detail: "出站内容脱敏，密钥与凭据模式识别", count: detectionLayerStats.dlp },
+                  { layer: "工具权限 · 策略", detail: "未授权工具调用与提权动作拦截", count: detectionLayerStats.tool },
                 ].map((item) => (
-                  <div key={item.title} className={`${glassPanelSoftClass} p-4`}>
-                    <div className="flex items-center gap-2 text-sm font-semibold text-white">
-                      <item.icon className="h-4 w-4 text-teal-200" aria-hidden />
-                      {item.title}
-                    </div>
-                    <p className="mt-2 text-sm leading-6 text-zinc-400">{item.body}</p>
+                  <div
+                    key={item.layer}
+                    className="flex items-baseline justify-between gap-3 border-b border-[var(--divider)] py-2.5 last:border-b-0 sm:[&:nth-last-child(-n+2)]:border-b-0"
+                  >
+                    <dt className="min-w-0">
+                      <span className="block text-[length:var(--text-caption)] font-medium text-[var(--text-primary)]">{item.layer}</span>
+                      <span className="mt-0.5 block text-[length:var(--text-micro)] text-[var(--text-muted)]">{item.detail}</span>
+                    </dt>
+                    <dd className="tnum shrink-0 font-mono text-[length:var(--text-caption)] font-semibold text-[var(--text-secondary)]">
+                      {item.count}
+                    </dd>
                   </div>
                 ))}
-              </div>
+              </dl>
 
               <div className="flex flex-wrap gap-3">
                 <button type="button" onClick={launchValidationPreset} className={buttonClass("primary")}>
@@ -5014,7 +5123,7 @@ export default function Home() {
                   <ChevronRight className="h-4 w-4" aria-hidden />
                   打开验证控制台
                 </button>
-                <button type="button" onClick={() => navigateTo("logs")} className={buttonClass("secondary")}>
+                <button type="button" onClick={() => navigateTo("logs")} className={buttonClass("ghost")}>
                   <FileText className="h-4 w-4" aria-hidden />
                   查看证据日志
                 </button>
@@ -5025,38 +5134,38 @@ export default function Home() {
               <section className={`${glassPanelSoftClass} p-5`}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="text-sm font-medium text-zinc-300">验证准备度</div>
-                    <div className="mt-2 text-4xl font-semibold text-white">{validationReadiness.score}%</div>
+                    <div className="text-[length:var(--text-micro)] font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">验证准备度</div>
+                    <div className="tnum mt-2 text-[length:var(--text-display)] font-bold leading-none tracking-[-0.03em] text-[var(--text-primary)]">{validationReadiness.score}%</div>
                   </div>
-                  <span className="rounded-full border border-teal-200/20 bg-teal-300/10 px-3 py-1 text-xs text-teal-100">
+                  <span className="chip chip-accent">
                     {validationReadiness.label}
                   </span>
                 </div>
-                <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/[0.08]">
-                  <div className="h-full rounded-full bg-[linear-gradient(90deg,rgba(45,212,191,0.95),rgba(251,113,133,0.82))]" style={{ width: `${validationReadiness.score}%` }} />
+                <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-[var(--surface-sunken)]">
+                  <div className="h-full rounded-full bg-[var(--accent-solid)]" style={{ width: `${validationReadiness.score}%` }} />
                 </div>
                 <div className="mt-4 grid gap-2.5">
                   {attackCoverage.map((item) => (
-                    <div key={item.label} className="flex items-center justify-between rounded-xl border border-white/[0.08] bg-white/[0.04] px-3.5 py-2">
-                      <span className="text-sm text-zinc-400">{item.label}</span>
-                      <span className={`font-mono text-sm font-semibold ${item.tone}`}>{item.count}</span>
+                    <div key={item.label} className="flex items-center justify-between rounded-[var(--radius-sm)] border border-[var(--panel-border-soft)] bg-[var(--surface-sunken)] px-3.5 py-2">
+                      <span className="text-[length:var(--text-body)] text-[var(--text-secondary)]">{item.label}</span>
+                      <span className={`tnum text-[length:var(--text-body)] font-semibold ${item.tone}`}>{item.count}</span>
                     </div>
                   ))}
                 </div>
               </section>
 
               <section className={`${glassPanelSoftClass} p-5`}>
-                <div className="flex items-center gap-2 text-sm font-semibold text-white">
-                  <Bell className="h-4 w-4 text-amber-200" aria-hidden />
+                <div className="flex items-center gap-2 text-[length:var(--text-micro)] font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">
+                  <Bell className="h-3.5 w-3.5 text-[var(--tone-warning-text)]" aria-hidden />
                   当前验证焦点
                 </div>
-                <h3 className="mt-3 text-lg font-semibold text-white">{selectedScenario.label}</h3>
-                <p className="mt-2 text-sm leading-6 text-zinc-400">{selectedScenario.summary}</p>
-                <div className="mt-4 space-y-2 text-xs text-zinc-400">
-                  <div className="rounded-xl border border-white/[0.08] bg-white/[0.04] px-3.5 py-2">
+                <h3 className="mt-3 text-[length:var(--text-title)] font-semibold tracking-[-0.012em] text-[var(--text-primary)]">{selectedScenario.label}</h3>
+                <p className="mt-2 text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">{selectedScenario.summary}</p>
+                <div className="mt-4 space-y-2 text-[length:var(--text-micro)] text-[var(--text-secondary)]">
+                  <div className="rounded-[var(--radius-sm)] border border-[var(--panel-border-soft)] bg-[var(--surface-sunken)] px-3.5 py-2">
                     攻击面：{selectedScenario.attackSurface}
                   </div>
-                  <div className="rounded-xl border border-white/[0.08] bg-white/[0.04] px-3.5 py-2">
+                  <div className="rounded-[var(--radius-sm)] border border-[var(--panel-border-soft)] bg-[var(--surface-sunken)] px-3.5 py-2">
                     操作提示：{selectedScenario.operatorHint}
                   </div>
                 </div>
@@ -5065,33 +5174,32 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {/* 四个指标：不用四张独立卡片（那是「一模一样圆角卡片」模板），
+            改成一条被竖线切开的指标带 —— 同一屏宽下更紧凑，且没有 hover 位移的廉价感。
+            motion-design：不要 bounce/spring；指标不是可点元素，就不该有位移反馈。 */}
+        <section className="grid gap-px overflow-hidden rounded-[var(--radius-lg)] border border-[var(--panel-border)] bg-[var(--divider)] sm:grid-cols-2 xl:grid-cols-4">
           {metrics.map((metric) => (
-            <motion.div key={metric.label} whileHover={{ y: -3 }} className={`${glassPanelSoftClass} ${glassPanelMotionClass} p-5`}>
-              <PanelGlow />
-              <div className="relative flex items-center justify-between">
-                <span className="text-sm text-zinc-400">{metric.label}</span>
-                <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/[0.08] bg-[var(--surface-raised)]">
-                  <metric.icon className={`h-5 w-5 ${metric.tone}`} aria-hidden />
-                </span>
+            <div key={metric.label} className="relative bg-[var(--panel-bg)] p-5">
+              <div className="flex items-center justify-between">
+                <span className="text-[length:var(--text-micro)] font-medium uppercase tracking-[0.1em] text-[var(--text-muted)]">{metric.label}</span>
+                <metric.icon className={`h-4 w-4 ${metric.tone}`} aria-hidden />
               </div>
-              <div className="relative mt-4 font-mono text-3xl font-semibold text-white">{metric.value}</div>
-            </motion.div>
+              <div className="tnum mt-3 font-mono text-[length:var(--text-title)] font-semibold leading-none tracking-[-0.03em] text-[var(--text-primary)]">{metric.value}</div>
+            </div>
           ))}
         </section>
 
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,360px)]">
           <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
-            <PanelGlow />
             <div className="relative flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
-                <h2 className="text-base font-semibold text-white">验证链路</h2>
-                <p className="mt-1 text-sm text-zinc-400">用一个高风险样例检查攻击输入、风险识别、处置动作和证据链是否完整闭环。</p>
+                <h2 className="text-[length:var(--text-title)] font-semibold tracking-[-0.012em] text-[var(--text-primary)]">验证链路</h2>
+                <p className="mt-1 text-[length:var(--text-body)] text-[var(--text-secondary)]">用一个高风险样例检查攻击输入、风险识别、处置动作和证据链是否完整闭环。</p>
               </div>
               <button
                 type="button"
                 onClick={() => loadScenarioIntoGateway(selectedScenario.id)}
-                className={`${buttonClass("secondary")} w-full sm:w-auto sm:shrink-0`}
+                className={buttonClass("secondary")}
               >
                 <Copy className="h-4 w-4" aria-hidden />
                 载入场景
@@ -5103,45 +5211,51 @@ export default function Home() {
                 {
                   title: "1. 注入载荷",
                   body: "攻击指令混入检索结果、插件输出或工具返回值。",
-                  tone: "border-amber-300/25 bg-amber-500/10 text-amber-100",
+                  cls: "border-[color-mix(in_oklab,var(--tone-warning)_28%,transparent)] bg-[var(--tone-warning-surface)] text-[var(--tone-warning-text)]",
                 },
                 {
                   title: "2. 分层审计",
                   body: "Shadow Agent 将可信用户意图与不可信上下文拆分处理。",
-                  tone: "border-cyan-300/25 bg-cyan-500/10 text-cyan-100",
+                  cls: "border-[color-mix(in_oklab,var(--tone-info)_28%,transparent)] bg-[var(--tone-info-surface)] text-[var(--tone-info-text)]",
                 },
                 {
                   title: "3. 风险阻断",
                   body: "策略、权限与危险行为检查在真正调用模型前完成拦截。",
-                  tone: "border-rose-300/25 bg-rose-500/10 text-rose-100",
+                  cls: "border-[color-mix(in_oklab,var(--tone-danger)_28%,transparent)] bg-[var(--tone-danger-surface)] text-[var(--tone-danger-text)]",
                 },
                 {
                   title: "4. 证据留痕",
                   body: "日志、告警、审批、回放把每次拦截都变成可复盘的证据链。",
-                  tone: "border-emerald-300/25 bg-emerald-500/10 text-emerald-100",
+                  cls: "border-[color-mix(in_oklab,var(--tone-success)_28%,transparent)] bg-[var(--tone-success-surface)] text-[var(--tone-success-text)]",
                 },
               ].map((item) => (
-                <div key={item.title} className={`rounded-2xl border p-4.5 transition-all duration-200 ${item.tone}`}>
-                  <div className="text-sm font-semibold">{item.title}</div>
-                  <p className="mt-2 text-xs leading-6 opacity-90">{item.body}</p>
+                <div key={item.title} className={`rounded-[var(--radius-md)] border p-4 transition-colors duration-[var(--dur-fast)] ${item.cls}`}>
+                  <div className="text-[length:var(--text-caption)] font-semibold">{item.title}</div>
+                  <p className="mt-2 text-[length:var(--text-micro)] leading-6 text-[var(--text-secondary)]">{item.body}</p>
                 </div>
               ))}
             </div>
           </section>
 
           <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
-            <PanelGlow />
             <div className="relative flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
-                <h2 className="text-base font-semibold text-white">验证场景库</h2>
-                <p className="mt-1 text-sm text-zinc-400">覆盖正常流量、检索投毒、工具越权、插件外传与内网探测。</p>
+                <h2 className="text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">验证场景库</h2>
+                <p className="mt-1 text-[length:var(--text-body)] text-[var(--text-secondary)]">覆盖正常流量、检索投毒、工具越权、插件外传与内网探测。</p>
               </div>
-              <span className="self-start whitespace-nowrap rounded-full border border-white/[0.08] bg-white/[0.05] px-3 py-1 text-xs text-zinc-300 sm:self-auto">
+              <span className="self-start whitespace-nowrap rounded-full border border-[var(--panel-border)] bg-[var(--surface-raised)] px-3 py-1 text-[length:var(--text-micro)] text-[var(--text-secondary)] sm:self-auto">
                 {DEMO_SCENARIOS.length} 个场景
               </span>
             </div>
 
-            <div className="relative mt-4 space-y-3">
+            {/* 场景库 → 台账：原来是 5 张同构卡片，每张都有圆角+描边+双层 padding。
+                现在一条表头 + 5 行，行高从 ~92px 压到 ~56px，一屏能看全整个场景库。 */}
+            <div className="relative mt-4 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--panel-border)]">
+              <div className="grid grid-cols-[1.75rem_minmax(0,1fr)_auto] items-center gap-x-3 border-b border-[var(--panel-border)] bg-[var(--surface-sunken)] px-4 py-2 text-[length:var(--text-micro)] font-medium uppercase tracking-[0.08em] text-[var(--text-muted)]">
+                <span aria-hidden />
+                <span>场景</span>
+                <span className="text-right">预期</span>
+              </div>
               {DEMO_SCENARIOS.map((scenario, index) => {
                 const selected = selectedScenarioId === scenario.id;
                 return (
@@ -5149,22 +5263,43 @@ export default function Home() {
                     key={scenario.id}
                     type="button"
                     onClick={() => loadScenarioIntoGateway(scenario.id)}
-                    className={`flex w-full flex-col gap-3 rounded-2xl border p-4 text-left transition-all duration-200 ease-out active:scale-[0.99] md:flex-row md:items-start md:justify-between ${
-                      selected
-                        ? "border-teal-200/30 bg-teal-300/[0.09] shadow-[0_0_28px_rgba(45,212,191,0.12)]"
-                        : "border-white/[0.08] bg-white/[0.035] hover:border-white/[0.16] hover:bg-white/[0.06]"
+                    aria-pressed={selected}
+                    className={`relative grid w-full grid-cols-[1.75rem_minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1.5 px-4 py-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--tone-accent)] ${ledgerRowClass} ${
+                      selected ? "bg-[var(--tone-accent-surface)]" : ""
                     }`}
                   >
-                    <span className="min-w-0">
-                      <span className="flex min-w-0 items-center gap-2 text-sm font-semibold text-white">
-                        <span className="flex h-6 w-6 items-center justify-center rounded-full border border-white/[0.08] bg-white/[0.05] text-[11px] text-zinc-300">
-                          {index + 1}
-                        </span>
+                    {/* 选中态用行首竖条 + 序号变色，不再整行换边框+阴影 */}
+                    <span
+                      aria-hidden
+                      className={`absolute inset-y-2 left-0 w-[3px] rounded-r-full transition-colors duration-[var(--dur-fast)] ${
+                        selected ? "bg-[var(--accent-solid)]" : "bg-transparent"
+                      }`}
+                    />
+                    <span
+                      className={`tnum mt-0.5 text-center font-mono text-[length:var(--text-micro)] transition-colors duration-[var(--dur-fast)] ${
+                        selected ? "text-[var(--tone-accent-text)]" : "text-[var(--text-muted)]"
+                      }`}
+                    >
+                      {String(index + 1).padStart(2, "0")}
+                    </span>
+                    <span className="col-start-2 min-w-0">
+                      <span
+                        className={`block text-[length:var(--text-body)] font-medium transition-colors duration-[var(--dur-fast)] ${
+                          selected ? "text-[var(--tone-accent-text)]" : "text-[var(--text-primary)]"
+                        }`}
+                      >
                         {scenario.label}
                       </span>
-                      <span className="mt-2 block text-xs leading-5 text-zinc-400">{scenario.summary}</span>
+                      {/* 摘要只在选中时展开 —— 未选中时是单行截断，进一步压低行高 */}
+                      <span
+                        className={`mt-1 block text-[length:var(--text-micro)] leading-5 text-[var(--text-secondary)] ${
+                          selected ? "" : "line-clamp-1"
+                        }`}
+                      >
+                        {scenario.summary}
+                      </span>
                     </span>
-                    <span className={`self-start shrink-0 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] md:self-auto ${severityClass(scenario.severity)}`}>
+                    <span className={`chip shrink-0 justify-self-end ${severityChipClass(scenario.severity)}`}>
                       {scenario.expectedOutcome === "blocked" ? "应拦截" : "应放行"}
                     </span>
                   </button>
@@ -5175,11 +5310,10 @@ export default function Home() {
         </section>
 
         <section className={`${glassPanelClass} relative p-5`}>
-          <PanelGlow />
           <div className="relative flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
             <div className="min-w-0">
-              <h2 className="text-base font-semibold text-white">角色切换演示台</h2>
-              <p className="mt-1 text-sm text-zinc-400">把 Admin、Client、Gateway 放到同一块面板里，评委一眼就能看出权限边界。</p>
+              <h2 className="text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">角色切换演示台</h2>
+              <p className="mt-1 text-[length:var(--text-body)] text-[var(--text-secondary)]">把 Admin、Client、Gateway 放到同一块面板里，评委一眼就能看出权限边界。</p>
             </div>
             <button type="button" onClick={() => navigateTo("keys")} className={`${buttonClass("secondary")} w-full sm:w-auto xl:shrink-0`}>
               <KeyRound className="h-4 w-4" aria-hidden />
@@ -5197,22 +5331,22 @@ export default function Home() {
                   key={item.id}
                   type="button"
                   onClick={() => setRoleShowcase(item.id)}
-                  className={`min-w-0 rounded-2xl border p-4 text-left transition-all duration-200 ease-out active:scale-[0.99] ${
+                  className={`min-w-0 rounded-[var(--radius-lg)] border p-4 text-left transition-[color,background-color,border-color,box-shadow,transform,opacity] duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] active:scale-[0.98] ${
                     selected
-                      ? "border-teal-200/30 bg-teal-300/[0.09] shadow-[0_0_28px_rgba(45,212,191,0.12)]"
-                      : "border-white/[0.08] bg-white/[0.035] hover:border-white/[0.16] hover:bg-white/[0.06]"
+                      ? "border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[color-mix(in_oklab,var(--tone-accent)_9%,transparent)] shadow-[var(--panel-shadow-soft)]"
+                      : "border-[var(--panel-border)] bg-[var(--surface-raised)] hover:border-[var(--panel-border)] hover:bg-[var(--surface-raised)]"
                   }`}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <span className="inline-flex min-w-0 items-center gap-2 text-sm font-semibold text-white">
-                      <Icon className="h-4 w-4 text-teal-200" aria-hidden />
+                    <span className="inline-flex min-w-0 items-center gap-2 text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">
+                      <Icon className="h-4 w-4 text-[var(--tone-accent-text)]" aria-hidden />
                       {item.label}
                     </span>
-                      <span className={`shrink-0 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] ${status.enabled ? "border-emerald-300/30 bg-emerald-500/10 text-emerald-100" : "border-white/[0.08] bg-white/[0.05] text-zinc-300"}`}>
+                      <span className={`shrink-0 whitespace-nowrap rounded-full border px-2.5 py-1 text-[length:var(--text-micro)] ${status.enabled ? "border-[color-mix(in_oklab,var(--tone-success)_28%,transparent)] bg-[var(--tone-success-surface)] text-[var(--tone-success-text)]" : "border-[var(--panel-border)] bg-[var(--surface-raised)] text-[var(--text-secondary)]"}`}>
                         {status.enabled ? "已接入" : "未接入"}
                       </span>
                     </div>
-                    <div className="mt-2 break-words text-xs leading-6 text-zinc-400">{item.badge} · {status.source}</div>
+                    <div className="mt-2 break-words text-[length:var(--text-micro)] leading-6 text-[var(--text-secondary)]">{item.badge} · {status.source}</div>
                   </button>
                 );
               })}
@@ -5222,41 +5356,41 @@ export default function Home() {
               <div className={`${glassPanelSoftClass} min-w-0 p-4`}>
                 <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
                   <div className="min-w-0">
-                    <div className={`inline-flex max-w-full self-start whitespace-nowrap rounded-full border px-3 py-1 text-xs ${roleShowcaseDefinition.tone}`}>
+                    <div className={`inline-flex max-w-full self-start whitespace-nowrap rounded-full border px-3 py-1 text-[length:var(--text-micro)] ${roleShowcaseDefinition.tone}`}>
                       <RoleShowcaseIcon className="h-3.5 w-3.5" aria-hidden />
                       {roleShowcaseDefinition.badge}
                     </div>
-                  <h3 className="mt-3 text-lg font-semibold text-white">{roleShowcaseDefinition.label}</h3>
-                  <p className="mt-2 text-sm leading-6 text-zinc-400">{roleShowcaseDefinition.description}</p>
+                  <h3 className="mt-3 text-[length:var(--text-title)] font-semibold text-[var(--text-primary)]">{roleShowcaseDefinition.label}</h3>
+                  <p className="mt-2 text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">{roleShowcaseDefinition.description}</p>
                 </div>
-                <span className={`shrink-0 self-start whitespace-nowrap rounded-full border px-3 py-1 text-xs ${roleShowcaseStatus[roleShowcase].enabled ? "border-emerald-300/30 bg-emerald-500/10 text-emerald-100" : "border-amber-300/30 bg-amber-500/10 text-amber-100"}`}>
+                <span className={`shrink-0 self-start whitespace-nowrap rounded-full border px-3 py-1 text-[length:var(--text-micro)] ${roleShowcaseStatus[roleShowcase].enabled ? "border-[color-mix(in_oklab,var(--tone-success)_28%,transparent)] bg-[var(--tone-success-surface)] text-[var(--tone-success-text)]" : "border-[color-mix(in_oklab,var(--tone-warning)_28%,transparent)] bg-[var(--tone-warning-surface)] text-[var(--tone-warning-text)]"}`}>
                   {roleShowcaseStatus[roleShowcase].enabled ? "可直接演示" : "建议先接入"}
                 </span>
               </div>
 
                 <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                  <div className="rounded-xl border border-white/[0.08] bg-white/[0.04] p-3.5 text-sm">
-                    <div className="text-xs text-zinc-500">接入方式</div>
-                    <div className="mt-2 break-words text-zinc-100">{roleShowcaseDefinition.authHint}</div>
+                  <div className="rounded-[var(--radius-md)] border border-[var(--panel-border)] bg-[var(--surface-raised)] p-3.5 text-[length:var(--text-body)]">
+                    <div className="text-[length:var(--text-micro)] text-[var(--text-muted)]">接入方式</div>
+                    <div className="mt-2 break-words text-[var(--text-primary)]">{roleShowcaseDefinition.authHint}</div>
                   </div>
-                  <div className="rounded-xl border border-white/[0.08] bg-white/[0.04] p-3.5 text-sm">
-                    <div className="text-xs text-zinc-500">评委关注点</div>
-                    <div className="mt-2 break-words text-zinc-100">{roleShowcaseDefinition.judgeFocus}</div>
+                  <div className="rounded-[var(--radius-md)] border border-[var(--panel-border)] bg-[var(--surface-raised)] p-3.5 text-[length:var(--text-body)]">
+                    <div className="text-[length:var(--text-micro)] text-[var(--text-muted)]">评委关注点</div>
+                    <div className="mt-2 break-words text-[var(--text-primary)]">{roleShowcaseDefinition.judgeFocus}</div>
                   </div>
                 </div>
 
               <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                <div className="rounded-xl border border-emerald-300/20 bg-emerald-500/10 p-3.5">
-                  <div className="text-sm font-medium text-emerald-100">能做什么</div>
-                  <div className="mt-2 space-y-2 text-xs leading-6 text-emerald-50/90">
+                <div className="rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--tone-success)_28%,transparent)] bg-[var(--tone-success-surface)] p-3.5">
+                  <div className="text-[length:var(--text-body)] font-medium text-[var(--tone-success-text)]">能做什么</div>
+                  <div className="mt-2 space-y-2 text-[length:var(--text-micro)] leading-6 text-[var(--tone-success-text)]/90">
                     {roleShowcaseDefinition.allowed.map((line) => (
                       <div key={line}>• {line}</div>
                     ))}
                   </div>
                 </div>
-                <div className="rounded-xl border border-rose-300/20 bg-rose-500/10 p-3.5">
-                  <div className="text-sm font-medium text-rose-100">被限制什么</div>
-                  <div className="mt-2 space-y-2 text-xs leading-6 text-rose-50/90">
+                <div className="rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--tone-danger)_28%,transparent)] bg-[var(--tone-danger-surface)] p-3.5">
+                  <div className="text-[length:var(--text-body)] font-medium text-[var(--tone-danger-text)]">被限制什么</div>
+                  <div className="mt-2 space-y-2 text-[length:var(--text-micro)] leading-6 text-[var(--tone-danger-text)]/90">
                     {roleShowcaseDefinition.restricted.map((line) => (
                       <div key={line}>• {line}</div>
                     ))}
@@ -5267,7 +5401,7 @@ export default function Home() {
 
               <div className={`${glassPanelSoftClass} min-w-0 p-4`}>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <h3 className="text-sm font-semibold text-white">权限矩阵</h3>
+                  <h3 className="text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">权限矩阵</h3>
                   <button type="button" onClick={downloadEvidenceBundle} className={`${buttonClass("secondary")} w-full sm:w-auto`}>
                     <Save className="h-4 w-4" aria-hidden />
                   导出演示证据包
@@ -5275,15 +5409,15 @@ export default function Home() {
               </div>
                 <div className="mt-4 grid gap-3 lg:grid-cols-2">
                   {ROLE_PERMISSION_MATRIX.map((row) => (
-                    <div key={row.capability} className="rounded-xl border border-white/[0.08] bg-white/[0.04] px-3.5 py-3 text-xs">
-                      <div className="break-words leading-6 text-zinc-300">{row.capability}</div>
+                    <div key={row.capability} className="rounded-[var(--radius-md)] border border-[var(--panel-border)] bg-[var(--surface-raised)] px-3.5 py-3 text-[length:var(--text-micro)]">
+                      <div className="break-words leading-6 text-[var(--text-secondary)]">{row.capability}</div>
                       <div className="mt-3 grid gap-2 sm:grid-cols-3">
                         {[
                           { label: "Admin", enabled: row.admin },
                         { label: "Client", enabled: row.client },
                         { label: "Gateway", enabled: row.gateway },
                       ].map((cell) => (
-                        <div key={cell.label} className={`rounded-lg px-2 py-2 text-center whitespace-nowrap ${cell.enabled ? "bg-emerald-500/10 text-emerald-100" : "bg-white/[0.04] text-zinc-500"}`}>
+                        <div key={cell.label} className={`rounded-[var(--radius-sm)] px-2 py-2 text-center whitespace-nowrap ${cell.enabled ? "bg-[var(--tone-success-surface)] text-[var(--tone-success-text)]" : "bg-[var(--surface-raised)] text-[var(--text-muted)]"}`}>
                           {cell.label}
                         </div>
                       ))}
@@ -5291,7 +5425,7 @@ export default function Home() {
                   </div>
                 ))}
               </div>
-              <div className="mt-4 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3.5 py-3 text-xs leading-6 text-zinc-400">
+              <div className="mt-4 rounded-[var(--radius-md)] border border-[var(--panel-border)] bg-[var(--surface-raised)] px-3.5 py-3 text-[length:var(--text-micro)] leading-6 text-[var(--text-secondary)]">
                 推荐话术：先用 `client/gateway` 跑正常和高风险场景，证明“业务可用但权限克制”；再切到 `admin`，展示日志、审批、回放与证据包导出闭环。
               </div>
             </div>
@@ -5300,11 +5434,10 @@ export default function Home() {
 
         <section className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
           <div className={`${glassPanelClass} relative overflow-visible`}>
-            <PanelGlow />
-            <div className="relative flex flex-col gap-3 border-b border-white/[0.07] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="relative flex flex-col gap-3 border-b border-[var(--divider)] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h2 className="text-base font-semibold text-white">最新拦截事件</h2>
-                <p className="mt-1 text-sm text-zinc-400">来自后端审计接口和本地预检结果。</p>
+                <h2 className="text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">最新拦截事件</h2>
+                <p className="mt-1 text-[length:var(--text-body)] text-[var(--text-secondary)]">来自后端审计接口和本地预检结果。</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <button type="button" onClick={() => navigateTo("logs")} className={buttonClass("secondary")}>
@@ -5317,7 +5450,9 @@ export default function Home() {
                 </button>
               </div>
             </div>
-            {recentLogs.length === 0 ? (
+            {logsLoading && recentLogs.length === 0 ? (
+              <LogListSkeleton rows={4} />
+            ) : recentLogs.length === 0 ? (
               <div className="relative p-5">
                 <EmptyState icon={Database} title="暂无日志">
                   <button type="button" onClick={seedLogs} className={`${buttonClass("primary")} mt-3`}>
@@ -5338,50 +5473,48 @@ export default function Home() {
 
           <div className="space-y-4">
             <section className={`${glassPanelSoftClass} ${glassPanelMotionClass} p-5`}>
-              <PanelGlow />
-              <h2 className="relative text-base font-semibold text-white">审计运营</h2>
-              <div className="relative mt-4 space-y-3 text-sm">
-                <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
-                  <span className="text-zinc-400">待审批</span>
-                  <span className="font-medium text-white">{approvals.length}</span>
+              <h2 className="relative text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">审计运营</h2>
+              <dl className="relative mt-3 divide-y divide-[var(--divider)] text-[length:var(--text-body)]">
+                <div className="flex items-baseline justify-between gap-3 py-2.5">
+                  <dt className="text-[var(--text-secondary)]">待审批</dt>
+                  <dd className="tnum font-medium text-[var(--text-primary)]">{approvals.length}</dd>
                 </div>
-                <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
-                  <span className="text-zinc-400">告警事件</span>
-                  <span className="font-medium text-white">{alerts.length}</span>
+                <div className="flex items-baseline justify-between gap-3 py-2.5">
+                  <dt className="text-[var(--text-secondary)]">告警事件</dt>
+                  <dd className="tnum font-medium text-[var(--text-primary)]">{alerts.length}</dd>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400">回放记录</span>
-                  <span className="font-medium text-white">{replays.length}</span>
+                <div className="flex items-baseline justify-between gap-3 py-2.5">
+                  <dt className="text-[var(--text-secondary)]">回放记录</dt>
+                  <dd className="tnum font-medium text-[var(--text-primary)]">{replays.length}</dd>
                 </div>
-              </div>
+              </dl>
             </section>
 
             <section className={`${glassPanelSoftClass} ${glassPanelMotionClass} p-5`}>
-              <PanelGlow />
               <div className="relative flex items-center justify-between gap-3">
-                <h2 className="text-base font-semibold text-white">鉴权资产</h2>
-                <span className="rounded-full border border-white/[0.08] bg-white/[0.06] px-2.5 py-0.5 text-xs text-zinc-300">
+                <h2 className="text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">鉴权资产</h2>
+                <span className={`chip ${hasAdminAccess ? "chip-success" : "chip-neutral"}`}>
                   {hasAdminAccess ? "后台已连接" : "待接入"}
                 </span>
               </div>
-              <div className="relative mt-4 space-y-3 text-sm">
-                <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
-                  <span className="text-zinc-400">托管密钥总数</span>
-                  <span className="font-medium text-white">{managedKeyStats.total}</span>
+              <dl className="relative mt-3 divide-y divide-[var(--divider)] text-[length:var(--text-body)]">
+                <div className="flex items-baseline justify-between gap-3 py-2.5">
+                  <dt className="text-[var(--text-secondary)]">托管密钥总数</dt>
+                  <dd className="tnum font-medium text-[var(--text-primary)]">{managedKeyStats.total}</dd>
                 </div>
-                <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
-                  <span className="text-zinc-400">生效中</span>
-                  <span className="font-medium text-emerald-200">{managedKeyStats.active}</span>
+                <div className="flex items-baseline justify-between gap-3 py-2.5">
+                  <dt className="text-[var(--text-secondary)]">生效中</dt>
+                  <dd className="tnum font-medium text-[var(--tone-success-text)]">{managedKeyStats.active}</dd>
                 </div>
-                <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
-                  <span className="text-zinc-400">已停用</span>
-                  <span className="font-medium text-red-100">{managedKeyStats.paused}</span>
+                <div className="flex items-baseline justify-between gap-3 py-2.5">
+                  <dt className="text-[var(--text-secondary)]">已停用</dt>
+                  <dd className="tnum font-medium text-[var(--tone-danger-text)]">{managedKeyStats.paused}</dd>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400">已过期</span>
-                  <span className="font-medium text-amber-100">{managedKeyStats.expired}</span>
+                <div className="flex items-baseline justify-between gap-3 py-2.5">
+                  <dt className="text-[var(--text-secondary)]">已过期</dt>
+                  <dd className="tnum font-medium text-[var(--tone-warning-text)]">{managedKeyStats.expired}</dd>
                 </div>
-              </div>
+              </dl>
               <button type="button" onClick={() => navigateTo("keys")} className={`${buttonClass("secondary")} relative mt-5 w-full`}>
                 <KeyRound className="h-4 w-4" aria-hidden />
                 打开密钥中心
@@ -5389,47 +5522,48 @@ export default function Home() {
             </section>
 
             <section className={`${glassPanelSoftClass} ${glassPanelMotionClass} p-5`}>
-              <PanelGlow />
               <div className="relative flex items-center justify-between">
-                <h2 className="text-base font-semibold text-white">运行状态</h2>
+                <h2 className="text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">运行状态</h2>
                 <span
-                  className={`rounded-full border px-2.5 py-0.5 text-xs ${
+                  className={`chip ${
                     health.status === "online"
-                      ? "border-emerald-300/30 bg-emerald-500/10 text-emerald-100"
+                      ? "chip-success"
                       : health.status === "offline"
-                        ? "border-red-300/30 bg-red-500/10 text-red-100"
-                        : "border-white/[0.1] bg-white/[0.06] text-zinc-300"
+                        ? "chip-danger"
+                        : "chip-neutral"
                   }`}
                 >
                   {health.status === "online" ? "Online" : health.status === "offline" ? "Offline" : health.status === "checking" ? "Checking" : "Unknown"}
                 </span>
               </div>
-              <div className="relative mt-4 space-y-3 text-sm">
-                <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
-                  <span className="text-zinc-400">启用策略</span>
-                  <span className="font-medium text-white">
+              <dl className="relative mt-3 divide-y divide-[var(--divider)] text-[length:var(--text-body)]">
+                <div className="flex items-baseline justify-between gap-3 py-2.5">
+                  <dt className="text-[var(--text-secondary)]">启用策略</dt>
+                  <dd className="tnum font-medium text-[var(--text-primary)]">
                     {enabledPolicies}/{policies.length}
-                  </span>
+                  </dd>
                 </div>
-                <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
-                  <span className="text-zinc-400">允许工具</span>
-                  <span className="font-medium text-white">
+                <div className="flex items-baseline justify-between gap-3 py-2.5">
+                  <dt className="text-[var(--text-secondary)]">允许工具</dt>
+                  <dd className="tnum font-medium text-[var(--text-primary)]">
                     {allowedTools}/{tools.length}
-                  </span>
+                  </dd>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400">自动刷新</span>
-                  <Switch
-                    label="切换自动刷新"
-                    checked={settings.autoRefresh}
-                    onChange={(value) => {
-                      const next = { ...settings, autoRefresh: value };
-                      setSettings(next);
-                      writeStorage(STORAGE_KEYS.settings, sanitizeSettingsForStorage(next));
-                    }}
-                  />
+                <div className="flex items-center justify-between gap-3 py-2.5">
+                  <dt className="text-[var(--text-secondary)]">自动刷新</dt>
+                  <dd>
+                    <Switch
+                      label="切换自动刷新"
+                      checked={settings.autoRefresh}
+                      onChange={(value) => {
+                        const next = { ...settings, autoRefresh: value };
+                        setSettings(next);
+                        writeStorage(STORAGE_KEYS.settings, sanitizeSettingsForStorage(next));
+                      }}
+                    />
+                  </dd>
                 </div>
-              </div>
+              </dl>
               <button type="button" onClick={() => void checkHealth()} className={`${buttonClass("secondary")} relative mt-5 w-full`}>
                 <Network className="h-4 w-4" aria-hidden />
                 检测网关
@@ -5437,8 +5571,7 @@ export default function Home() {
             </section>
 
             <section className={`${glassPanelSoftClass} ${glassPanelMotionClass} p-5`}>
-              <PanelGlow />
-              <h2 className="relative text-base font-semibold text-white">快捷操作</h2>
+              <h2 className="relative text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">快捷操作</h2>
               <div className="relative mt-4 grid gap-2">
                 {[
                   { label: "运行网关测试", icon: Play, onClick: () => navigateTo("gateway"), variant: "primary" as const },
@@ -5465,10 +5598,9 @@ export default function Home() {
   const renderLogs = () => (
     <div className="space-y-5">
       <section className={`${glassPanelClass} relative p-4`}>
-        <PanelGlow />
         <div className="relative grid gap-3 xl:grid-cols-[minmax(220px,1fr)_minmax(150px,180px)_minmax(150px,180px)_auto]">
           <label className="relative block">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" aria-hidden />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" aria-hidden />
             <input value={search} onChange={(event) => setSearch(event.target.value)} className={`${inputBase} pl-10`} placeholder="搜索请求 ID、风险类型、原始输入" />
           </label>
           <GlassSelect value={riskFilter} onChange={(next) => setRiskFilter(next as typeof riskFilter)} options={riskFilterOptions} ariaLabel="风险等级筛选" />
@@ -5484,8 +5616,8 @@ export default function Home() {
             </button>
           </div>
         </div>
-        <div className="relative mt-3 flex flex-wrap items-center justify-between gap-2 text-sm">
-          <div className="flex items-center gap-2 text-zinc-400">
+        <div className="relative mt-3 flex flex-wrap items-center justify-between gap-2 text-[length:var(--text-body)]">
+          <div className="flex items-center gap-2 text-[var(--text-secondary)]">
             <Filter className="h-4 w-4" aria-hidden />
             当前显示 {filteredLogs.length} / {logs.length} 条
           </div>
@@ -5500,12 +5632,15 @@ export default function Home() {
             </button>
           </div>
         </div>
-        {logsError ? <div className="relative mt-4 rounded-2xl border border-amber-300/30 bg-amber-500/10 px-4.5 py-3.5 text-sm text-amber-100">{logsError}</div> : null}
+        {logsError ? <div className="relative mt-4 rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-warning)_28%,transparent)] bg-[var(--tone-warning-surface)] px-4.5 py-3.5 text-[length:var(--text-body)] text-[var(--tone-warning-text)]">{logsError}</div> : null}
       </section>
 
       <section className={`${glassPanelClass} relative overflow-visible`}>
-        <PanelGlow />
-        {filteredLogs.length === 0 ? (
+        {logsLoading && logs.length === 0 ? (
+          <div className="relative">
+            <LogListSkeleton rows={8} />
+          </div>
+        ) : filteredLogs.length === 0 ? (
           <div className="relative p-5">
             <EmptyState icon={Database} title="没有匹配的日志">
               <div className="flex flex-wrap justify-center gap-2">
@@ -5538,10 +5673,9 @@ export default function Home() {
     <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
       <section className="space-y-4">
         <div className={`${glassPanelClass} ${glassPanelMotionClass} p-4 sm:flex sm:items-center sm:justify-between`}>
-          <PanelGlow />
           <div className="relative">
-            <h2 className="text-base font-semibold text-white">审计策略</h2>
-            <p className="mt-1 text-sm text-zinc-400">切换后先保存在页面，点击保存后写入本地配置。</p>
+            <h2 className="text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">审计策略</h2>
+            <p className="mt-1 text-[length:var(--text-body)] text-[var(--text-secondary)]">切换后先保存在页面，点击保存后写入本地配置。</p>
           </div>
           <div className="relative mt-3 flex flex-wrap gap-2 sm:mt-0">
             <button type="button" onClick={() => setPolicyDraftOpen((value) => !value)} className={buttonClass("secondary")}>
@@ -5561,18 +5695,17 @@ export default function Home() {
 
         {policyDraftOpen ? (
           <form onSubmit={addPolicy} className={`${glassPanelClass} relative p-4`}>
-            <PanelGlow />
             <div className="relative grid gap-3 md:grid-cols-2">
               <label>
-                <span className="mb-2 block text-sm text-[var(--text-secondary)]">策略名称</span>
+                <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">策略名称</span>
                 <input value={policyDraft.name} onChange={(event) => setPolicyDraft((current) => ({ ...current, name: event.target.value }))} className={inputBase} placeholder="自定义审计规则" />
               </label>
               <label>
-                <span className="mb-2 block text-sm text-[var(--text-secondary)]">作用域</span>
+                <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">作用域</span>
                 <input value={policyDraft.scope} onChange={(event) => setPolicyDraft((current) => ({ ...current, scope: event.target.value }))} className={inputBase} placeholder="Prompt / Tool / Audit" />
               </label>
               <label className="md:col-span-2">
-                <span className="mb-2 block text-sm text-[var(--text-secondary)]">Pattern / Regex</span>
+                <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">Pattern / Regex</span>
                 <input
                   value={policyDraft.pattern}
                   onChange={(event) => setPolicyDraft((current) => ({ ...current, pattern: event.target.value }))}
@@ -5581,11 +5714,11 @@ export default function Home() {
                 />
               </label>
               <label className="md:col-span-2">
-                <span className="mb-2 block text-sm text-[var(--text-secondary)]">描述</span>
+                <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">描述</span>
                 <input value={policyDraft.description} onChange={(event) => setPolicyDraft((current) => ({ ...current, description: event.target.value }))} className={inputBase} placeholder="这条规则要保护的边界" />
               </label>
               <label>
-                <span className="mb-2 block text-sm text-[var(--text-secondary)]">风险级别</span>
+                <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">风险级别</span>
                 <GlassSelect
                   value={policyDraft.severity}
                   onChange={(next) => setPolicyDraft((current) => ({ ...current, severity: next as PolicyRule["severity"] }))}
@@ -5606,58 +5739,100 @@ export default function Home() {
           </form>
         ) : null}
 
-        <div className="grid gap-3">
-          {policies.map((policy) => (
-            <motion.article key={policy.id} whileHover={{ y: -2 }} className={`${glassPanelClass} ${glassPanelMotionClass} overflow-visible p-5`}>
-              <PanelGlow />
-              <div className="relative flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                <div>
+        {/* 策略列表：台账表格，不是卡片墙。
+            frontend-dev：DENSITY > 7 时禁用通用卡片 —— 每条策略是一行，
+            分隔靠 border-b，hover 靠底色。列：[竖条][名称+描述][范围][风险][启用][操作] */}
+        <div className={`${glassPanelClass} overflow-hidden`}>
+          <div className="grid grid-cols-[3px_minmax(0,1fr)_auto] items-center gap-x-3 border-b border-[var(--panel-border)] px-4 py-2 text-[length:var(--text-micro)] font-medium uppercase tracking-[0.08em] text-[var(--text-muted)] sm:px-5 lg:grid-cols-[3px_minmax(0,2.2fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_auto_auto] lg:gap-x-4">
+            <span aria-hidden />
+            <span>策略</span>
+            <span className="hidden lg:block">作用域</span>
+            <span className="hidden lg:block">风险级别</span>
+            <span className="hidden text-center lg:block">启用</span>
+            <span className="text-right">操作</span>
+          </div>
+          <div>
+            {policies.length === 0 ? (
+              <p className="px-4 py-8 text-center text-[length:var(--text-body)] text-[var(--text-muted)] sm:px-5">
+                还没有策略。点击「新增策略」定义第一条审计边界。
+              </p>
+            ) : null}
+            {policies.map((policy) => (
+              <div
+                key={policy.id}
+                className="group grid grid-cols-[3px_minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2 border-b border-[var(--divider)] px-4 py-3.5 transition-colors duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] last:border-b-0 hover:bg-[var(--surface-sunken)] sm:px-5 lg:grid-cols-[3px_minmax(0,2.2fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_auto_auto] lg:items-center lg:gap-x-4 lg:gap-y-0"
+              >
+                <span
+                  aria-hidden
+                  className={`col-start-1 row-span-2 h-9 w-[3px] self-start rounded-full lg:row-span-1 lg:self-center ${
+                    policy.enabled ? severityTick(policy.severity) : "bg-[var(--divider-strong)]"
+                  }`}
+                />
+                <div className="col-start-2 row-start-1 min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-base font-semibold text-white">{policy.name}</h3>
-                    <span className="rounded-full border border-white/[0.1] bg-white/[0.055] px-2.5 py-0.5 text-xs text-zinc-300">{policy.scope}</span>
-                    <span className={`rounded-full border px-2.5 py-0.5 text-xs ${severityClass(policy.severity)}`}>{severityText(policy.severity)}风险</span>
+                    <h3 className="text-[length:var(--text-body)] font-medium text-[var(--text-primary)]">{policy.name}</h3>
+                    {policy.custom ? (
+                      <span className="chip chip-neutral">自定义</span>
+                    ) : (
+                      <span className="chip chip-neutral">内置</span>
+                    )}
                   </div>
-                  <p className="mt-2 text-sm leading-6 text-zinc-400">{policy.description}</p>
+                  <p className="mt-0.5 line-clamp-2 font-mono text-[length:var(--text-micro)] leading-5 text-[var(--text-muted)]">
+                    {policy.description}
+                  </p>
                 </div>
-                <Switch
-                  label={`切换 ${policy.name}`}
-                  checked={policy.enabled}
-                  onChange={(value) => setPolicies((current) => current.map((item) => (item.id === policy.id ? { ...item, enabled: value } : item)))}
-                />
+                <span className="col-start-2 row-start-2 min-w-0 truncate text-[length:var(--text-caption)] text-[var(--text-secondary)] lg:col-start-3 lg:row-start-1">
+                  {policy.scope}
+                </span>
+                <div className="col-start-3 row-start-1 flex justify-end lg:col-start-4 lg:justify-start">
+                  <GlassSelect
+                    value={policy.severity}
+                    onChange={(next) =>
+                      setPolicies((current) => current.map((item) => (item.id === policy.id ? { ...item, severity: next as PolicyRule["severity"] } : item)))
+                    }
+                    className="max-w-32"
+                    options={severityOptions}
+                    ariaLabel={`${policy.name} 风险级别`}
+                  />
+                </div>
+                <div className="col-span-2 col-start-2 row-start-3 flex items-center gap-3 lg:col-span-1 lg:col-start-5 lg:row-start-1 lg:justify-center">
+                  <Switch
+                    label={`切换 ${policy.name}`}
+                    checked={policy.enabled}
+                    onChange={(value) => setPolicies((current) => current.map((item) => (item.id === policy.id ? { ...item, enabled: value } : item)))}
+                  />
+                </div>
+                <div className="col-span-2 col-start-2 row-start-4 flex justify-end lg:col-span-1 lg:col-start-6 lg:row-start-1">
+                  {policy.custom ? (
+                    <button
+                      type="button"
+                      onClick={() => removePolicy(policy.id)}
+                      className="tap-target inline-flex items-center justify-center rounded-[var(--radius-xs)] p-1.5 text-[var(--text-muted)] transition-colors duration-[var(--dur-fast)] hover:bg-[var(--tone-danger-surface)] hover:text-[var(--tone-danger-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--tone-accent)]"
+                      aria-label={`删除策略 ${policy.name}`}
+                      title="删除策略"
+                    >
+                      <Trash2 className="h-4 w-4" aria-hidden />
+                    </button>
+                  ) : (
+                    <span className="text-[length:var(--text-micro)] text-[var(--text-muted)]">内置</span>
+                  )}
+                </div>
               </div>
-              <div className="relative mt-4 flex flex-wrap items-center gap-2">
-                <GlassSelect
-                  value={policy.severity}
-                  onChange={(next) =>
-                    setPolicies((current) => current.map((item) => (item.id === policy.id ? { ...item, severity: next as PolicyRule["severity"] } : item)))
-                  }
-                  className="max-w-40"
-                  options={severityOptions}
-                  ariaLabel={`${policy.name} 风险级别`}
-                />
-                {policy.custom ? (
-                  <button type="button" onClick={() => removePolicy(policy.id)} className={buttonClass("danger")}>
-                    <Trash2 className="h-4 w-4" aria-hidden />
-                    删除
-                  </button>
-                ) : null}
-              </div>
-            </motion.article>
-          ))}
+            ))}
+          </div>
         </div>
       </section>
 
       <aside className="space-y-4">
         <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
-          <PanelGlow />
-          <h2 className="relative text-base font-semibold text-white">工具权限</h2>
+          <h2 className="relative text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">工具权限</h2>
           <div className="relative mt-4 space-y-4">
             {tools.map((tool) => (
-              <div key={tool.id} className="border-b border-white/[0.07] pb-4 last:border-b-0 last:pb-0">
+              <div key={tool.id} className="border-b border-[var(--divider)] pb-4 last:border-b-0 last:pb-0">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="font-mono text-sm text-white">{tool.name}</div>
-                    <p className="mt-1 text-sm leading-6 text-zinc-400">{tool.description}</p>
+                    <div className="font-mono text-[length:var(--text-body)] text-[var(--text-primary)]">{tool.name}</div>
+                    <p className="mt-1 text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">{tool.description}</p>
                   </div>
                   <Switch
                     label={`切换 ${tool.name}`}
@@ -5671,20 +5846,19 @@ export default function Home() {
         </section>
 
         <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
-          <PanelGlow />
-          <h2 className="relative text-base font-semibold text-white">策略摘要</h2>
-          <div className="relative mt-4 space-y-3 text-sm">
-            <div className="flex justify-between border-b border-white/[0.07] pb-3">
-              <span className="text-zinc-400">启用策略</span>
-              <span className="font-medium text-white">{policies.filter((item) => item.enabled).length}</span>
+          <h2 className="relative text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">策略摘要</h2>
+          <div className="relative mt-4 space-y-3 text-[length:var(--text-body)]">
+            <div className="flex justify-between border-b border-[var(--divider)] pb-3">
+              <span className="text-[var(--text-secondary)]">启用策略</span>
+              <span className="font-medium text-[var(--text-primary)]">{policies.filter((item) => item.enabled).length}</span>
             </div>
-            <div className="flex justify-between border-b border-white/[0.07] pb-3">
-              <span className="text-zinc-400">高风险策略</span>
-              <span className="font-medium text-white">{policies.filter((item) => item.severity === "high").length}</span>
+            <div className="flex justify-between border-b border-[var(--divider)] pb-3">
+              <span className="text-[var(--text-secondary)]">高风险策略</span>
+              <span className="font-medium text-[var(--text-primary)]">{policies.filter((item) => item.severity === "high").length}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-zinc-400">允许工具</span>
-              <span className="font-medium text-white">{tools.filter((item) => item.allowed).length}</span>
+              <span className="text-[var(--text-secondary)]">允许工具</span>
+              <span className="font-medium text-[var(--text-primary)]">{tools.filter((item) => item.allowed).length}</span>
             </div>
           </div>
         </section>
@@ -5695,11 +5869,10 @@ export default function Home() {
   const renderManagedKeys = () => (
     <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
       <section className={`${glassPanelClass} relative space-y-4 p-5`}>
-        <PanelGlow />
-        <div className="relative flex flex-col gap-3 border-b border-white/[0.07] pb-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="relative flex flex-col gap-3 border-b border-[var(--divider)] pb-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            <h2 className="text-base font-semibold text-white">托管密钥列表</h2>
-            <p className="mt-1 text-sm text-zinc-400">每个调用方都应拥有独立密钥，便于单独轮换、停用和追踪最近使用情况。</p>
+            <h2 className="text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">托管密钥列表</h2>
+            <p className="mt-1 text-[length:var(--text-body)] text-[var(--text-secondary)]">每个调用方都应拥有独立密钥，便于单独轮换、停用和追踪最近使用情况。</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => void loadManagedApiKeys(true)} className={buttonClass("secondary")} disabled={managedKeysLoading || !hasAdminAccess}>
@@ -5713,9 +5886,9 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="relative flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.035] px-4.5 py-3.5 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-sm text-zinc-300">
-            <span className="font-medium text-white">推荐路径：</span>
+        <div className="relative flex flex-col gap-3 rounded-[var(--radius-lg)] border border-[var(--panel-border)] bg-[var(--surface-raised)] px-4.5 py-3.5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-[length:var(--text-body)] text-[var(--text-secondary)]">
+            <span className="font-medium text-[var(--text-primary)]">推荐路径：</span>
             管理员登录后台后，在这里创建每个用户或服务自己的密钥，不再继续共用一个环境变量里的总钥匙。
           </div>
           <Switch
@@ -5728,7 +5901,7 @@ export default function Home() {
         {!hasAdminAccess ? (
           <div className="relative p-5">
             <EmptyState icon={Shield} title="当前无后台管理权限">
-              <p className="mt-3 text-sm leading-6 text-zinc-400">
+              <p className="mt-3 text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">
                 先使用管理员账号登录，或在设置页填入兼容的 Admin API Key，随后这里才会连接后端的托管密钥接口。
               </p>
               <button type="button" onClick={() => navigateTo("settings")} className={`${buttonClass("primary")} mt-4`}>
@@ -5743,7 +5916,7 @@ export default function Home() {
               <form onSubmit={createManagedKey} className={`${glassPanelSoftClass} relative grid gap-4 p-4`}>
                 <div className="grid gap-4 md:grid-cols-2">
                   <label className="block">
-                    <span className="mb-2 block text-sm text-[var(--text-secondary)]">密钥名称</span>
+                    <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">密钥名称</span>
                     <input
                       value={managedKeyDraft.name}
                       onChange={(event) => setManagedKeyDraft((current) => ({ ...current, name: event.target.value }))}
@@ -5752,7 +5925,7 @@ export default function Home() {
                     />
                   </label>
                   <label className="block">
-                    <span className="mb-2 block text-sm text-[var(--text-secondary)]">角色</span>
+                    <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">角色</span>
                     <GlassSelect
                       value={managedKeyDraft.role}
                       onChange={(next) => setManagedKeyDraft((current) => ({ ...current, role: next as ManagedApiKeyRole }))}
@@ -5763,7 +5936,7 @@ export default function Home() {
                 </div>
 
                 <label className="block">
-                  <span className="mb-2 block text-sm text-[var(--text-secondary)]">说明备注</span>
+                  <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">说明备注</span>
                   <input
                     value={managedKeyDraft.description}
                     onChange={(event) => setManagedKeyDraft((current) => ({ ...current, description: event.target.value }))}
@@ -5774,7 +5947,7 @@ export default function Home() {
 
                 <div className="grid gap-4 md:grid-cols-[180px_minmax(0,1fr)]">
                   <label className="block">
-                    <span className="mb-2 block text-sm text-[var(--text-secondary)]">过期天数</span>
+                    <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">过期天数</span>
                     <input
                       value={managedKeyDraft.expiresInDays}
                       onChange={(event) => setManagedKeyDraft((current) => ({ ...current, expiresInDays: event.target.value }))}
@@ -5784,9 +5957,9 @@ export default function Home() {
                       placeholder="30"
                     />
                   </label>
-                  <div className={`${glassPanelSoftClass} p-4 text-sm text-zinc-300`}>
-                    <p className="font-medium text-white">签发建议</p>
-                    <p className="mt-2 leading-6 text-zinc-400">
+                  <div className={`${glassPanelSoftClass} p-4 text-[length:var(--text-body)] text-[var(--text-secondary)]`}>
+                    <p className="font-medium text-[var(--text-primary)]">签发建议</p>
+                    <p className="mt-2 leading-6 text-[var(--text-secondary)]">
                       给个人或脚本单独发密钥，优先使用 `client` 或 `gateway`。只有确实要管理后台、审批或策略时，才发 `security_admin` / `admin`。
                     </p>
                   </div>
@@ -5805,7 +5978,7 @@ export default function Home() {
             ) : null}
 
             {managedKeysError ? (
-              <div className="relative rounded-2xl border border-red-300/30 bg-red-500/10 px-4.5 py-3.5 text-sm text-red-100">
+              <div className="relative rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-danger)_28%,transparent)] bg-[var(--tone-danger-surface)] px-4.5 py-3.5 text-[length:var(--text-body)] text-[var(--tone-danger-text)]">
                 密钥列表加载失败：{managedKeysError}
               </div>
             ) : null}
@@ -5813,11 +5986,22 @@ export default function Home() {
             {managedKeys.length === 0 && !managedKeysLoading ? (
               <div className="relative p-5">
                 <EmptyState icon={KeyRound} title="还没有托管密钥">
-                  <p className="mt-3 text-sm leading-6 text-zinc-400">先签发第一把独立密钥，后面每个接入方都按用途和角色分别管理。</p>
+                  <p className="mt-3 text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">先签发第一把独立密钥，后面每个接入方都按用途和角色分别管理。</p>
                 </EmptyState>
               </div>
             ) : (
-              <div className="grid gap-4">
+              /* 密钥是高密度台账：用表格而非卡片墙。
+                 原来每把密钥是一个嵌套 4 层小卡的圆角面板，
+                 5 把密钥就要渲染 25 个圆角容器 —— 视觉噪音淹没信息。
+                 arrange.md / frontend-dev：DENSITY 高时禁用通用卡片。 */
+              <div className="relative overflow-hidden rounded-[var(--radius-md)] border border-[var(--panel-border-soft)]">
+                <div className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-x-4 border-b border-[var(--panel-border)] bg-[var(--surface-sunken)] px-4 py-2.5 text-[length:var(--text-micro)] font-medium uppercase tracking-[0.08em] text-[var(--text-muted)]">
+                  <span>密钥</span>
+                  <span>前缀</span>
+                  <span>到期</span>
+                  <span>最近使用</span>
+                  <span className="text-right">操作</span>
+                </div>
                 {managedKeys.map((item) => {
                   const status = managedKeyStatus(item);
                   const busy = managedKeyBusyId === item.id;
@@ -5825,91 +6009,111 @@ export default function Home() {
                   const sourceInfo = describeSource(item.last_used_by);
 
                   return (
-                    <motion.article key={item.id} whileHover={{ y: -2 }} className={`${glassPanelClass} ${glassPanelMotionClass} overflow-hidden p-5`}>
-                      <PanelGlow />
-                      <div className="relative flex flex-col gap-4">
-                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h3 className="truncate text-base font-semibold text-white">{item.name}</h3>
-                              <span className={`rounded-full border px-2.5 py-0.5 text-xs ${status.tone}`}>{status.label}</span>
-                              <span className="rounded-full border border-white/[0.08] bg-white/[0.06] px-2.5 py-0.5 text-xs text-zinc-300">
-                                {managedKeyRoleLabel(item.role)}
-                              </span>
-                            </div>
-                            <p className="mt-2 text-sm leading-6 text-zinc-400">{item.description || "未填写备注，可在名称或说明中记录负责人、用途与环境。"}</p>
-                          </div>
-                          <div className="space-y-2 text-left text-xs text-zinc-400 md:text-right">
-                            <div title={buildTimeTooltip(item.created_at)}>创建于 {formatTime(item.created_at)} CST</div>
-                            <div>签发人 {item.created_by || "-"}</div>
-                          </div>
+                    <div
+                      key={item.id}
+                      className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] items-start gap-x-4 border-b border-[var(--divider)] px-4 py-3.5 transition-colors duration-[var(--dur-fast)] last:border-b-0 hover:bg-[var(--surface-sunken)]"
+                    >
+                      {/* 名称 + 角色 + 状态 + 备注 */}
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="truncate text-[length:var(--text-caption)] font-medium text-[var(--text-primary)]">{item.name}</span>
+                          <span className={`chip ${status.chip}`}>{status.label}</span>
                         </div>
-
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[length:var(--text-micro)] text-[var(--text-muted)]">
+                          <span className="font-mono">{managedKeyRoleLabel(item.role)}</span>
+                          <span aria-hidden>·</span>
+                          <span className="truncate" title={item.description || undefined}>
+                            {item.description || "未填写备注"}
+                          </span>
+                        </div>
                         {hasFreshSecret ? (
-                          <div className="rounded-2xl border border-teal-200/25 bg-teal-300/[0.08] px-4.5 py-3.5 text-sm text-teal-50">
-                            这把密钥的最新明文仍在右侧展示区域中，离开页面后不会再从后台返回，请先复制并妥善保存。
+                          <div className="mt-2 text-[length:var(--text-micro)] text-[var(--tone-warning-text)]">
+                            明文仍在右侧展示区，离开页面后不再返回。
                           </div>
                         ) : null}
+                      </div>
 
-                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                          <div className={`${glassPanelSoftClass} p-3`}>
-                            <div className="text-xs text-zinc-500">密钥前缀</div>
-                            <div className="mt-2 break-all font-mono text-sm text-white">{item.masked_key}</div>
-                          </div>
-                          <div className={`${glassPanelSoftClass} p-3`}>
-                            <div className="text-xs text-zinc-500">到期时间</div>
-                            <div className="mt-2 text-sm text-white" title={item.expires_at ? buildTimeTooltip(item.expires_at) : undefined}>
-                              {item.expires_at ? `${formatTime(item.expires_at)} CST` : "未设置过期"}
-                            </div>
-                            <div className="mt-1 text-xs text-zinc-500">{item.expires_at ? formatRelativeTime(item.expires_at) : "建议为生产密钥设置有效期"}</div>
-                          </div>
-                          <div className={`${glassPanelSoftClass} p-3`}>
-                            <div className="text-xs text-zinc-500">最近使用</div>
-                            <div className="mt-2 text-sm text-white" title={item.last_used_at ? buildTimeTooltip(item.last_used_at) : undefined}>
-                              {item.last_used_at ? `${formatTime(item.last_used_at)} CST` : "尚未使用"}
-                            </div>
-                            <div className="mt-1 text-xs text-zinc-300" title={sourceInfo.detail}>
-                              {item.last_used_at ? `${formatRelativeTime(item.last_used_at)} · ${sourceInfo.label}` : "首次调用后这里会显示访问来源"}
-                            </div>
-                          </div>
-                          <div className={`${glassPanelSoftClass} p-3`}>
-                            <div className="text-xs text-zinc-500">当前状态</div>
-                            <div className="mt-2 text-sm text-white">{status.label}</div>
-                            <div className="mt-1 text-xs text-zinc-500">{status.hint}</div>
-                          </div>
+                      {/* 前缀 */}
+                      <div className="min-w-0">
+                        <div className="truncate font-mono text-[length:var(--text-caption)] text-[var(--text-secondary)]" title={item.masked_key}>
+                          {item.masked_key}
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => void copyText(item.key_prefix, "密钥前缀已复制")}
+                          className="mt-1 text-[length:var(--text-micro)] text-[var(--text-muted)] transition-colors duration-[var(--dur-fast)] hover:text-[var(--tone-accent-text)]"
+                        >
+                          复制前缀
+                        </button>
+                      </div>
 
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={() => void copyText(item.key_prefix, "密钥前缀已复制")}
-                            className={buttonClass("secondary")}
-                          >
-                            <Clipboard className="h-4 w-4" aria-hidden />
-                            复制前缀
-                          </button>
-                          <button type="button" onClick={() => void rotateManagedKey(item)} className={buttonClass("secondary")} disabled={busy}>
-                            <RefreshCcw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} aria-hidden />
-                            轮换
-                          </button>
-                          {item.is_active ? (
-                            <button type="button" onClick={() => void updateManagedKeyLifecycle(item, "revoke")} className={buttonClass("danger")} disabled={busy}>
-                              <X className="h-4 w-4" aria-hidden />
-                              停用
-                            </button>
-                          ) : (
-                            <button type="button" onClick={() => void updateManagedKeyLifecycle(item, "activate")} className={buttonClass("secondary")} disabled={busy}>
-                              <CheckCircle2 className="h-4 w-4" aria-hidden />
-                              恢复
-                            </button>
-                          )}
-                          <button type="button" onClick={() => void updateManagedKeyLifecycle(item, "delete")} className={buttonClass("danger")} disabled={busy}>
-                            <Trash2 className="h-4 w-4" aria-hidden />
-                            删除
-                          </button>
+                      {/* 到期 */}
+                      <div className="min-w-0 text-[length:var(--text-caption)] text-[var(--text-secondary)]">
+                        <div title={item.expires_at ? buildTimeTooltip(item.expires_at) : undefined}>
+                          {item.expires_at ? `${formatTime(item.expires_at)} CST` : "未设置"}
+                        </div>
+                        <div className="mt-1 text-[length:var(--text-micro)] text-[var(--text-muted)]">
+                          {item.expires_at ? formatRelativeTime(item.expires_at) : status.hint}
                         </div>
                       </div>
-                    </motion.article>
+
+                      {/* 最近使用 */}
+                      <div className="min-w-0 text-[length:var(--text-caption)] text-[var(--text-secondary)]">
+                        <div title={item.last_used_at ? buildTimeTooltip(item.last_used_at) : undefined}>
+                          {item.last_used_at ? `${formatTime(item.last_used_at)} CST` : "尚未使用"}
+                        </div>
+                        <div className="mt-1 truncate text-[length:var(--text-micro)] text-[var(--text-muted)]" title={sourceInfo.detail}>
+                          {item.last_used_at ? `${formatRelativeTime(item.last_used_at)} · ${sourceInfo.label}` : "首次调用后显示来源"}
+                        </div>
+                      </div>
+
+                      {/* 操作：图标按钮，保持行高稳定 */}
+                      <div className="flex shrink-0 items-center justify-end gap-1">
+                        <button
+                          type="button"
+                          onClick={() => void rotateManagedKey(item)}
+                          disabled={busy}
+                          className="tap-target rounded-[var(--radius-xs)] p-1.5 text-[var(--text-muted)] transition-colors duration-[var(--dur-fast)] hover:bg-[var(--surface-raised)] hover:text-[var(--text-primary)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--tone-accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                          aria-label={`轮换密钥 ${item.name}`}
+                          title="轮换"
+                        >
+                          <RefreshCcw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} aria-hidden />
+                        </button>
+                        {item.is_active ? (
+                          <button
+                            type="button"
+                            onClick={() => void updateManagedKeyLifecycle(item, "revoke")}
+                            disabled={busy}
+                            className="tap-target rounded-[var(--radius-xs)] p-1.5 text-[var(--text-muted)] transition-colors duration-[var(--dur-fast)] hover:bg-[var(--tone-warning-surface)] hover:text-[var(--tone-warning-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--tone-accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                            aria-label={`停用密钥 ${item.name}`}
+                            title="停用"
+                          >
+                            <X className="h-4 w-4" aria-hidden />
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => void updateManagedKeyLifecycle(item, "activate")}
+                            disabled={busy}
+                            className="tap-target rounded-[var(--radius-xs)] p-1.5 text-[var(--text-muted)] transition-colors duration-[var(--dur-fast)] hover:bg-[var(--tone-success-surface)] hover:text-[var(--tone-success-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--tone-accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                            aria-label={`恢复密钥 ${item.name}`}
+                            title="恢复"
+                          >
+                            <CheckCircle2 className="h-4 w-4" aria-hidden />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void updateManagedKeyLifecycle(item, "delete")}
+                          disabled={busy}
+                          className="tap-target rounded-[var(--radius-xs)] p-1.5 text-[var(--text-muted)] transition-colors duration-[var(--dur-fast)] hover:bg-[var(--tone-danger-surface)] hover:text-[var(--tone-danger-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--tone-accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                          aria-label={`删除密钥 ${item.name}`}
+                          title="删除"
+                        >
+                          <Trash2 className="h-4 w-4" aria-hidden />
+                        </button>
+                      </div>
+                    </div>
                   );
                 })}
               </div>
@@ -5920,10 +6124,9 @@ export default function Home() {
 
       <aside className="space-y-4">
         <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
-          <PanelGlow />
           <div className="relative flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <h2 className="min-w-0 text-base font-semibold text-white">最新明文密钥</h2>
-            <span className="self-start whitespace-nowrap rounded-full border border-amber-300/30 bg-amber-500/10 px-2.5 py-0.5 text-xs text-amber-100 sm:self-auto">
+            <h2 className="min-w-0 text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">最新明文密钥</h2>
+            <span className="self-start whitespace-nowrap rounded-full border border-[color-mix(in_oklab,var(--tone-warning)_28%,transparent)] bg-[var(--tone-warning-surface)] px-2.5 py-0.5 text-[length:var(--text-micro)] text-[var(--tone-warning-text)] sm:self-auto">
               只返回一次
             </span>
           </div>
@@ -5932,26 +6135,26 @@ export default function Home() {
               <div className={`${glassPanelSoftClass} p-4`}>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
-                    <div className="text-sm font-medium text-white">
+                    <div className="text-[length:var(--text-body)] font-medium text-[var(--text-primary)]">
                       {managedKeyIssueState.action === "created" ? "刚创建的新密钥" : "刚轮换出的新密钥"}
                     </div>
-                    <div className="mt-1 break-words text-xs text-zinc-500">
+                    <div className="mt-1 break-words text-[length:var(--text-micro)] text-[var(--text-muted)]">
                       {managedKeyIssueState.item.name} · {managedKeyRoleLabel(managedKeyIssueState.item.role)}
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => setManagedKeyIssueState(null)}
-                    className="flex h-9 w-9 items-center justify-center rounded-xl text-zinc-400 transition-all duration-200 hover:bg-white/[0.08] hover:text-white focus:outline-none focus:ring-2 focus:ring-teal-300/60 active:scale-90"
+                    className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] text-[var(--text-secondary)] transition-[color,background-color,border-color,box-shadow,transform,opacity] duration-[var(--dur-fast)] hover:bg-[var(--surface-raised)] hover:text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--tone-accent)] active:scale-[0.98]"
                     aria-label="清除最新明文密钥展示"
                   >
                     <X className="h-4 w-4" aria-hidden />
                   </button>
                 </div>
-                <div className="mt-4 rounded-xl border border-white/[0.08] bg-[var(--surface-raised)] p-3.5 font-mono text-xs leading-6 break-all text-[var(--tone-accent-text)]">
+                <div className="mt-4 rounded-[var(--radius-md)] border border-[var(--panel-border)] bg-[var(--surface-raised)] p-3.5 font-mono text-[length:var(--text-micro)] leading-6 break-all text-[var(--tone-accent-text)]">
                   {managedKeyIssueState.apiKey}
                 </div>
-                <p className="mt-3 text-xs leading-6 text-zinc-400">
+                <p className="mt-3 text-[length:var(--text-micro)] leading-6 text-[var(--text-secondary)]">
                   后台出于安全原因不会再次返回这串明文。请现在就复制，或直接写入右侧的兼容 API Key 设置中供联调使用。
                 </p>
               </div>
@@ -5978,7 +6181,7 @@ export default function Home() {
           ) : (
             <div className="relative mt-4">
               <EmptyState icon={Copy} title="尚未产生新密钥">
-                <p className="mt-3 text-sm leading-6 text-zinc-400">
+                <p className="mt-3 text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">
                   当你创建或轮换一把托管密钥后，它的明文只会在这里显示一次，适合当场复制给接入方或写入当前会话的兼容设置。
                 </p>
               </EmptyState>
@@ -5987,39 +6190,37 @@ export default function Home() {
         </section>
 
         <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
-          <PanelGlow />
-          <h2 className="relative text-base font-semibold text-white">发放建议</h2>
-          <div className="relative mt-4 space-y-3 text-sm text-zinc-400">
+          <h2 className="relative text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">发放建议</h2>
+          <div className="relative mt-4 space-y-3 text-[length:var(--text-body)] text-[var(--text-secondary)]">
             <div className={`${glassPanelSoftClass} p-3`}>
-              <div className="font-medium text-white">个人调试</div>
+              <div className="font-medium text-[var(--text-primary)]">个人调试</div>
               <div className="mt-1 leading-6">优先发 `client`，并设置 7 到 30 天有效期。</div>
             </div>
             <div className={`${glassPanelSoftClass} p-3`}>
-              <div className="font-medium text-white">服务接入</div>
+              <div className="font-medium text-[var(--text-primary)]">服务接入</div>
               <div className="mt-1 leading-6">给每个网关、脚本或后端任务单独发一把密钥，避免泄漏后需要全局换钥。</div>
             </div>
             <div className={`${glassPanelSoftClass} p-3`}>
-              <div className="font-medium text-white">后台管理</div>
+              <div className="font-medium text-[var(--text-primary)]">后台管理</div>
               <div className="mt-1 leading-6">`admin` 与 `security_admin` 只给少量运营或安全成员，优先通过登录 Token 使用后台。</div>
             </div>
           </div>
         </section>
 
         <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
-          <PanelGlow />
-          <h2 className="relative text-base font-semibold text-white">当前兼容模式</h2>
-          <div className="relative mt-4 space-y-3 text-sm text-zinc-400">
-            <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
+          <h2 className="relative text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">当前兼容模式</h2>
+          <div className="relative mt-4 space-y-3 text-[length:var(--text-body)] text-[var(--text-secondary)]">
+            <div className="flex items-center justify-between border-b border-[var(--divider)] pb-3">
               <span>后台 Token</span>
-              <span className={hasConsoleToken ? "text-emerald-200" : "text-zinc-200"}>{hasConsoleToken ? "已生效" : "未登录"}</span>
+              <span className={hasConsoleToken ? "text-[var(--tone-success-text)]" : "text-[var(--text-primary)]"}>{hasConsoleToken ? "已生效" : "未登录"}</span>
             </div>
-            <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
+            <div className="flex items-center justify-between border-b border-[var(--divider)] pb-3">
               <span>Admin API Key</span>
-              <span className={settings.adminApiKey ? "text-emerald-200" : "text-zinc-200"}>{settings.adminApiKey ? "已填" : "留空"}</span>
+              <span className={settings.adminApiKey ? "text-[var(--tone-success-text)]" : "text-[var(--text-primary)]"}>{settings.adminApiKey ? "已填" : "留空"}</span>
             </div>
             <div className="flex items-center justify-between">
               <span>Client / Gateway API Key</span>
-              <span className={settings.clientApiKey ? "text-emerald-200" : "text-zinc-200"}>{settings.clientApiKey ? "已填" : "留空"}</span>
+              <span className={settings.clientApiKey ? "text-[var(--tone-success-text)]" : "text-[var(--text-primary)]"}>{settings.clientApiKey ? "已填" : "留空"}</span>
             </div>
           </div>
           <button type="button" onClick={() => navigateTo("settings")} className={`${buttonClass("secondary")} relative mt-5 w-full`}>
@@ -6034,16 +6235,15 @@ export default function Home() {
   const renderChat = () => (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
       <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
-        <PanelGlow />
         <div className="relative flex min-h-[620px] flex-col">
           <div className="flex flex-col gap-4 border-b border-[var(--divider)] pb-5 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <div className="flex items-center gap-2 text-sm font-medium text-[var(--tone-accent-text)]">
+              <div className="flex items-center gap-2 text-[length:var(--text-body)] font-medium text-[var(--tone-accent-text)]">
                 <MessageSquare className="h-4 w-4" aria-hidden />
                 安全对话入口
               </div>
-              <h2 className="mt-2 text-xl font-semibold text-[var(--text-primary)]">开始与模型对话</h2>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">
+              <h2 className="mt-2 text-[length:var(--text-title)] font-semibold text-[var(--text-primary)]">开始与模型对话</h2>
+              <p className="mt-2 max-w-2xl text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">
                 每条消息都会先经过 Shadow Agent 审计，再转发给已配置的模型。你的上游 API Key 不会出现在这里。
               </p>
             </div>
@@ -6062,14 +6262,14 @@ export default function Home() {
             </button>
           </div>
 
-          <div className="relative mt-5 min-h-[380px] flex-1 overflow-y-auto rounded-2xl border border-[var(--panel-border-soft)] bg-[var(--surface-raised)] p-5" aria-live="polite">
+          <div className="relative mt-5 min-h-[380px] flex-1 overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--panel-border-soft)] bg-[var(--surface-raised)] p-5" aria-live="polite">
             {!chatMessages.length && !chatLoading ? (
               <div className="flex min-h-[340px] flex-col items-center justify-center px-5 text-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-teal-300/30 bg-teal-300/10 text-[var(--tone-accent-text)] shadow-[0_0_24px_rgba(45,212,191,0.15)]">
+                <div className="flex h-16 w-16 items-center justify-center rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--tone-accent-surface)] text-[var(--tone-accent-text)] shadow-[var(--panel-shadow-soft)]">
                   <MessageSquare className="h-7 w-7" aria-hidden />
                 </div>
-                <h3 className="mt-4 text-base font-semibold text-[var(--text-primary)]">还没有消息</h3>
-                <p className="mt-2 max-w-md text-sm leading-6 text-[var(--text-secondary)]">
+                <h3 className="mt-4 text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">还没有消息</h3>
+                <p className="mt-2 max-w-md text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">
                   输入你的问题，Shadow Agent 会在安全检查通过后请求模型。
                 </p>
               </div>
@@ -6078,12 +6278,12 @@ export default function Home() {
                 {chatMessages.map((message) => (
                   <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
                     <div className={`max-w-[min(760px,90%)] ${message.role === "user" ? "items-end" : "items-start"}`}>
-                      <div className="mb-1.5 px-1.5 text-xs text-[var(--text-muted)]">{message.role === "user" ? "你" : "Shadow Agent"}</div>
+                      <div className="mb-1.5 px-1.5 text-[length:var(--text-micro)] text-[var(--text-muted)]">{message.role === "user" ? "你" : "Shadow Agent"}</div>
                       <div
-                        className={`whitespace-pre-wrap break-words border px-4.5 py-3.5 text-sm leading-7 ${
+                        className={`whitespace-pre-wrap break-words border px-4.5 py-3.5 text-[length:var(--text-body)] leading-7 ${
                           message.role === "user"
-                            ? "rounded-2xl rounded-tr-xs border-teal-300/30 bg-gradient-to-br from-teal-400/[0.16] to-teal-500/[0.08] text-[var(--text-primary)] shadow-[0_4px_20px_rgba(20,184,166,0.08)]"
-                            : "rounded-2xl rounded-tl-xs border-[var(--panel-border-soft)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[0_4px_20px_rgba(0,0,0,0.04)]"
+                            ? "rounded-[var(--radius-lg)] rounded-tr-xs border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-gradient-to-br from-[color-mix(in_oklab,var(--tone-accent)_16%,transparent)] to-[color-mix(in_oklab,var(--tone-accent)_8%,transparent)] text-[var(--text-primary)] shadow-[var(--panel-shadow-soft)]"
+                            : "rounded-[var(--radius-lg)] rounded-tl-xs border-[var(--panel-border-soft)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--panel-shadow-soft)]"
                         }`}
                       >
                         {message.content}
@@ -6093,11 +6293,11 @@ export default function Home() {
                 ))}
                 {chatLoading ? (
                   <div className="flex justify-start">
-                    <div className="flex items-center gap-2.5 rounded-2xl rounded-tl-xs border border-[var(--panel-border-soft)] bg-[var(--surface-elevated)] px-4.5 py-3 text-sm text-[var(--text-secondary)] shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+                    <div className="flex items-center gap-2.5 rounded-[var(--radius-lg)] rounded-tl-xs border border-[var(--panel-border-soft)] bg-[var(--surface-elevated)] px-4.5 py-3 text-[length:var(--text-body)] text-[var(--text-secondary)] shadow-[var(--panel-shadow-soft)]">
                       <span className="flex gap-1">
-                        <span className="h-2 w-2 animate-bounce rounded-full bg-teal-400/80 [animation-delay:-0.3s]" />
-                        <span className="h-2 w-2 animate-bounce rounded-full bg-teal-400/80 [animation-delay:-0.15s]" />
-                        <span className="h-2 w-2 animate-bounce rounded-full bg-teal-400/80" />
+                        <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--tone-accent-surface)] [animation-delay:-0.3s]" />
+                        <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--tone-accent-surface)] [animation-delay:-0.15s]" />
+                        <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--tone-accent-surface)]" />
                       </span>
                       <span>正在请求模型...</span>
                     </div>
@@ -6108,7 +6308,7 @@ export default function Home() {
           </div>
 
           {chatError ? (
-            <div className="relative mt-4 rounded-xl border border-red-300/30 bg-red-500/10 px-4 py-3 text-sm leading-6 text-[var(--tone-danger-text)]" role="alert">
+            <div className="relative mt-4 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--tone-danger)_28%,transparent)] bg-[var(--tone-danger-surface)] px-4 py-3 text-[length:var(--text-body)] leading-6 text-[var(--tone-danger-text)]" role="alert">
               {chatError}
             </div>
           ) : null}
@@ -6134,19 +6334,18 @@ export default function Home() {
 
       <aside className="space-y-5">
         <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
-          <PanelGlow />
-          <div className="relative flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)]">
+          <div className="relative flex items-center gap-2 text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">
             <Bot className="h-4 w-4 text-[var(--tone-accent-text)]" aria-hidden />
             对话设置
           </div>
           <label className="relative mt-5 block">
-            <span className="mb-2 block text-sm text-[var(--text-secondary)]">模型</span>
+            <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">模型</span>
             <GlassSelect value={chatModel} onChange={setChatModel} options={chatModelOptions} ariaLabel="选择对话模型" />
           </label>
-          <div className="relative mt-5 space-y-3 border-t border-[var(--divider)] pt-4 text-sm">
+          <div className="relative mt-5 space-y-3 border-t border-[var(--divider)] pt-4 text-[length:var(--text-body)]">
             <div className="flex items-center justify-between gap-3">
               <span className="text-[var(--text-secondary)]">安全审计</span>
-              <span className="rounded-full border border-emerald-300/30 bg-emerald-400/10 px-2.5 py-0.5 text-xs text-[var(--tone-success-text)]">已启用</span>
+              <span className="rounded-full border border-[color-mix(in_oklab,var(--tone-success)_28%,transparent)] bg-[var(--tone-success-surface)] px-2.5 py-0.5 text-[length:var(--text-micro)] text-[var(--tone-success-text)]">已启用</span>
             </div>
             <div className="flex items-center justify-between gap-3">
               <span className="text-[var(--text-secondary)]">当前账号</span>
@@ -6160,12 +6359,11 @@ export default function Home() {
         </section>
 
         <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
-          <PanelGlow />
-          <h2 className="relative text-sm font-semibold text-[var(--text-primary)]">调用链路</h2>
-          <div className="relative mt-4 space-y-2.5 text-sm">
+          <h2 className="relative text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">调用链路</h2>
+          <div className="relative mt-4 space-y-2.5 text-[length:var(--text-body)]">
             {["你的消息", "Shadow Agent 安全审计", "已配置的大模型"].map((item, index) => (
               <div key={item} className="flex items-center gap-3">
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl border border-teal-300/20 bg-teal-300/10 text-xs font-semibold text-[var(--tone-accent-text)]">{index + 1}</span>
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--tone-accent-surface)] text-[length:var(--text-micro)] font-semibold text-[var(--tone-accent-text)]">{index + 1}</span>
                 <span className="text-[var(--text-secondary)]">{item}</span>
               </div>
             ))}
@@ -6182,32 +6380,33 @@ export default function Home() {
   const renderGateway = () => (
     <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
       <form onSubmit={submitGatewayTest} className={`${glassPanelClass} relative space-y-4 p-5`}>
-        <PanelGlow />
         <div className={`${glassPanelSoftClass} relative space-y-4 p-4`}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
-              <div className="inline-flex max-w-full self-start whitespace-nowrap items-center gap-2 rounded-full border border-teal-200/20 bg-teal-300/10 px-3 py-1 text-[11px] font-medium text-[var(--tone-accent-text)]">
+              <div className="inline-flex max-w-full self-start whitespace-nowrap items-center gap-2 rounded-full border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--tone-accent-surface)] px-3 py-1 text-[length:var(--text-micro)] font-medium text-[var(--tone-accent-text)]">
                 <Sparkles className="h-3.5 w-3.5" aria-hidden />
                 场景化安全验证
               </div>
-              <h2 className="mt-3 text-lg font-semibold text-white">{selectedScenario.label}</h2>
-              <p className="mt-2 text-sm leading-6 text-zinc-400">{selectedScenario.summary}</p>
+              <h2 className="mt-3 text-[length:var(--text-title)] font-semibold text-[var(--text-primary)]">{selectedScenario.label}</h2>
+              <p className="mt-2 text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">{selectedScenario.summary}</p>
             </div>
-            <span className={`self-start shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-xs sm:self-auto ${severityClass(selectedScenario.severity)}`}>
+            <span className={`self-start shrink-0 whitespace-nowrap rounded-full border px-3 py-1 text-[length:var(--text-micro)] sm:self-auto ${severityClass(selectedScenario.severity)}`}>
               {selectedScenario.expectedOutcome === "blocked" ? "预期拦截" : "预期放行"}
             </span>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="rounded-xl border border-white/[0.08] bg-white/[0.035] p-3.5 text-sm">
-              <div className="text-xs text-zinc-500">攻击面</div>
-              <div className="mt-2 break-words text-zinc-100">{selectedScenario.attackSurface}</div>
+          {/* 攻击面 / 操作提示：原先是两张并列小卡。两个键值对不值得各占一个盒子，
+              改成一条定义列表 —— spatial-design：Cards Are Not Required。 */}
+          <dl className="grid gap-x-6 gap-y-2 border-y border-[var(--divider)] py-3 sm:grid-cols-2">
+            <div className="flex min-w-0 flex-col gap-1">
+              <dt className="text-[length:var(--text-micro)] uppercase tracking-[0.08em] text-[var(--text-muted)]">攻击面</dt>
+              <dd className="break-words text-[length:var(--text-body)] leading-6 text-[var(--text-primary)]">{selectedScenario.attackSurface}</dd>
             </div>
-            <div className="rounded-xl border border-white/[0.08] bg-white/[0.035] p-3.5 text-sm">
-              <div className="text-xs text-zinc-500">操作提示</div>
-              <div className="mt-2 break-words text-zinc-100">{selectedScenario.operatorHint}</div>
+            <div className="flex min-w-0 flex-col gap-1">
+              <dt className="text-[length:var(--text-micro)] uppercase tracking-[0.08em] text-[var(--text-muted)]">操作提示</dt>
+              <dd className="break-words text-[length:var(--text-body)] leading-6 text-[var(--text-primary)]">{selectedScenario.operatorHint}</dd>
             </div>
-          </div>
+          </dl>
 
           <div className="grid gap-2 md:grid-cols-2 2xl:grid-cols-1">
             {DEMO_SCENARIOS.map((scenario) => {
@@ -6217,14 +6416,14 @@ export default function Home() {
                   key={scenario.id}
                   type="button"
                   onClick={() => loadScenarioIntoGateway(scenario.id)}
-                  className={`flex flex-col gap-2 rounded-xl border px-3.5 py-2.5 text-left text-sm transition-all duration-200 active:scale-[0.99] sm:flex-row sm:items-center sm:justify-between ${
+                  className={`flex flex-col gap-2 rounded-[var(--radius-md)] border px-3.5 py-2.5 text-left text-[length:var(--text-body)] transition-[color,background-color,border-color,box-shadow,transform,opacity] duration-[var(--dur-fast)] active:scale-[0.98] sm:flex-row sm:items-center sm:justify-between ${
                     active
-                      ? "border-teal-200/24 bg-teal-300/[0.08] text-white"
-                      : "border-white/[0.08] bg-white/[0.04] text-zinc-300 hover:border-white/[0.14] hover:text-white"
+                      ? "border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[color-mix(in_oklab,var(--tone-accent)_8%,transparent)] text-[var(--text-primary)]"
+                      : "border-[var(--panel-border)] bg-[var(--surface-raised)] text-[var(--text-secondary)] hover:border-[var(--panel-border)] hover:text-[var(--text-primary)]"
                   }`}
                 >
                   <span className="min-w-0 break-words">{scenario.label}</span>
-                  <span className="shrink-0 whitespace-nowrap text-[11px] opacity-75">{scenario.expectedOutcome === "blocked" ? "Block" : "Allow"}</span>
+                  <span className="shrink-0 whitespace-nowrap text-[length:var(--text-micro)] opacity-75">{scenario.expectedOutcome === "blocked" ? "Block" : "Allow"}</span>
                 </button>
               );
             })}
@@ -6233,11 +6432,11 @@ export default function Home() {
 
         <div className="relative grid gap-4 md:grid-cols-2">
           <label>
-            <span className="mb-2 block text-sm text-[var(--text-secondary)]">模型</span>
+            <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">模型</span>
             <input value={gatewayForm.model} onChange={(event) => setGatewayForm((current) => ({ ...current, model: event.target.value }))} className={inputBase} />
           </label>
           <label>
-            <span className="mb-2 block text-sm text-[var(--text-secondary)]">工具名</span>
+            <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">工具名</span>
             <GlassSelect
               value={gatewayForm.toolName}
               onChange={(next) => setGatewayForm((current) => ({ ...current, toolName: next }))}
@@ -6259,12 +6458,12 @@ export default function Home() {
         </div>
 
         <label className="relative block">
-          <span className="mb-2 block text-sm text-[var(--text-secondary)]">用户 Prompt</span>
+          <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">用户 Prompt</span>
           <textarea value={gatewayForm.prompt} onChange={(event) => setGatewayForm((current) => ({ ...current, prompt: event.target.value }))} className={`${inputBase} min-h-32 resize-y py-3 leading-6`} placeholder="输入用户请求" />
         </label>
 
         <label className="relative block">
-          <span className="mb-2 block text-sm text-[var(--text-secondary)]">外部上下文</span>
+          <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">外部上下文</span>
           <textarea
             value={gatewayForm.externalContext}
             onChange={(event) => setGatewayForm((current) => ({ ...current, externalContext: event.target.value }))}
@@ -6274,13 +6473,13 @@ export default function Home() {
         </label>
 
         <label className="relative block">
-          <span className="mb-2 block text-sm text-[var(--text-secondary)]">工具参数 JSON</span>
+          <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">工具参数 JSON</span>
           <textarea value={gatewayForm.parameters} onChange={(event) => setGatewayForm((current) => ({ ...current, parameters: event.target.value }))} className={`${inputBase} min-h-28 resize-y py-3 font-mono leading-6`} spellCheck={false} />
         </label>
 
-          <div className="relative flex flex-col gap-3 border-t border-white/[0.07] pt-4 xl:flex-row xl:items-center xl:justify-between">
-            <label className="flex items-center gap-3 text-sm text-zinc-300">
-              <input type="checkbox" checked={gatewayForm.stream} onChange={(event) => setGatewayForm((current) => ({ ...current, stream: event.target.checked }))} className="h-4 w-4 accent-teal-300" />
+          <div className="relative flex flex-col gap-3 border-t border-[var(--divider)] pt-4 xl:flex-row xl:items-center xl:justify-between">
+            <label className="flex items-center gap-3 text-[length:var(--text-body)] text-[var(--text-secondary)]">
+              <input type="checkbox" checked={gatewayForm.stream} onChange={(event) => setGatewayForm((current) => ({ ...current, stream: event.target.checked }))} className="h-4 w-4 accent-[var(--tone-accent)]" />
               Stream
             </label>
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
@@ -6309,9 +6508,8 @@ export default function Home() {
 
       <aside className="space-y-4">
         <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
-          <PanelGlow />
           <div className="relative flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <h2 className="text-base font-semibold text-white">测试结果</h2>
+            <h2 className="text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">测试结果</h2>
             <button type="button" onClick={() => navigateTo("settings")} className={`${buttonClass("ghost")} w-full sm:w-auto`}>
               <KeyRound className="h-4 w-4" aria-hidden />
               API Key
@@ -6319,19 +6517,19 @@ export default function Home() {
           </div>
           {gatewayResult ? (
             <div className="relative mt-4">
-              <div className={`rounded-2xl border p-4.5 ${gatewayResult.ok ? "border-emerald-300/30 bg-emerald-500/10 text-emerald-50" : "border-red-300/30 bg-red-500/10 text-red-50"}`}>
+              <div className={`rounded-[var(--radius-lg)] border p-4.5 ${gatewayResult.ok ? "border-[color-mix(in_oklab,var(--tone-success)_28%,transparent)] bg-[var(--tone-success-surface)] text-[var(--tone-success-text)]" : "border-[color-mix(in_oklab,var(--tone-danger)_28%,transparent)] bg-[var(--tone-danger-surface)] text-[var(--tone-danger-text)]"}`}>
                 <div className="flex items-center gap-2 font-semibold">
                   {gatewayResult.ok ? <CheckCircle2 className="h-4 w-4" aria-hidden /> : <AlertTriangle className="h-4 w-4" aria-hidden />}
                   {gatewayResult.title}
                 </div>
-                <p className="mt-2 text-sm leading-6 opacity-90">{gatewayResult.message}</p>
-                <div className="mt-3 rounded-xl border border-white/[0.08] bg-[var(--surface-raised)] px-3.5 py-2.5 text-xs leading-5 text-[var(--text-secondary)]">
+                <p className="mt-2 text-[length:var(--text-body)] leading-6 opacity-90">{gatewayResult.message}</p>
+                <div className="mt-3 rounded-[var(--radius-md)] border border-[var(--panel-border)] bg-[var(--surface-raised)] px-3.5 py-2.5 text-[length:var(--text-micro)] leading-5 text-[var(--text-secondary)]">
                   预期结果：{selectedScenario.expectedOutcome === "blocked" ? "阻断" : "放行"}。
                   {selectedScenario.expectedCategory ? ` 重点关注分类 ${categoryLabel(selectedScenario.expectedCategory)}。` : " 该场景用于验证正常流量不会被误拦。"}
                 </div>
                 {gatewayResult.detail && typeof gatewayResult.detail === "object" && "risk_score" in gatewayResult.detail ? (
                   <div
-                    className={`mt-3 inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${riskTone(
+                    className={`mt-3 inline-flex items-center rounded-full border px-3 py-1 text-[length:var(--text-micro)] font-medium ${riskTone(
                       asNumber((gatewayResult.detail as Record<string, unknown>).risk_score)
                     )}`}
                   >
@@ -6340,26 +6538,26 @@ export default function Home() {
                   </div>
                 ) : null}
               </div>
-              {gatewayResult.detail ? <pre className={`${glassPanelSoftClass} mt-4 max-h-[360px] overflow-auto p-4 text-xs leading-5 text-[var(--text-secondary)]`}>{JSON.stringify(gatewayResult.detail, null, 2)}</pre> : null}
+              {gatewayResult.detail ? <pre className={`${glassPanelSoftClass} mt-4 max-h-[360px] overflow-auto p-4 text-[length:var(--text-micro)] leading-5 text-[var(--text-secondary)]`}>{JSON.stringify(gatewayResult.detail, null, 2)}</pre> : null}
               <div className="mt-4 grid gap-3">
                 <div className={`${glassPanelSoftClass} p-4`}>
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <h3 className="text-sm font-semibold text-white">证据包摘要</h3>
+                    <h3 className="text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">证据包摘要</h3>
                     <button type="button" onClick={downloadEvidenceBundle} className={`${buttonClass("secondary")} w-full sm:w-auto`}>
                       <Save className="h-4 w-4" aria-hidden />
                       一键导出
                     </button>
                   </div>
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <div className="rounded-xl border border-white/[0.08] bg-white/[0.04] p-3.5 text-sm">
-                      <div className="text-xs text-zinc-500">当前角色视角</div>
-                      <div className="mt-2 text-white">{roleShowcaseDefinition.label}</div>
-                      <div className="mt-1 text-xs leading-5 text-zinc-400">{roleShowcaseDefinition.judgeFocus}</div>
+                    <div className="rounded-[var(--radius-md)] border border-[var(--panel-border)] bg-[var(--surface-raised)] p-3.5 text-[length:var(--text-body)]">
+                      <div className="text-[length:var(--text-micro)] text-[var(--text-muted)]">当前角色视角</div>
+                      <div className="mt-2 text-[var(--text-primary)]">{roleShowcaseDefinition.label}</div>
+                      <div className="mt-1 text-[length:var(--text-micro)] leading-5 text-[var(--text-secondary)]">{roleShowcaseDefinition.judgeFocus}</div>
                     </div>
-                    <div className="rounded-xl border border-white/[0.08] bg-white/[0.04] p-3.5 text-sm">
-                      <div className="text-xs text-zinc-500">最近证据链</div>
-                      <div className="mt-2 text-white">{evidenceBundle.latestEvidenceChain?.requestId || "本次尚未形成阻断 request id"}</div>
-                      <div className="mt-1 text-xs leading-5 text-zinc-400">
+                    <div className="rounded-[var(--radius-md)] border border-[var(--panel-border)] bg-[var(--surface-raised)] p-3.5 text-[length:var(--text-body)]">
+                      <div className="text-[length:var(--text-micro)] text-[var(--text-muted)]">最近证据链</div>
+                      <div className="mt-2 text-[var(--text-primary)]">{evidenceBundle.latestEvidenceChain?.requestId || "本次尚未形成阻断 request id"}</div>
+                      <div className="mt-1 text-[length:var(--text-micro)] leading-5 text-[var(--text-secondary)]">
                         {evidenceBundle.latestEvidenceChain
                           ? `审批 ${evidenceBundle.latestEvidenceChain.approval ? "已关联" : "未关联"} · 告警 ${evidenceBundle.latestEvidenceChain.alerts.length} 条 · 回放 ${evidenceBundle.latestEvidenceChain.replay ? "已关联" : "未关联"}`
                           : "导出后会附带当前场景输入、验证结果、最近日志、审批、告警与回放快照。"}
@@ -6386,40 +6584,39 @@ export default function Home() {
         </section>
 
         <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
-          <PanelGlow />
-          <h2 className="relative text-base font-semibold text-white">验证套件</h2>
-          <div className="relative mt-4 space-y-3 text-sm">
-            <div className="flex justify-between gap-3 border-b border-white/[0.07] pb-3">
-              <span className="text-zinc-400">已执行</span>
-              <span className="font-medium text-zinc-200">
+          <h2 className="relative text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">验证套件</h2>
+          <div className="relative mt-4 space-y-3 text-[length:var(--text-body)]">
+            <div className="flex justify-between gap-3 border-b border-[var(--divider)] pb-3">
+              <span className="text-[var(--text-secondary)]">已执行</span>
+              <span className="font-medium text-[var(--text-primary)]">
                 {validationSummary.executed}/{validationSummary.total}
               </span>
             </div>
-            <div className="flex justify-between border-b border-white/[0.07] pb-3">
-              <span className="text-zinc-400">符合预期</span>
-              <span className="font-medium text-emerald-200">{validationSummary.passed}</span>
+            <div className="flex justify-between border-b border-[var(--divider)] pb-3">
+              <span className="text-[var(--text-secondary)]">符合预期</span>
+              <span className="font-medium text-[var(--tone-success-text)]">{validationSummary.passed}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-zinc-400">偏差场景</span>
-              <span className={validationSummary.failed > 0 ? "text-red-100" : "text-zinc-200"}>{validationSummary.failed}</span>
+              <span className="text-[var(--text-secondary)]">偏差场景</span>
+              <span className={validationSummary.failed > 0 ? "text-[var(--tone-danger-text)]" : "text-[var(--text-primary)]"}>{validationSummary.failed}</span>
             </div>
           </div>
-          <div className="relative mt-5 space-y-2">
+          <div className="relative mt-5 divide-y divide-[var(--divider)] border-y border-[var(--divider)]">
             {validationResults.map((item) => (
-              <div key={item.id} className={`${glassPanelSoftClass} flex items-start justify-between gap-3 px-3 py-2`}>
+              <div key={item.id} className="flex items-start justify-between gap-3 py-2.5">
                 <div className="min-w-0">
-                  <div className="text-sm text-white">{item.label}</div>
-                  <div className="mt-1 text-xs text-zinc-400">{item.note}</div>
+                  <div className="text-[length:var(--text-body)] text-[var(--text-primary)]">{item.label}</div>
+                  <div className="mt-0.5 text-[length:var(--text-micro)] text-[var(--text-muted)]">{item.note}</div>
                 </div>
                 <span
-                  className={`shrink-0 rounded-full border px-2 py-1 text-[11px] ${
+                  className={`chip shrink-0 ${
                     item.status === "passed"
-                      ? "border-emerald-300/30 bg-emerald-500/10 text-emerald-100"
+                      ? "chip-success"
                       : item.status === "failed"
-                        ? "border-red-300/30 bg-red-500/10 text-red-100"
+                        ? "chip-danger"
                         : item.status === "running"
-                          ? "border-amber-300/30 bg-amber-500/10 text-amber-100"
-                          : "border-white/[0.08] bg-white/[0.05] text-zinc-300"
+                          ? "chip-warning"
+                          : "chip-neutral"
                   }`}
                 >
                   {item.status === "passed" ? "通过" : item.status === "failed" ? "偏差" : item.status === "running" ? "运行中" : "待执行"}
@@ -6452,36 +6649,30 @@ export default function Home() {
           </div>
           <div className="relative mt-5">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <h3 className="text-sm font-semibold text-white">最近运行</h3>
-              <span className="text-xs text-[var(--text-secondary)]">自动保存在当前浏览器</span>
+              <h3 className="text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">最近运行</h3>
+              <span className="text-[length:var(--text-micro)] text-[var(--text-secondary)]">自动保存在当前浏览器</span>
             </div>
             {validationHistory.length > 0 ? (
-              <div className="mt-3 space-y-2">
+              <div className="mt-3 divide-y divide-[var(--divider)] border-y border-[var(--divider)]">
                 {validationHistory.map((run) => (
                   <button
                     key={run.id}
                     type="button"
                     onClick={() => restoreValidationRun(run)}
-                    className={`${glassPanelSoftClass} w-full px-3 py-3 text-left transition hover:border-[var(--panel-border-strong)] hover:bg-[var(--panel-hover-bg)]`}
+                    className="flex w-full flex-col gap-1 px-1 py-2.5 text-left transition-colors duration-[var(--dur-fast)] hover:bg-[var(--surface-sunken)] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--tone-accent)]"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="text-sm font-medium text-[var(--text-primary)]">{formatRelativeTime(run.createdAt)}</div>
-                        <div className="mt-1 text-xs text-[var(--text-secondary)]" title={buildTimeTooltip(run.createdAt)}>
+                        <div className="text-[length:var(--text-body)] font-medium text-[var(--text-primary)]">{formatRelativeTime(run.createdAt)}</div>
+                        <div className="mt-0.5 text-[length:var(--text-micro)] text-[var(--text-secondary)]" title={buildTimeTooltip(run.createdAt)}>
                           {formatTime(run.createdAt)} CST · {run.mode === "backend" ? "后端预检" : "本地预检"}
                         </div>
                       </div>
-                      <span
-                        className={`shrink-0 rounded-full border px-2 py-1 text-[11px] ${
-                          run.summary.failed === 0
-                            ? "border-emerald-300/30 bg-emerald-500/10 text-emerald-100"
-                            : "border-amber-300/30 bg-amber-500/10 text-amber-100"
-                        }`}
-                      >
+                      <span className={`chip shrink-0 ${run.summary.failed === 0 ? "chip-success" : "chip-warning"}`}>
                         {run.summary.passed}/{run.summary.total}
                       </span>
                     </div>
-                    <div className="mt-2 flex items-center justify-between gap-3 text-xs text-[var(--text-secondary)]">
+                    <div className="flex items-center justify-between gap-3 text-[length:var(--text-micro)] text-[var(--text-secondary)]">
                       <span className="truncate">{run.scenarioLabel}</span>
                       <span className="shrink-0">{run.summary.failed === 0 ? "全部符合预期" : `${run.summary.failed} 个偏差`}</span>
                     </div>
@@ -6489,9 +6680,9 @@ export default function Home() {
                 ))}
               </div>
             ) : (
-              <div className={`${glassPanelSoftClass} mt-3 px-3 py-3 text-xs leading-6 text-[var(--text-secondary)]`}>
+              <p className="mt-3 border-y border-[var(--divider)] py-4 text-[length:var(--text-micro)] leading-6 text-[var(--text-muted)]">
                 暂无历史验证结果。执行一次批量验证后，这里会保留最近运行记录，方便回归对比与导出留档。
-              </div>
+              </p>
             )}
           </div>
         </section>
@@ -6501,139 +6692,137 @@ export default function Home() {
 
   const renderSettings = () => (
     <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
-      <section className={`${glassPanelClass} relative space-y-4 p-5`}>
-        <PanelGlow />
-        <div className="relative flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      {/* 原来是一张巨型玻璃面板，内部又套了两张 glassPanelSoftClass 提示卡
+         （「当前会话」「主路径已切换为托管密钥」）——这正是「卡片套卡片」。
+         现在拆成：刊头（无卡）+ 两组字段台账 + 一条动作栏。 */}
+      <section className="space-y-5">
+        <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            <h2 className="text-base font-semibold text-white">接口配置</h2>
-            <p className="mt-1 text-sm text-zinc-400">登录后会自动使用后台签发的 Token；API Key 仅作为兼容方式保留在当前浏览器会话，不会写入长期本地存储。</p>
+            <p className="text-[length:var(--text-micro)] font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">配置</p>
+            <h2 className="mt-1 text-[length:var(--text-title)] font-semibold tracking-[-0.012em] text-[var(--text-primary)]">接口配置</h2>
+            <p className="mt-1.5 max-w-2xl text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">
+              登录后自动使用后台签发的 Token；API Key 仅作为兼容方式保留在当前浏览器会话，不会写入长期本地存储。
+            </p>
           </div>
           <button type="button" onClick={() => setKeysVisible((value) => !value)} className={`${buttonClass("secondary")} w-full sm:w-auto`}>
             {keysVisible ? <EyeOff className="h-4 w-4" aria-hidden /> : <Eye className="h-4 w-4" aria-hidden />}
             {keysVisible ? "隐藏 Key" : "显示 Key"}
           </button>
-        </div>
+        </header>
 
-        <label className="relative block">
-          <span className="mb-2 block text-sm text-[var(--text-secondary)]">后端 API Base</span>
-          <input value={settings.apiBase} onChange={(event) => setSettings((current) => ({ ...current, apiBase: event.target.value }))} className={inputBase} placeholder="http://localhost:8000" />
-        </label>
-
-        <div className="relative grid gap-4 md:grid-cols-2">
-          <label className="block">
-            <span className="mb-2 block text-sm text-[var(--text-secondary)]">Admin API Key（兼容备用）</span>
-            <input value={settings.adminApiKey} onChange={(event) => setSettings((current) => ({ ...current, adminApiKey: event.target.value }))} className={inputBase} type={keysVisible ? "text" : "password"} autoComplete="off" />
-            {settings.adminApiKey.trim() && !hasConsoleAdmin ? (
-              <span className={`mt-2 block text-xs ${adminKeyVerified ? "text-emerald-300" : "text-amber-300"}`}>
-                {adminKeyVerified ? "✓ Key 已通过后端验证，管理面板已解锁" : adminKeyError || "正在向后端验证 Key…"}
+        {/* 凭据字段台账：一行一个字段，标签在左、控件在右，不再用两列卡片栅格 */}
+        <div className={`${glassPanelClass} overflow-hidden`}>
+          <div className="border-b border-[var(--panel-border)] px-4 py-2 text-[length:var(--text-micro)] font-medium uppercase tracking-[0.08em] text-[var(--text-muted)] sm:px-5">
+            连接与凭据
+          </div>
+          <div className="divide-y divide-[var(--divider)]">
+            <label className="flex flex-col gap-2 px-4 py-4 sm:flex-row sm:items-center sm:gap-4 sm:px-5">
+              <span className="shrink-0 text-[length:var(--text-body)] text-[var(--text-secondary)] sm:w-48">后端 API Base</span>
+              <input value={settings.apiBase || DEFAULT_API_BASE} onChange={(event) => setSettings((current) => ({ ...current, apiBase: event.target.value }))} className={`${inputBase} min-w-0 flex-1`} placeholder="http://localhost:8000" />
+            </label>
+            <label className="flex flex-col gap-2 px-4 py-4 sm:flex-row sm:items-start sm:gap-4 sm:px-5">
+              <span className="shrink-0 text-[length:var(--text-body)] text-[var(--text-secondary)] sm:w-48 sm:pt-2.5">Admin API Key<span className="ml-1 text-[length:var(--text-micro)] text-[var(--text-muted)]">兼容备用</span></span>
+              <span className="min-w-0 flex-1">
+                <input value={settings.adminApiKey} onChange={(event) => setSettings((current) => ({ ...current, adminApiKey: event.target.value }))} className={inputBase} type={keysVisible ? "text" : "password"} autoComplete="off" />
+                {settings.adminApiKey.trim() && !hasConsoleAdmin ? (
+                  <span className={`mt-2 block text-[length:var(--text-micro)] ${adminKeyVerified ? "text-[var(--tone-success-text)]" : "text-[var(--tone-warning-text)]"}`}>
+                    {adminKeyVerified ? "✓ Key 已通过后端验证，管理面板已解锁" : adminKeyError || "正在向后端验证 Key…"}
+                  </span>
+                ) : null}
               </span>
-            ) : null}
-          </label>
-          <label className="block">
-            <span className="mb-2 block text-sm text-[var(--text-secondary)]">Client / Gateway API Key（兼容备用）</span>
-            <input value={settings.clientApiKey} onChange={(event) => setSettings((current) => ({ ...current, clientApiKey: event.target.value }))} className={inputBase} type={keysVisible ? "text" : "password"} autoComplete="off" />
-          </label>
-        </div>
-
-        <div className={`${glassPanelSoftClass} relative space-y-2 p-4 text-sm text-zinc-300`}>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <span className="text-zinc-400">当前会话</span>
-            <span className={hasConsoleToken ? "text-emerald-200" : "text-zinc-200"}>
-              {hasConsoleToken ? "后台 Token 已生效" : "未登录 Token"}
-            </span>
+            </label>
+            <label className="flex flex-col gap-2 px-4 py-4 sm:flex-row sm:items-center sm:gap-4 sm:px-5">
+              <span className="shrink-0 text-[length:var(--text-body)] text-[var(--text-secondary)] sm:w-48">Client / Gateway Key<span className="ml-1 text-[length:var(--text-micro)] text-[var(--text-muted)]">兼容备用</span></span>
+              <input value={settings.clientApiKey} onChange={(event) => setSettings((current) => ({ ...current, clientApiKey: event.target.value }))} className={`${inputBase} min-w-0 flex-1`} type={keysVisible ? "text" : "password"} autoComplete="off" />
+            </label>
+            <label className="flex flex-col gap-2 px-4 py-4 sm:flex-row sm:items-center sm:gap-4 sm:px-5">
+              <span className="shrink-0 text-[length:var(--text-body)] text-[var(--text-secondary)] sm:w-48">刷新间隔（秒）</span>
+              <input value={settings.refreshInterval} onChange={(event) => setSettings((current) => ({ ...current, refreshInterval: Number(event.target.value) }))} className={`${inputBase} min-w-0 flex-1 sm:max-w-40`} min={10} type="number" />
+            </label>
+            <div className="flex flex-col gap-2 px-4 py-4 sm:flex-row sm:items-center sm:gap-4 sm:px-5">
+              <span className="shrink-0 text-[length:var(--text-body)] text-[var(--text-secondary)] sm:w-48">当前会话</span>
+              <span className={`text-[length:var(--text-body)] ${hasConsoleToken ? "text-[var(--tone-success-text)]" : "text-[var(--text-muted)]"}`}>
+                {hasConsoleToken ? "后台 Token 已生效" : "未登录 Token（可留空 Key）"}
+              </span>
+            </div>
           </div>
-          <p className="text-xs leading-6 text-zinc-400">
-            如果你已经通过登录进入控制台，下面的 Key 可以留空。只有在需要兼容脚本调用或未登录联调时，才需要填写 API Key；这些 Key 在刷新页面后不会自动恢复。
-          </p>
         </div>
 
-        <div className={`${glassPanelSoftClass} relative flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between`}>
-          <div>
-            <div className="text-sm font-medium text-white">主路径已切换为托管密钥</div>
-            <p className="mt-1 text-xs leading-6 text-zinc-400">
-              推荐先登录后台，再去“密钥中心”为每个用户或服务签发独立 Key。这里保留的 Admin / Client Key 仅作为兼容备用，且只在当前会话有效。
-            </p>
+        {/* 偏好开关台账：主题选择器与三个 Switch 同构成行 */}
+        <div className={`${glassPanelClass} overflow-hidden`}>
+          <div className="border-b border-[var(--panel-border)] px-4 py-2 text-[length:var(--text-micro)] font-medium uppercase tracking-[0.08em] text-[var(--text-muted)] sm:px-5">
+            界面偏好
           </div>
-          <button type="button" onClick={() => navigateTo("keys")} className={`${buttonClass("secondary")} w-full sm:w-auto`}>
-            <KeyRound className="h-4 w-4" aria-hidden />
-            打开密钥中心
-          </button>
-        </div>
-
-        <div className="relative grid gap-4 md:grid-cols-2">
-          <label className="block">
-            <span className="mb-2 block text-sm text-[var(--text-secondary)]">刷新间隔（秒）</span>
-            <input value={settings.refreshInterval} onChange={(event) => setSettings((current) => ({ ...current, refreshInterval: Number(event.target.value) }))} className={inputBase} min={10} type="number" />
-          </label>
-          <div className={`${glassPanelSoftClass} grid gap-3 p-4`}>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-zinc-300">主题</span>
-                <span className="rounded-full border border-[var(--panel-border-soft)] bg-[var(--surface-elevated)] px-2.5 py-0.5 text-[11px] text-[var(--text-secondary)]">
-                  {settings.themeMode === "system" ? `系统 · ${resolvedTheme === "dark" ? "深色" : "浅色"}` : settings.themeMode === "dark" ? "深色" : "浅色"}
+          <div className="divide-y divide-[var(--divider)]">
+            <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:gap-4 sm:px-5">
+              <span className="shrink-0 text-[length:var(--text-body)] text-[var(--text-secondary)] sm:w-48">
+                主题<span className="ml-1.5 text-[length:var(--text-micro)] text-[var(--text-muted)]">
+                  {settings.themeMode === "system" ? `跟随系统 · 当前${resolvedTheme === "dark" ? "深色" : "浅色"}` : ""}
                 </span>
-              </div>
-              <ThemePreview selected={settings.themeMode} active={themePickerOpen} onClick={() => setThemePickerOpen((value) => !value)} />
-              <AnimatePresence initial={false}>
-                {themePickerOpen ? (
-                  <motion.div
-                    initial={{ opacity: 0, y: 6, scale: 0.98 }}
-                    animate={{ opacity: 1, y: 0, scale: 1, transition: { duration: 0.18, ease: [0.16, 1, 0.3, 1] } }}
-                    exit={{ opacity: 0, y: 4, scale: 0.98, transition: { duration: 0.14, ease: "easeOut" } }}
-                    className={floatingGlassMenuClass}
-                  >
-                    {THEME_OPTIONS.map((option) => {
-                      const Icon = option.icon;
-                      const selected = settings.themeMode === option.id;
-                      return (
-                        <button
-                          key={option.id}
-                          type="button"
-                          onClick={() => {
-                            setSettings((current) => ({ ...current, themeMode: option.id }));
-                            setThemePickerOpen(false);
-                          }}
-                          className={`flex w-full items-center justify-between rounded-xl border px-3 py-2.5 text-left transition-all duration-150 active:scale-[0.99] ${
-                            selected
-                              ? "border-teal-200/18 bg-white/[0.08] text-[var(--text-primary)] shadow-[0_0_26px_rgba(45,212,191,0.1)]"
-                              : "border-transparent text-[var(--text-secondary)] hover:border-white/[0.08] hover:bg-white/[0.05] hover:text-[var(--text-primary)]"
-                          }`}
-                        >
-                          <span className="inline-flex items-center gap-3">
-                            <span className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/[0.08] bg-white/[0.04]">
-                              <Icon className="h-4 w-4" aria-hidden />
-                            </span>
-                            <span>
-                              <span className="block text-sm">{option.label}</span>
-                              <span className="block text-[11px] text-[var(--text-secondary)]">{option.description}</span>
-                            </span>
-                          </span>
-                          <span
-                            className={`flex h-6 w-6 items-center justify-center rounded-full border transition ${
+              </span>
+              <div className="relative min-w-0 flex-1 sm:max-w-80">
+                <ThemePreview selected={settings.themeMode} active={themePickerOpen} onClick={() => setThemePickerOpen((value) => !value)} />
+                <AnimatePresence initial={false}>
+                  {themePickerOpen ? (
+                    <motion.div
+                      initial={{ opacity: 0, y: 6, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1, transition: { duration: 0.18, ease: [0.16, 1, 0.3, 1] } }}
+                      exit={{ opacity: 0, y: 4, scale: 0.98, transition: { duration: 0.14, ease: [0.16, 1, 0.3, 1] } }}
+                      className={floatingGlassMenuClass}
+                    >
+                      {THEME_OPTIONS.map((option) => {
+                        const Icon = option.icon;
+                        const selected = settings.themeMode === option.id;
+                        return (
+                          <button
+                            key={option.id}
+                            type="button"
+                            onClick={() => {
+                              setSettings((current) => ({ ...current, themeMode: option.id }));
+                              setThemePickerOpen(false);
+                            }}
+                            className={`flex w-full items-center justify-between rounded-[var(--radius-md)] border px-3 py-2.5 text-left transition-[color,background-color,border-color,box-shadow,transform,opacity] duration-[var(--dur-fast)] active:scale-[0.98] ${
                               selected
-                                ? "border-teal-200/30 bg-teal-300/14 text-teal-100 shadow-[0_0_18px_rgba(45,212,191,0.18)]"
-                                : "border-transparent text-transparent"
+                                ? "border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--surface-raised)] text-[var(--text-primary)] shadow-[var(--panel-shadow-soft)]"
+                                : "border-transparent text-[var(--text-secondary)] hover:border-[var(--panel-border)] hover:bg-[var(--surface-raised)] hover:text-[var(--text-primary)]"
                             }`}
                           >
-                            <Check className="h-3.5 w-3.5" aria-hidden />
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </motion.div>
-                ) : null}
-              </AnimatePresence>
+                            <span className="inline-flex items-center gap-3">
+                              <span className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--panel-border)] bg-[var(--surface-raised)]">
+                                <Icon className="h-4 w-4" aria-hidden />
+                              </span>
+                              <span>
+                                <span className="block text-[length:var(--text-body)]">{option.label}</span>
+                                <span className="block text-[length:var(--text-micro)] text-[var(--text-secondary)]">{option.description}</span>
+                              </span>
+                            </span>
+                            <span
+                              className={`flex h-6 w-6 items-center justify-center rounded-full border transition ${
+                                selected
+                                  ? "border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--tone-accent-surface)] text-[var(--tone-accent-text)] shadow-[var(--panel-shadow-soft)]"
+                                  : "border-transparent text-transparent"
+                              }`}
+                            >
+                              <Check className="h-3.5 w-3.5" aria-hidden />
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </motion.div>
+                  ) : null}
+                </AnimatePresence>
+              </div>
             </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-zinc-300">自动刷新日志</span>
+            <div className="flex items-center justify-between gap-4 px-4 py-4 sm:px-5">
+              <span className="text-[length:var(--text-body)] text-[var(--text-secondary)]">自动刷新日志</span>
               <Switch label="切换自动刷新日志" checked={settings.autoRefresh} onChange={(value) => setSettings((current) => ({ ...current, autoRefresh: value }))} />
             </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-zinc-300">紧凑模式</span>
+            <div className="flex items-center justify-between gap-4 px-4 py-4 sm:px-5">
+              <span className="text-[length:var(--text-body)] text-[var(--text-secondary)]">紧凑模式</span>
               <Switch label="切换紧凑模式" checked={settings.compactMode} onChange={(value) => setSettings((current) => ({ ...current, compactMode: value }))} />
             </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-zinc-300">桌面通知</span>
+            <div className="flex items-center justify-between gap-4 px-4 py-4 sm:px-5">
+              <span className="text-[length:var(--text-body)] text-[var(--text-secondary)]">桌面通知</span>
               <Switch
                 label="切换桌面通知"
                 checked={settings.desktopNotifications}
@@ -6646,7 +6835,8 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="relative flex flex-wrap gap-2 border-t border-white/[0.07] pt-4">
+        {/* 动作栏：原来三颗按钮平铺在同一张卡底部，现在独立成条 + 左对齐主操作 */}
+        <div className="flex flex-wrap gap-2">
           <button type="button" onClick={saveSettings} className={buttonClass("primary")}>
             <Save className="h-4 w-4" aria-hidden />
             保存设置
@@ -6659,60 +6849,66 @@ export default function Home() {
             <RefreshCcw className="h-4 w-4" aria-hidden />
             恢复默认
           </button>
+          <button type="button" onClick={() => navigateTo("keys")} className={buttonClass("secondary")}>
+            <KeyRound className="h-4 w-4" aria-hidden />
+            密钥中心
+          </button>
         </div>
       </section>
 
       <aside className="space-y-4">
-        <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
-          <PanelGlow />
-          <div className="relative flex items-center justify-between">
-            <h2 className="relative text-base font-semibold text-white">当前账号</h2>
+        <section className={`${glassPanelClass} ${glassPanelMotionClass} flex flex-col p-5`}>
+          <div className="relative flex items-center justify-between gap-2">
+            <p className="text-[length:var(--text-micro)] font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">账号</p>
             {!hasConsoleToken && user ? (
-              <span className="relative rounded-full border border-amber-300/30 bg-amber-400/10 px-2.5 py-1 text-[11px] font-medium text-amber-200">
-                本地演示身份 · 未连接后端
-              </span>
-            ) : null}
+              <span className="chip chip-warning">演示身份</span>
+            ) : (
+              <span className="chip chip-success">已登录</span>
+            )}
           </div>
-          <div className="relative mt-4 space-y-3 text-sm">
-            <div className="flex justify-between border-b border-white/[0.07] pb-3">
-              <span className="text-zinc-400">姓名</span>
-              <span className="font-medium text-white">{user?.name}</span>
+          <div className="relative mt-4 flex items-center gap-3 border-b border-[var(--divider)] pb-4">
+            <span aria-hidden className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--tone-accent-surface)] text-[length:var(--text-subhead)] font-semibold text-[var(--tone-accent-text)]">
+              {(user?.name || "?").trim().slice(0, 1).toUpperCase()}
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">{user?.name}</p>
+              <p className="truncate text-[length:var(--text-micro)] text-[var(--text-muted)]">{user?.email}</p>
             </div>
-            <div className="flex justify-between border-b border-white/[0.07] pb-3">
-              <span className="text-zinc-400">邮箱</span>
-              <span className="font-medium text-white">{user?.email}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-zinc-400">角色</span>
-              <span className="font-medium text-white">
+          </div>
+          <dl className="relative mt-4 space-y-3 text-[length:var(--text-body)]">
+            <div className="flex items-baseline justify-between gap-3">
+              <dt className="text-[var(--text-muted)]">角色</dt>
+              <dd className="text-right font-medium text-[var(--text-primary)]">
                 {user?.role}
                 {!hasConsoleToken && user ? "（演示）" : ""}
-              </span>
+              </dd>
             </div>
-          </div>
+          </dl>
+          <div className="flex-1" />
           <button type="button" onClick={logout} className={`${buttonClass("secondary")} relative mt-5 w-full`}>
             <LogOut className="h-4 w-4" aria-hidden />
             退出登录
           </button>
         </section>
 
-        <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
-          <PanelGlow />
-          <h2 className="relative text-base font-semibold text-white">本地数据</h2>
-          <div className="relative mt-4 space-y-3 text-sm text-zinc-400">
-            <div className="flex justify-between border-b border-white/[0.07] pb-3">
-              <span>本地验证日志</span>
-              <span className="text-zinc-200">{logs.filter((log) => log.id < 0).length}</span>
+        <section className={`${glassPanelClass} ${glassPanelMotionClass} flex flex-col p-5`}>
+          <p className="relative text-[length:var(--text-micro)] font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">本地</p>
+          <h2 className="relative mt-1 text-[length:var(--text-title)] font-semibold tracking-[-0.012em] text-[var(--text-primary)]">本地数据</h2>
+          <dl className="relative mt-4 divide-y divide-[var(--divider)] border-y border-[var(--divider)] text-[length:var(--text-body)]">
+            <div className="flex items-baseline justify-between gap-3 py-3">
+              <dt className="text-[var(--text-secondary)]">本地验证日志</dt>
+              <dd className="tnum font-medium text-[var(--text-primary)]">{logs.filter((log) => log.id < 0).length}</dd>
             </div>
-            <div className="flex justify-between border-b border-white/[0.07] pb-3">
-              <span>验证快照</span>
-              <span className="text-zinc-200">{validationHistory.length}</span>
+            <div className="flex items-baseline justify-between gap-3 py-3">
+              <dt className="text-[var(--text-secondary)]">验证快照</dt>
+              <dd className="tnum font-medium text-[var(--text-primary)]">{validationHistory.length}</dd>
             </div>
-            <div className="flex justify-between">
-              <span>本地会话</span>
-              <span className="text-zinc-200">{hasConsoleToken ? "Token 登录" : user ? "本地验证模式" : "无"}</span>
+            <div className="flex items-baseline justify-between gap-3 py-3">
+              <dt className="text-[var(--text-secondary)]">本地会话</dt>
+              <dd className="text-right font-medium text-[var(--text-primary)]">{hasConsoleToken ? "Token 登录" : user ? "本地验证模式" : "无"}</dd>
             </div>
-          </div>
+          </dl>
+          <div className="flex-1" />
           <button type="button" onClick={clearLocalData} className={`${buttonClass("danger")} relative mt-5 w-full`}>
             <Trash2 className="h-4 w-4" aria-hidden />
             清除本地数据
@@ -6723,28 +6919,118 @@ export default function Home() {
   );
 
   const renderHelp = () => (
-    <div className="grid gap-5 xl:grid-cols-3">
-      {[
-        { icon: Network, title: "后端接口", lines: ["GET /health", "GET /api/v1/logs", "POST /api/v1/chat/completions"], action: "检测连接", onClick: () => void checkHealth() },
-        { icon: KeyRound, title: "鉴权方式", lines: ["Bearer Token", "托管 API Key", "兼容 Key 兜底"], action: "打开密钥中心", onClick: () => navigateTo("keys") },
-        { icon: Bell, title: "运营动作", lines: ["日志筛选", "策略切换", "网关测试"], action: "开始测试", onClick: () => navigateTo("gateway") },
-      ].map((item) => (
-        <motion.section key={item.title} whileHover={{ y: -3 }} className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
-          <PanelGlow />
-          <item.icon className="relative h-6 w-6 text-teal-200" aria-hidden />
-          <h2 className="relative mt-4 text-base font-semibold text-white">{item.title}</h2>
-          <div className="relative mt-4 space-y-2">
-            {item.lines.map((line) => (
-              <div key={line} className={`${glassPanelSoftClass} px-3 py-2 font-mono text-sm text-zinc-300`}>
-                {line}
+    <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
+      {/* 三张同构卡片（每张：图标+眉标+标题+描述+端点列表+满宽按钮）→ 一张说明台账。
+         反 AI 味检查表 #3「三特性卡」+#4「一模一样圆角卡片」的逐字命中，已消除。
+         每行一个主题，操作降级为行内单个文字按钮 —— 不再有三个满宽按钮抢视线。 */}
+      <section className="space-y-5">
+        <Ledger
+          gridClass="grid-cols-1 sm:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_auto]"
+          columns={["", "", "text-right"]}
+          header={["能力域 / 说明", "可用端点与凭据", "操作"]}
+        >
+          {[
+            {
+              icon: Network,
+              eyebrow: "接入",
+              title: "后端接口",
+              desc: "网关暴露的只读端点与转发端点，用于连通性排查与链路验证。",
+              lines: ["GET /health", "GET /api/v1/logs", "POST /api/v1/chat/completions"],
+              action: "检测连接",
+              onClick: () => void checkHealth(),
+              primary: true,
+            },
+            {
+              icon: KeyRound,
+              eyebrow: "凭据",
+              title: "鉴权方式",
+              desc: "三种凭据来源，按优先级依次回退；推荐为每个调用方签发独立密钥。",
+              lines: ["Bearer Token（登录后台自动获取）", "托管 API Key（按用户/服务签发）", "兼容 Key 兜底（仅当前会话）"],
+              action: "密钥中心",
+              onClick: () => navigateTo("keys"),
+              primary: false,
+            },
+            {
+              icon: Bell,
+              eyebrow: "运维",
+              title: "运营动作",
+              desc: "日常巡检与告警联动的入口。",
+              lines: ["日志筛选与导出", "策略与自定义规则切换", "网关验证场景测试"],
+              action: "开始测试",
+              onClick: () => navigateTo("gateway"),
+              primary: false,
+            },
+          ].map((item) => (
+            <div
+              key={item.title}
+              className={`grid grid-cols-1 items-start gap-x-4 gap-y-3 px-4 py-4 sm:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_auto] sm:items-center sm:px-5 ${ledgerRowClass}`}
+            >
+              <div className="col-start-1 min-w-0">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-[var(--tone-accent-surface)]">
+                    <item.icon className="h-3.5 w-3.5 text-[var(--tone-accent-text)]" aria-hidden />
+                  </span>
+                  <span className="text-[length:var(--text-micro)] font-semibold uppercase tracking-[0.1em] text-[var(--text-muted)]">
+                    {item.eyebrow}
+                  </span>
+                  <h2 className="text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">{item.title}</h2>
+                </div>
+                <p className="mt-1.5 text-[length:var(--text-caption)] leading-5 text-[var(--text-secondary)]">{item.desc}</p>
+              </div>
+              <dl className="col-start-1 min-w-0 sm:col-start-2">
+                {item.lines.map((line) => (
+                  <div key={line} className="truncate font-mono text-[length:var(--text-micro)] leading-6 text-[var(--text-secondary)]" title={line}>
+                    {line}
+                  </div>
+                ))}
+              </dl>
+              <div className="col-start-1 sm:col-start-3 sm:justify-self-end">
+                {item.primary ? (
+                  <button type="button" onClick={item.onClick} className={`${buttonClass("primary")} w-full sm:w-auto`}>
+                    {item.action}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={item.onClick}
+                    className="inline-flex min-h-9 w-full items-center justify-center gap-1.5 rounded-[var(--radius-sm)] px-3 text-[length:var(--text-caption)] font-medium text-[var(--tone-accent-text)] transition-colors duration-[var(--dur-fast)] hover:bg-[var(--tone-accent-surface)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tone-accent)] sm:w-auto"
+                  >
+                    {item.action}
+                    <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </Ledger>
+      </section>
+
+      <aside className="space-y-4">
+        <section className={`${glassPanelClass} p-5`}>
+          <h2 className="text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">使用建议</h2>
+          <ul className="mt-3 space-y-2 text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">
+            <li>· 先用 <span className="font-mono text-[var(--text-primary)]">client</span> / <span className="font-mono text-[var(--text-primary)]">gateway</span> 凭据跑正常与高风险场景，确认业务可用且权限克制。</li>
+            <li>· 再切到 <span className="font-mono text-[var(--text-primary)]">admin</span>，查看日志、审批、回放与证据包导出的完整闭环。</li>
+            <li>· 自定义规则创建前先用测试面板试跑，避免误伤正常流量。</li>
+          </ul>
+        </section>
+
+        <section className={`${glassPanelClass} p-5`}>
+          <h2 className="text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">环境变量</h2>
+          <dl className="mt-3 divide-y divide-[var(--divider)] border-y border-[var(--divider)] text-[length:var(--text-body)]">
+            {[
+              { key: "SHADOW_AGENT_SEMANTIC_MODE", note: "语义检测档位" },
+              { key: "SHADOW_AGENT_SEMANTIC_THRESHOLD", note: "阻断阈值" },
+              { key: "SHADOW_AGENT_RESPONSE_DLP_MODE", note: "响应侧 DLP 档位" },
+            ].map((item) => (
+              <div key={item.key} className="flex flex-col gap-0.5 py-3 sm:flex-row sm:items-baseline sm:justify-between sm:gap-3">
+                <dt className="break-all font-mono text-[length:var(--text-micro)] text-[var(--text-primary)]">{item.key}</dt>
+                <dd className="shrink-0 text-[length:var(--text-micro)] text-[var(--text-muted)]">{item.note}</dd>
               </div>
             ))}
-          </div>
-          <button type="button" onClick={item.onClick} className={`${buttonClass("primary")} relative mt-5 w-full`}>
-            {item.action}
-          </button>
-        </motion.section>
-      ))}
+          </dl>
+        </section>
+      </aside>
     </div>
   );
 
@@ -6778,29 +7064,105 @@ export default function Home() {
     target === "response" ? "响应侧" : target === "any" ? "双向" : "请求侧";
   const ruleActionText = (action: string) =>
     action === "redact" ? "脱敏" : action === "alert" ? "告警" : "阻断";
+  /* 动作 → 语义 chip。不再手写 sky/amber/rose 调色板 ——
+     浅色主题下 rose-200 文字对比度不达标，语义 token 两主题都安全。 */
   const ruleActionClass = (action: string) =>
+    action === "redact" ? "chip chip-info" : action === "alert" ? "chip chip-warning" : "chip chip-danger";
+  /* 行首竖条：使用同一套动作语义色，与拦截日志行保持视觉一致。 */
+  const ruleActionTick = (action: string) =>
     action === "redact"
-      ? "border-sky-300/30 bg-sky-400/10 text-sky-200"
+      ? "bg-[var(--tone-info)]"
       : action === "alert"
-        ? "border-amber-300/30 bg-amber-400/10 text-amber-200"
-        : "border-rose-300/30 bg-rose-400/10 text-rose-200";
+        ? "bg-[var(--tone-warning)]"
+        : "bg-[var(--tone-danger)]";
   const dlpModeClass = (mode: string) =>
     mode === "block"
-      ? "border-rose-300/30 bg-rose-400/10 text-rose-200"
+      ? "chip chip-danger"
       : mode === "redact"
-        ? "border-sky-300/30 bg-sky-400/10 text-sky-200"
+        ? "chip chip-info"
         : mode === "monitor"
-          ? "border-amber-300/30 bg-amber-400/10 text-amber-200"
-          : "border-white/10 bg-white/[0.055] text-zinc-300";
+          ? "chip chip-warning"
+          : "chip chip-neutral";
+
+  /* ── Ledger：台账外壳 ─────────────────────────────────────────────
+     多处高密度视图（网关场景、验证套件、组织、成员、运行状态…）本质都是
+     「多行同构记录」。卡片墙会把每行都包成一个 12px 圆角 + border + 底色 的
+     盒子 —— 那是反 AI 味检查表 #4「一模一样圆角卡片」的逐字命中，也是
+     spatial-design「Cards Are Not Required」明确反对的用法。
+
+     Ledger 把它们统一成：一条表头 + divide-y 行 + hover 底色。
+     省掉的圆角/描边/间距让同样高度的屏幕能多放 1.5~2 倍记录。
+     注意：这里刻意**不用** <table>，因为行内要放 <Switch>/<GlassSelect>
+     等交互控件，且列在窄屏要折成两行 —— grid 比 table 更可控。 */
+  const Ledger = ({
+    columns,
+    gridClass,
+    header,
+    children,
+    empty,
+    className = "",
+  }: {
+    columns?: string[];
+    gridClass: string;
+    header: React.ReactNode[];
+    children: React.ReactNode;
+    empty?: React.ReactNode;
+    className?: string;
+  }) => (
+    <div className={`${glassPanelClass} overflow-hidden ${className}`}>
+      <div className={`grid ${gridClass} items-center gap-x-4 border-b border-[var(--panel-border)] px-4 py-2 text-[length:var(--text-micro)] font-medium uppercase tracking-[0.08em] text-[var(--text-muted)] sm:px-5`}>
+        {header.map((cell, index) => (
+          <span key={index} className={columns?.[index] ?? ""}>
+            {cell}
+          </span>
+        ))}
+      </div>
+      {empty ? (
+        <p className="px-4 py-8 text-center text-[length:var(--text-body)] text-[var(--text-muted)] sm:px-5">{empty}</p>
+      ) : null}
+      {children}
+    </div>
+  );
+
+  /* 台账行的公共地板：分隔靠 border-b、hover 靠底色、动效只碰颜色与 transform。 */
+  const ledgerRowClass =
+    "border-b border-[var(--divider)] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] last:border-b-0 hover:bg-[var(--surface-sunken)]";
+
+  /* 规则表骨架屏：栅格与真实行完全一致，数据到达时不跳版。
+     interaction-design.md：骨架屏优于 spinner。 */
+  const RuleListSkeleton = ({ rows = 5 }: { rows?: number }) => (
+    <div className={`${glassPanelClass} overflow-hidden`} role="status" aria-label="规则加载中">
+      <span className="sr-only">正在加载自定义规则</span>
+      <div className="hidden grid-cols-[3px_minmax(0,2fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_minmax(0,0.7fr)_auto_auto] items-center gap-x-4 border-b border-[var(--panel-border)] px-5 py-2 lg:grid">
+        <span /> <span /> <span /> <span /> <span /> <span /> <span />
+      </div>
+      {Array.from({ length: rows }).map((_, i) => (
+        <div
+          key={i}
+          aria-hidden
+          className="grid grid-cols-[3px_minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2 border-b border-[var(--divider)] px-4 py-3.5 last:border-b-0 sm:px-5 lg:grid-cols-[3px_minmax(0,2fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_minmax(0,0.7fr)_auto_auto] lg:items-center lg:gap-x-4 lg:gap-y-0"
+        >
+          <span className="col-start-1 h-9 w-[3px] self-start rounded-full skeleton lg:self-center" />
+          <div className="col-start-2 flex flex-col gap-1.5">
+            <span className="skeleton h-4 w-2/5" />
+            <span className="skeleton h-3 w-4/5" />
+          </div>
+          <span className="skeleton col-start-2 h-3.5 w-16 lg:col-start-3" />
+          <span className="skeleton col-start-3 h-3.5 w-14 justify-self-end lg:col-start-4 lg:justify-self-start" />
+          <span className="skeleton col-start-2 mt-1.5 h-6 w-16 lg:col-start-6 lg:mt-0 lg:justify-self-center" />
+          <span className="skeleton col-start-3 mt-1.5 h-6 w-16 justify-self-end lg:col-start-7 lg:mt-0" />
+        </div>
+      ))}
+    </div>
+  );
 
   const renderRules = () => (
     <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
       <section className="space-y-4">
         <div className={`${glassPanelClass} ${glassPanelMotionClass} p-4 sm:flex sm:items-center sm:justify-between`}>
-          <PanelGlow />
           <div className="relative">
-            <h2 className="text-base font-semibold text-white">自定义检测规则</h2>
-            <p className="mt-1 text-sm text-zinc-400">
+            <h2 className="text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">自定义检测规则</h2>
+            <p className="mt-1 text-[length:var(--text-body)] text-[var(--text-secondary)]">
               规则由网关引擎实时执行：请求侧拦截可疑提示词，响应侧对模型输出做 DLP 脱敏。
             </p>
           </div>
@@ -6858,10 +7220,9 @@ export default function Home() {
             }}
             className={`${glassPanelClass} relative p-4`}
           >
-            <PanelGlow />
             <div className="relative grid gap-3 md:grid-cols-2">
               <label>
-                <span className="mb-2 block text-sm text-[var(--text-secondary)]">规则名称</span>
+                <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">规则名称</span>
                 <input
                   value={ruleDraft.name}
                   onChange={(event) => setRuleDraft((current) => ({ ...current, name: event.target.value }))}
@@ -6870,7 +7231,7 @@ export default function Home() {
                 />
               </label>
               <label>
-                <span className="mb-2 block text-sm text-[var(--text-secondary)]">匹配方式</span>
+                <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">匹配方式</span>
                 <GlassSelect
                   value={ruleDraft.rule_type}
                   onChange={(next) => setRuleDraft((current) => ({ ...current, rule_type: next as CustomRuleItemType }))}
@@ -6879,7 +7240,7 @@ export default function Home() {
                 />
               </label>
               <label className="md:col-span-2">
-                <span className="mb-2 block text-sm text-[var(--text-secondary)]">
+                <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">
                   {ruleDraft.rule_type === "regex" ? "正则表达式（不区分大小写）" : "关键词（子串匹配）"}
                 </span>
                 <input
@@ -6890,7 +7251,7 @@ export default function Home() {
                 />
               </label>
               <label>
-                <span className="mb-2 block text-sm text-[var(--text-secondary)]">作用位置</span>
+                <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">作用位置</span>
                 <GlassSelect
                   value={ruleDraft.target}
                   onChange={(next) => {
@@ -6906,7 +7267,7 @@ export default function Home() {
                 />
               </label>
               <label>
-                <span className="mb-2 block text-sm text-[var(--text-secondary)]">命中后动作</span>
+                <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">命中后动作</span>
                 <GlassSelect
                   value={ruleDraft.action}
                   onChange={(next) => setRuleDraft((current) => ({ ...current, action: next as CustomRuleAction }))}
@@ -6919,7 +7280,7 @@ export default function Home() {
                 />
               </label>
               <label>
-                <span className="mb-2 block text-sm text-[var(--text-secondary)]">风险评分（{ruleDraft.risk_score.toFixed(2)}）</span>
+                <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">风险评分（{ruleDraft.risk_score.toFixed(2)}）</span>
                 <input
                   type="range"
                   min={0.1}
@@ -6927,11 +7288,11 @@ export default function Home() {
                   step={0.01}
                   value={ruleDraft.risk_score}
                   onChange={(event) => setRuleDraft((current) => ({ ...current, risk_score: Number(event.target.value) }))}
-                  className="h-10 w-full accent-teal-300"
+                  className="h-10 w-full accent-[var(--tone-accent)]"
                 />
               </label>
               <label>
-                <span className="mb-2 block text-sm text-[var(--text-secondary)]">描述</span>
+                <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">描述</span>
                 <input
                   value={ruleDraft.description}
                   onChange={(event) => setRuleDraft((current) => ({ ...current, description: event.target.value }))}
@@ -6940,7 +7301,7 @@ export default function Home() {
                 />
               </label>
               <label className="md:col-span-2">
-                <span className="mb-2 block text-sm text-[var(--text-secondary)]">测试样例文本（可选，保存前先试跑）</span>
+                <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">测试样例文本（可选，保存前先试跑）</span>
                 <textarea
                   value={ruleTestText}
                   onChange={(event) => setRuleTestText(event.target.value)}
@@ -6976,21 +7337,21 @@ export default function Home() {
               </div>
             </div>
             {ruleTestResult ? (
-              <div className="relative mt-4 rounded-2xl border border-white/[0.08] bg-white/[0.035] p-4 text-sm">
+              <div className="relative mt-4 rounded-[var(--radius-lg)] border border-[var(--panel-border)] bg-[var(--surface-raised)] p-4 text-[length:var(--text-body)]">
                 {ruleTestResult.matched ? (
                   <>
-                    <p className="text-emerald-300">命中 {ruleTestResult.match_count} 处：</p>
+                    <p className="text-[var(--tone-success-text)]">命中 {ruleTestResult.match_count} 处：</p>
                     <ul className="mt-2 space-y-1">
                       {ruleTestResult.matches.map((match, index) => (
-                        <li key={index} className="font-mono text-xs text-zinc-300">
-                          <span className="mr-2 text-zinc-500">[{match.span[0]}:{match.span[1]}]</span>
+                        <li key={index} className="font-mono text-[length:var(--text-micro)] text-[var(--text-secondary)]">
+                          <span className="mr-2 text-[var(--text-muted)]">[{match.span[0]}:{match.span[1]}]</span>
                           {match.matched_text}
                         </li>
                       ))}
                     </ul>
                   </>
                 ) : (
-                  <p className="text-zinc-400">未命中：样例文本中没有匹配该模式的内容。</p>
+                  <p className="text-[var(--text-secondary)]">未命中：样例文本中没有匹配该模式的内容。</p>
                 )}
               </div>
             ) : null}
@@ -6998,100 +7359,131 @@ export default function Home() {
         ) : null}
 
         {customRulesError ? (
-          <div className={`${glassPanelClass} border-rose-300/20 p-4 text-sm text-rose-200`}>{customRulesError}</div>
+          <div className={`${glassPanelClass} border-[color-mix(in_oklab,var(--tone-danger)_28%,transparent)] p-4 text-[length:var(--text-body)] text-[var(--tone-danger-text)]`}>{customRulesError}</div>
         ) : null}
 
         {customRulesLoading && customRules.length === 0 ? (
-          <div className={`${glassPanelClass} p-6 text-center text-sm text-zinc-400`}>正在加载自定义规则…</div>
+          <RuleListSkeleton rows={5} />
         ) : null}
 
         {!customRulesLoading && customRules.length === 0 && !customRulesError ? (
-          <div className={`${glassPanelClass} p-6 text-center text-sm text-zinc-400`}>
-            还没有自定义规则。点击「新增规则」创建第一条，或导入规则包。
+          <div className={`${glassPanelClass} px-6 py-10 text-center`}>
+            <p className="text-[length:var(--text-body)] font-medium text-[var(--text-primary)]">还没有自定义规则</p>
+            <p className="mt-1 text-[length:var(--text-caption)] text-[var(--text-muted)]">
+              点击「新增规则」创建第一条，或导入规则包。
+            </p>
           </div>
         ) : null}
 
-        <div className="grid gap-3">
-          {customRules.map((rule) => (
-            <motion.article key={rule.id} whileHover={{ y: -2 }} className={`${glassPanelClass} ${glassPanelMotionClass} overflow-visible p-5`}>
-              <PanelGlow />
-              <div className="relative flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-base font-semibold text-white">{rule.name}</h3>
-                    <span className="rounded-full border border-white/[0.1] bg-white/[0.055] px-2.5 py-0.5 text-xs text-zinc-300">
-                      {rule.rule_type === "keyword" ? "关键词" : "正则"}
-                    </span>
-                    <span className="rounded-full border border-white/[0.1] bg-white/[0.055] px-2.5 py-0.5 text-xs text-zinc-300">
-                      {ruleTargetText(String(rule.target))}
-                    </span>
-                    <span className={`rounded-full border px-2.5 py-0.5 text-xs ${ruleActionClass(String(rule.action))}`}>
-                      {ruleActionText(String(rule.action))}
-                    </span>
-                    <span className="rounded-full border border-white/[0.1] bg-white/[0.055] px-2.5 py-0.5 text-xs text-zinc-300">
-                      风险 {Number(rule.risk_score).toFixed(2)}
-                    </span>
-                  </div>
-                  <p className="mt-2 break-all font-mono text-xs text-zinc-400">{rule.pattern}</p>
-                  {rule.description ? <p className="mt-1 text-sm leading-6 text-zinc-400">{rule.description}</p> : null}
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Switch
-                    label={`切换 ${rule.name}`}
-                    checked={rule.enabled}
-                    onChange={(value) => void toggleCustomRule(rule, value)}
+        {customRulesError && customRules.length === 0 ? (
+          <div role="alert" className={`${glassPanelClass} px-6 py-10 text-center`}>
+            <p className="text-[length:var(--text-body)] font-medium text-[var(--tone-danger-text)]">规则加载失败</p>
+            <p className="mt-1 text-[length:var(--text-caption)] text-[var(--text-muted)]">{customRulesError}</p>
+            <button type="button" onClick={() => void loadCustomRules(true)} className={`${buttonClass("secondary")} mt-3`}>
+              <RefreshCcw className="h-4 w-4" aria-hidden />
+              重试
+            </button>
+          </div>
+        ) : null}
+
+        {customRules.length > 0 ? (
+          <div className={`${glassPanelClass} overflow-hidden`}>
+            <div className="hidden grid-cols-[3px_minmax(0,2fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_minmax(0,0.7fr)_auto_auto] items-center gap-x-4 border-b border-[var(--panel-border)] px-5 py-2 text-[length:var(--text-micro)] font-medium uppercase tracking-[0.08em] text-[var(--text-muted)] lg:grid">
+              <span aria-hidden />
+              <span>规则 / 匹配式</span>
+              <span>方式</span>
+              <span>作用位置</span>
+              <span>动作</span>
+              <span className="text-center">启用</span>
+              <span className="text-right">操作</span>
+            </div>
+            {customRules.map((rule) => {
+              const score = Number(rule.risk_score);
+              return (
+                <div
+                  key={rule.id}
+                  className="group grid grid-cols-[3px_minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2 border-b border-[var(--divider)] px-4 py-3.5 transition-colors duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] last:border-b-0 hover:bg-[var(--surface-sunken)] sm:px-5 lg:grid-cols-[3px_minmax(0,2fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_minmax(0,0.7fr)_auto_auto] lg:items-center lg:gap-x-4 lg:gap-y-0"
+                >
+                  <span
+                    aria-hidden
+                    className={`col-start-1 row-span-2 h-9 w-[3px] self-start rounded-full lg:row-span-1 lg:self-center ${
+                      rule.enabled ? ruleActionTick(String(rule.action)) : "bg-[var(--divider-strong)]"
+                    }`}
                   />
+                  <div className="col-start-2 row-start-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-[length:var(--text-body)] font-medium text-[var(--text-primary)]">{rule.name}</h3>
+                      <span className={`${ruleActionClass(String(rule.action))}`}>{ruleActionText(String(rule.action))}</span>
+                      <span className="text-[length:var(--text-micro)] tabular-nums text-[var(--text-muted)]">风险 {score.toFixed(2)}</span>
+                    </div>
+                    <p className="mt-0.5 break-all font-mono text-[length:var(--text-micro)] leading-5 text-[var(--text-muted)]">{rule.pattern}</p>
+                    {rule.description ? (
+                      <p className="mt-0.5 line-clamp-1 text-[length:var(--text-micro)] text-[var(--text-secondary)]">{rule.description}</p>
+                    ) : null}
+                  </div>
+                  <span className="col-start-2 row-start-2 text-[length:var(--text-caption)] text-[var(--text-secondary)] lg:col-start-3 lg:row-start-1">
+                    {rule.rule_type === "keyword" ? "关键词" : "正则"}
+                  </span>
+                  <span className="col-start-3 row-start-2 text-right text-[length:var(--text-caption)] text-[var(--text-secondary)] lg:col-start-4 lg:row-start-1 lg:text-left">
+                    {ruleTargetText(String(rule.target))}
+                  </span>
+                  <div className="col-span-2 col-start-2 row-start-3 flex items-center gap-3 lg:col-span-1 lg:col-start-6 lg:row-start-1 lg:justify-center">
+                    <Switch label={`切换 ${rule.name}`} checked={rule.enabled} onChange={(value) => void toggleCustomRule(rule, value)} />
+                  </div>
+                  <div className="col-span-2 col-start-2 row-start-4 flex justify-end gap-1 lg:col-span-1 lg:col-start-7 lg:row-start-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRuleDraftOpen(true);
+                        setRuleEditingId(rule.id);
+                        setRuleTestResult(null);
+                        setRuleDraft({
+                          name: rule.name,
+                          description: rule.description,
+                          rule_type: (rule.rule_type === "keyword" ? "keyword" : "regex") as CustomRuleItemType,
+                          pattern: rule.pattern,
+                          target: String(rule.target) as CustomRuleTarget,
+                          action: String(rule.action) as CustomRuleAction,
+                          risk_score: Number(rule.risk_score),
+                          enabled: rule.enabled,
+                        });
+                      }}
+                      className="tap-target inline-flex items-center justify-center rounded-[var(--radius-xs)] p-1.5 text-[var(--text-muted)] transition-colors duration-[var(--dur-fast)] hover:bg-[var(--surface-raised)] hover:text-[var(--text-primary)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--tone-accent)]"
+                      aria-label={`编辑规则 ${rule.name}`}
+                      title="编辑规则"
+                    >
+                      <Pencil className="h-4 w-4" aria-hidden />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void deleteCustomRule(rule)}
+                      disabled={ruleBusyId === rule.id}
+                      className="tap-target inline-flex items-center justify-center rounded-[var(--radius-xs)] p-1.5 text-[var(--text-muted)] transition-colors duration-[var(--dur-fast)] hover:bg-[var(--tone-danger-surface)] hover:text-[var(--tone-danger-text)] disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--tone-accent)]"
+                      aria-label={`删除规则 ${rule.name}`}
+                      title="删除规则"
+                    >
+                      <Trash2 className="h-4 w-4" aria-hidden />
+                    </button>
+                  </div>
                 </div>
-              </div>
-              <div className="relative mt-4 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRuleDraftOpen(true);
-                    setRuleEditingId(rule.id);
-                    setRuleTestResult(null);
-                    setRuleDraft({
-                      name: rule.name,
-                      description: rule.description,
-                      rule_type: (rule.rule_type === "keyword" ? "keyword" : "regex") as CustomRuleItemType,
-                      pattern: rule.pattern,
-                      target: String(rule.target) as CustomRuleTarget,
-                      action: String(rule.action) as CustomRuleAction,
-                      risk_score: Number(rule.risk_score),
-                      enabled: rule.enabled,
-                    });
-                  }}
-                  className={buttonClass("secondary")}
-                >
-                  编辑
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void deleteCustomRule(rule)}
-                  disabled={ruleBusyId === rule.id}
-                  className={buttonClass("danger")}
-                >
-                  <Trash2 className="h-4 w-4" aria-hidden />
-                  删除
-                </button>
-              </div>
-            </motion.article>
-          ))}
-        </div>
+              );
+            })}
+          </div>
+        ) : null}
+
       </section>
 
       <aside className="space-y-4">
         <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
-          <PanelGlow />
-          <h2 className="relative text-base font-semibold text-white">响应侧 DLP 引擎</h2>
-          <p className="relative mt-2 text-sm leading-6 text-zinc-400">
+          <h2 className="relative text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">响应侧 DLP 引擎</h2>
+          <p className="relative mt-2 text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">
             对模型输出做敏感数据扫描（AWS/GitHub/OpenAI/Slack/Google 密钥、JWT、私钥块、密钥赋值等）。
           </p>
           {dlpStatus ? (
             <div className="relative mt-4 space-y-3">
-              <div className="flex items-center justify-between border-b border-white/[0.07] pb-3">
-                <span className="text-sm text-zinc-400">当前模式</span>
-                <span className={`rounded-full border px-3 py-1 text-xs font-medium ${dlpModeClass(String(dlpStatus.mode))}`}>
+              <div className="flex items-center justify-between border-b border-[var(--divider)] pb-3">
+                <span className="text-[length:var(--text-body)] text-[var(--text-secondary)]">当前模式</span>
+                <span className={dlpModeClass(String(dlpStatus.mode))}>
                   {dlpStatus.mode === "off"
                     ? "已关闭"
                     : dlpStatus.mode === "monitor"
@@ -7102,30 +7494,29 @@ export default function Home() {
                 </span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-sm text-zinc-400">内置检测模式</span>
-                <span className="text-sm font-medium text-white">{dlpStatus.builtin_patterns.length} 类</span>
+                <span className="text-[length:var(--text-body)] text-[var(--text-secondary)]">内置检测模式</span>
+                <span className="text-[length:var(--text-body)] font-medium text-[var(--text-primary)]">{dlpStatus.builtin_patterns.length} 类</span>
               </div>
               <div className="space-y-1.5 pt-1">
                 {dlpStatus.builtin_patterns.map((pattern) => (
-                  <div key={pattern.type} className="flex items-center justify-between gap-3 text-xs">
-                    <span className="font-mono text-zinc-300">{pattern.type}</span>
-                    <span className="shrink-0 text-zinc-500">风险 {pattern.risk_score.toFixed(2)}</span>
+                  <div key={pattern.type} className="flex items-center justify-between gap-3 text-[length:var(--text-micro)]">
+                    <span className="font-mono text-[var(--text-secondary)]">{pattern.type}</span>
+                    <span className="shrink-0 text-[var(--text-muted)]">风险 {pattern.risk_score.toFixed(2)}</span>
                   </div>
                 ))}
               </div>
-              <p className="pt-2 text-xs leading-5 text-zinc-500">
+              <p className="pt-2 text-[length:var(--text-micro)] leading-5 text-[var(--text-muted)]">
                 通过环境变量 SHADOW_AGENT_RESPONSE_DLP_MODE 调整（off / monitor / redact / block）。
               </p>
             </div>
           ) : (
-            <p className="relative mt-4 text-sm text-zinc-500">加载中…</p>
+            <p className="relative mt-4 text-[length:var(--text-body)] text-[var(--text-muted)]">加载中…</p>
           )}
         </section>
 
         <section className={`${glassPanelClass} ${glassPanelMotionClass} p-5`}>
-          <PanelGlow />
-          <h2 className="relative text-base font-semibold text-white">编写建议</h2>
-          <ul className="relative mt-3 space-y-2 text-sm leading-6 text-zinc-400">
+          <h2 className="relative text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">编写建议</h2>
+          <ul className="relative mt-3 space-y-2 text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">
             <li>· 请求侧规则作用于完整会话文本与外部上下文，适合拦截内部代号、竞品关键词等。</li>
             <li>· 响应侧规则参与 DLP 扫描，「脱敏」动作会把命中内容替换为 [REDACTED:规则名]。</li>
             <li>· 正则不区分大小写，长度上限 512 字符；创建前先用测试面板试跑。</li>
@@ -7141,8 +7532,8 @@ export default function Home() {
       return (
         <section className={`${glassPanelClass} relative overflow-hidden p-6`}>
           <PanelGlow />
-          <div className="relative flex items-start gap-3 text-sm leading-6 text-zinc-300">
-            <Shield className="mt-0.5 h-5 w-5 shrink-0 text-amber-200" aria-hidden />
+          <div className="relative flex items-start gap-3 text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">
+            <Shield className="mt-0.5 h-5 w-5 shrink-0 text-[var(--tone-warning-text)]" aria-hidden />
             <span>组织管理需要管理员权限。请使用管理员账号登录，或在「设置」中配置 Admin API Key 后重试。</span>
           </div>
         </section>
@@ -7160,8 +7551,8 @@ export default function Home() {
           <PanelGlow />
           <div className="relative flex flex-wrap items-start justify-between gap-4">
             <div>
-              <h2 className="text-base font-semibold text-white">组织（租户）</h2>
-              <p className="mt-1 text-sm leading-6 text-zinc-400">
+              <h2 className="text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">组织（租户）</h2>
+              <p className="mt-1 text-[length:var(--text-body)] leading-6 text-[var(--text-secondary)]">
                 每个组织拥有独立的日志、策略、自定义规则与托管密钥；平台管理员可见全部组织，组织管理员仅可见所属组织。
               </p>
             </div>
@@ -7178,10 +7569,10 @@ export default function Home() {
           </div>
 
           {orgCreateOpen ? (
-            <div className="relative mt-4 rounded-2xl border border-white/[0.08] bg-[var(--surface-raised)] p-5">
+            <div className="relative mt-4 rounded-[var(--radius-lg)] border border-[var(--panel-border)] bg-[var(--surface-raised)] p-5">
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block">
-                  <span className="mb-2 block text-sm text-zinc-400">组织标识（slug，仅小写字母、数字、-、_）</span>
+                  <span className="mb-2 block text-[length:var(--text-caption)] text-[var(--text-secondary)]">组织标识（slug，仅小写字母、数字、-、_）</span>
                   <input
                     value={orgCreateForm.slug}
                     onChange={(event) => setOrgCreateForm((current) => ({ ...current, slug: event.target.value }))}
@@ -7191,7 +7582,7 @@ export default function Home() {
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-2 block text-sm text-zinc-400">组织名称</span>
+                  <span className="mb-2 block text-[length:var(--text-caption)] text-[var(--text-secondary)]">组织名称</span>
                   <input
                     value={orgCreateForm.name}
                     onChange={(event) => setOrgCreateForm((current) => ({ ...current, name: event.target.value }))}
@@ -7209,58 +7600,105 @@ export default function Home() {
                   {orgCreateBusy ? "创建中…" : "创建"}
                 </button>
               </div>
-              <p className="mt-2 text-xs leading-5 text-zinc-500">
+              <p className="mt-2 text-[length:var(--text-micro)] leading-5 text-[var(--text-muted)]">
                 创建组织需要平台管理员或现有组织的 owner 角色；创建者将自动成为新组织的 owner。
               </p>
             </div>
           ) : null}
 
-          {orgListError ? (
-            <p className="relative mt-4 rounded-2xl border border-red-300/25 bg-red-400/10 p-4 text-sm text-red-200">{orgListError}</p>
-          ) : null}
+          {/* 组织列表：卡片墙 → 台账。每个组织一行，选中态用行首竖条而非整行换边框。
+              列：[竖条][名称+slug][角色/成员][SSO][默认] */}
+          <div className="relative mt-4 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--panel-border)]">
+            <div className="grid grid-cols-[3px_minmax(0,1fr)_auto] items-center gap-x-3 border-b border-[var(--panel-border)] bg-[var(--surface-sunken)] px-4 py-2 text-[length:var(--text-micro)] font-medium uppercase tracking-[0.08em] text-[var(--text-muted)] sm:grid-cols-[3px_minmax(0,1fr)_minmax(0,0.9fr)_auto_auto]">
+              <span aria-hidden />
+              <span>组织</span>
+              <span className="hidden sm:block">角色 / 成员</span>
+              <span className="hidden text-right sm:block">SSO</span>
+              <span className="text-right">状态</span>
+            </div>
 
-          <div className="relative mt-4 grid gap-3">
-            {orgList.length === 0 && !orgListLoading ? (
-              <p className="rounded-2xl border border-white/[0.08] bg-[var(--surface-raised)] p-5 text-sm text-zinc-500">
-                暂无可见组织。
+            {orgListError ? (
+              <div className="border-b border-[var(--divider)] px-4 py-3" role="alert">
+                <p className="rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--tone-danger)_28%,transparent)] bg-[var(--tone-danger-surface)] px-4 py-3 text-[length:var(--text-caption)] text-[var(--tone-danger-text)]">
+                  组织列表加载失败：{orgListError}
+                </p>
+              </div>
+            ) : null}
+
+            {orgListLoading && orgList.length === 0 ? (
+              /* 骨架屏而非"加载中…"文字：interaction-design 明确要求 skeleton > spinner */
+              <div role="status" aria-label="组织列表加载中">
+                <span className="sr-only">正在加载组织列表</span>
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} aria-hidden className="grid grid-cols-[3px_minmax(0,1fr)_auto] items-center gap-x-3 border-b border-[var(--divider)] px-4 py-3.5 last:border-b-0 sm:grid-cols-[3px_minmax(0,1fr)_minmax(0,0.9fr)_auto_auto]">
+                    <span className="skeleton h-9 w-[3px] rounded-full" />
+                    <div className="flex flex-col gap-1.5">
+                      <span className="skeleton h-4 w-1/3" />
+                      <span className="skeleton h-3 w-1/2" />
+                    </div>
+                    <span className="skeleton hidden h-3.5 w-24 sm:block" />
+                    <span className="skeleton hidden h-5 w-14 sm:block" />
+                    <span className="skeleton h-5 w-12 justify-self-end" />
+                  </div>
+                ))}
+              </div>
+            ) : orgList.length === 0 ? (
+              <p className="px-4 py-8 text-center text-[length:var(--text-body)] text-[var(--text-muted)] sm:px-5">
+                还没有可见组织。点击「创建组织」建立第一个租户。
               </p>
             ) : null}
-            {orgList.map((org) => (
-              <button
-                key={org.id}
-                type="button"
-                onClick={() => selectOrg(org.id === orgSelectedId ? null : org.id)}
-                className={`flex min-h-14 w-full items-center gap-3 rounded-2xl border p-4 text-left transition-all duration-200 ease-out focus:outline-none focus:ring-2 focus:ring-teal-300/60 active:scale-[0.99] ${
-                  org.id === orgSelectedId
-                    ? "border-teal-200/30 bg-teal-300/[0.08] shadow-[0_0_24px_rgba(45,212,191,0.08)]"
-                    : "border-white/[0.08] bg-[var(--surface-raised)] hover:border-white/[0.16] hover:bg-white/[0.05]"
-                }`}
-              >
-                <Building2 className="h-5 w-5 shrink-0 text-teal-200" aria-hidden />
-                <span className="min-w-0 flex-1">
-                  <span className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium text-white">{org.name}</span>
-                    <span className="rounded-full bg-white/10 px-2 py-0.5 font-mono text-[10px] text-zinc-400">{org.slug}</span>
-                    {org.is_default ? (
-                      <span className="rounded-full border border-sky-300/30 bg-sky-400/10 px-2 py-0.5 text-[10px] text-sky-200">默认</span>
-                    ) : null}
-                    {org.sso_enabled ? (
-                      <span className="rounded-full border border-emerald-300/30 bg-emerald-400/10 px-2 py-0.5 text-[10px] text-emerald-200">
-                        SSO: {org.sso_provider || "已启用"}
+
+            {orgList.map((org) => {
+              const selected = org.id === orgSelectedId;
+              return (
+                <button
+                  key={org.id}
+                  type="button"
+                  onClick={() => selectOrg(selected ? null : org.id)}
+                  aria-pressed={selected}
+                  className={`relative grid w-full grid-cols-[3px_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--tone-accent)] sm:grid-cols-[3px_minmax(0,1fr)_minmax(0,0.9fr)_auto_auto] ${ledgerRowClass} ${
+                    selected ? "bg-[var(--tone-accent-surface)]" : ""
+                  }`}
+                >
+                  <span
+                    aria-hidden
+                    className={`h-9 w-[3px] self-center rounded-full transition-colors duration-[var(--dur-fast)] ${
+                      selected ? "bg-[var(--accent-solid)]" : "bg-transparent"
+                    }`}
+                  />
+                  <span className="min-w-0">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <Building2 className={`h-4 w-4 shrink-0 ${selected ? "text-[var(--tone-accent-text)]" : "text-[var(--text-muted)]"}`} aria-hidden />
+                      <span className={`truncate text-[length:var(--text-body)] font-medium ${selected ? "text-[var(--tone-accent-text)]" : "text-[var(--text-primary)]"}`}>
+                        {org.name}
                       </span>
-                    ) : null}
+                      <span className="shrink-0 font-mono text-[length:var(--text-micro)] text-[var(--text-muted)]">{org.slug}</span>
+                    </span>
                   </span>
-                  <span className="mt-1 block text-xs text-zinc-500">
-                    组织角色：{org.role || "member"}
+                  {/* 移动端（3 列）只有 [竖条][组织][状态] 三格：
+                      SSO 与角色两列折叠隐藏，避免与状态格争抢同一栅格单元。
+                      sm: 起升到 5 列，各归其位。 */}
+                  <span className="hidden truncate text-[length:var(--text-caption)] text-[var(--text-secondary)] sm:col-start-3 sm:block">
+                    {org.role || "member"}
                     {typeof org.member_count === "number" ? ` · ${org.member_count} 名成员` : ""}
                   </span>
-                </span>
-                <ChevronRight
-                  className={`h-4 w-4 shrink-0 text-zinc-500 transition ${org.id === orgSelectedId ? "rotate-90" : ""}`}
-                  aria-hidden
-                />
-              </button>
-            ))}
+                  <span className="hidden justify-end sm:col-start-4 sm:flex">
+                    {org.sso_enabled ? (
+                      <span className="chip chip-success">SSO: {org.sso_provider || "已启用"}</span>
+                    ) : (
+                      <span className="text-[length:var(--text-micro)] text-[var(--text-muted)]">—</span>
+                    )}
+                  </span>
+                  <span className="col-start-3 flex items-center justify-end gap-1.5 sm:col-start-5">
+                    {org.is_default ? <span className="chip chip-info">默认</span> : null}
+                    <ChevronRight
+                      className={`h-4 w-4 shrink-0 text-[var(--text-muted)] transition-transform duration-[var(--dur-fast)] ${selected ? "rotate-90" : ""}`}
+                      aria-hidden
+                    />
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </section>
 
@@ -7270,11 +7708,11 @@ export default function Home() {
               <PanelGlow />
               <div className="relative flex items-start justify-between gap-3">
                 <div>
-                  <h2 className="flex items-center gap-2 text-base font-semibold text-white">
-                    <Users className="h-4 w-4 text-teal-200" aria-hidden />
+                  <h2 className="flex items-center gap-2 text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">
+                    <Users className="h-4 w-4 text-[var(--tone-accent-text)]" aria-hidden />
                     成员管理 · {selectedOrg.name}
                   </h2>
-                  <p className="mt-1 text-xs leading-5 text-zinc-500">
+                  <p className="mt-1 text-[length:var(--text-micro)] leading-5 text-[var(--text-muted)]">
                     添加已有控制台账号并分配组织角色（owner / admin / member）。
                   </p>
                 </div>
@@ -7310,31 +7748,60 @@ export default function Home() {
                 </div>
               ) : null}
 
-              <div className="relative mt-4 space-y-2">
+              {/* 成员列表：卡片墙 → 台账。列：[头像][姓名+邮箱][平台角色][组织角色][操作] */}
+              <div className="relative mt-4 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--panel-border)]">
+                <div className="grid grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-x-3 border-b border-[var(--panel-border)] bg-[var(--surface-sunken)] px-4 py-2 text-[length:var(--text-micro)] font-medium uppercase tracking-[0.08em] text-[var(--text-muted)]">
+                  <span aria-hidden />
+                  <span>成员</span>
+                  <span className="text-right">组织角色</span>
+                </div>
+
                 {orgMembersLoading ? (
-                  <p className="text-sm text-zinc-500">成员加载中…</p>
+                  <div role="status" aria-label="成员加载中">
+                    <span className="sr-only">正在加载组织成员</span>
+                    {Array.from({ length: 3 }).map((_, i) => (
+                      <div key={i} aria-hidden className="grid grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-x-3 border-b border-[var(--divider)] px-4 py-3 last:border-b-0">
+                        <span className="skeleton h-8 w-8 rounded-full" />
+                        <div className="flex flex-col gap-1.5">
+                          <span className="skeleton h-3.5 w-1/3" />
+                          <span className="skeleton h-3 w-1/2" />
+                        </div>
+                        <span className="skeleton h-6 w-20" />
+                      </div>
+                    ))}
+                  </div>
                 ) : orgMembers.length === 0 ? (
-                  <p className="text-sm text-zinc-500">暂无成员。</p>
-                ) : (
+                  <p className="px-4 py-8 text-center text-[length:var(--text-body)] text-[var(--text-muted)]">
+                    还没有成员。用上方输入框按邮箱添加第一个成员。
+                  </p>
+                ) : null}
+
+                {!orgMembersLoading &&
                   orgMembers.map((member) => (
                     <div
                       key={member.user_id}
-                      className="flex min-h-14 flex-wrap items-center gap-3 rounded-xl border border-white/[0.08] bg-[var(--surface-raised)] p-4"
+                      className={`grid grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-4 py-3 ${ledgerRowClass}`}
                     >
-                      <div className="min-w-0 flex-1">
+                      <span
+                        aria-hidden
+                        className="grid h-8 w-8 place-items-center rounded-full border border-[color-mix(in_oklab,var(--tone-accent)_26%,transparent)] bg-[var(--tone-accent-surface)] font-mono text-[length:var(--text-micro)] font-semibold text-[var(--tone-accent-text)]"
+                      >
+                        {(member.name || member.email).trim().slice(0, 1).toUpperCase()}
+                      </span>
+                      <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-medium text-white">{member.name || member.email}</span>
-                          {!member.is_active ? (
-                            <span className="rounded-full border border-red-300/30 bg-red-400/10 px-2 py-0.5 text-[10px] text-red-200">已停用</span>
-                          ) : null}
+                          <span className="truncate text-[length:var(--text-body)] font-medium text-[var(--text-primary)]">
+                            {member.name || member.email}
+                          </span>
+                          {!member.is_active ? <span className="chip chip-danger">已停用</span> : null}
                         </div>
-                        <div className="mt-0.5 truncate text-xs text-zinc-500">
+                        <div className="mt-0.5 truncate text-[length:var(--text-micro)] text-[var(--text-muted)]">
                           {member.email} · 平台角色 {member.platform_role}
                         </div>
                       </div>
                       {canManageSelected ? (
-                        <div className="flex items-center gap-2">
-                          <div className="w-32">
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-28">
                             <GlassSelect
                               value={member.org_role}
                               options={[
@@ -7350,55 +7817,55 @@ export default function Home() {
                             type="button"
                             onClick={() => void removeOrgMember(member.user_id, member.email)}
                             disabled={memberBusyId === member.user_id}
-                            className={`${buttonClass("danger")} min-h-10 px-2.5`}
+                            className="tap-target inline-flex items-center justify-center rounded-[var(--radius-xs)] p-1.5 text-[var(--text-muted)] transition-colors duration-[var(--dur-fast)] hover:bg-[var(--tone-danger-surface)] hover:text-[var(--tone-danger-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--tone-accent)] disabled:opacity-50"
                             aria-label={`移除成员 ${member.email}`}
+                            title="移除成员"
                           >
                             <Trash2 className="h-4 w-4" aria-hidden />
                           </button>
                         </div>
                       ) : (
-                        <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-xs text-zinc-300">{member.org_role}</span>
+                        <span className="chip chip-neutral justify-self-end">{member.org_role}</span>
                       )}
                     </div>
-                  ))
-                )}
+                  ))}
               </div>
             </section>
 
             <section className={`${glassPanelClass} relative overflow-hidden p-6`}>
               <PanelGlow />
               <div className="relative">
-                <h2 className="flex items-center gap-2 text-base font-semibold text-white">
-                  <Globe className="h-4 w-4 text-teal-200" aria-hidden />
+                <h2 className="flex items-center gap-2 text-[length:var(--text-heading)] font-semibold text-[var(--text-primary)]">
+                  <Globe className="h-4 w-4 text-[var(--tone-accent-text)]" aria-hidden />
                   OIDC 单点登录 · {selectedOrg.slug}
                 </h2>
-                <p className="mt-1 text-xs leading-5 text-zinc-500">
+                <p className="mt-1 text-[length:var(--text-micro)] leading-5 text-[var(--text-muted)]">
                   Authorization Code + PKCE；成员在登录页输入组织标识「{selectedOrg.slug}」即可直达企业 IdP 登录。
                 </p>
 
                 {orgSsoLoading ? (
-                  <p className="mt-4 text-sm text-zinc-500">SSO 配置加载中…</p>
+                  <p className="mt-4 text-[length:var(--text-body)] text-[var(--text-muted)]">SSO 配置加载中…</p>
                 ) : !canManageSelected ? (
-                  <p className="mt-4 text-sm text-zinc-500">需要组织 owner / admin 角色才能配置 SSO。</p>
+                  <p className="mt-4 text-[length:var(--text-body)] text-[var(--text-muted)]">需要组织 owner / admin 角色才能配置 SSO。</p>
                 ) : (
                   <div className="mt-4 space-y-3">
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-2 text-[length:var(--text-micro)]">
                       <span
                         className={`rounded-full border px-2.5 py-0.5 ${
                           orgSsoConfig?.enabled
-                            ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-200"
-                            : "border-white/[0.12] bg-white/[0.06] text-zinc-400"
+                            ? "border-[color-mix(in_oklab,var(--tone-success)_28%,transparent)] bg-[var(--tone-success-surface)] text-[var(--tone-success-text)]"
+                            : "border-[var(--panel-border)] bg-[var(--surface-raised)] text-[var(--text-secondary)]"
                         }`}
                       >
                         {orgSsoConfig?.enabled ? "已启用" : orgSsoConfig ? "已停用" : "未配置"}
                       </span>
                       {orgSsoConfig?.client_secret_masked ? (
-                        <span className="font-mono text-zinc-500">secret {orgSsoConfig.client_secret_masked}</span>
+                        <span className="font-mono text-[var(--text-muted)]">secret {orgSsoConfig.client_secret_masked}</span>
                       ) : null}
                     </div>
 
                     <label className="block">
-                      <span className="mb-2 block text-sm text-zinc-400">Provider 名称（展示用）</span>
+                      <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">Provider 名称（展示用）</span>
                       <input
                         value={orgSsoForm.provider_name}
                         onChange={(event) => setOrgSsoForm((current) => ({ ...current, provider_name: event.target.value }))}
@@ -7408,7 +7875,7 @@ export default function Home() {
                       />
                     </label>
                     <label className="block">
-                      <span className="mb-2 block text-sm text-zinc-400">Issuer URL（支持 .well-known/openid-configuration）</span>
+                      <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">Issuer URL（支持 .well-known/openid-configuration）</span>
                       <input
                         value={orgSsoForm.issuer_url}
                         onChange={(event) => setOrgSsoForm((current) => ({ ...current, issuer_url: event.target.value }))}
@@ -7419,7 +7886,7 @@ export default function Home() {
                     </label>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <label className="block">
-                        <span className="mb-2 block text-sm text-zinc-400">Client ID</span>
+                        <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">Client ID</span>
                         <input
                           value={orgSsoForm.client_id}
                           onChange={(event) => setOrgSsoForm((current) => ({ ...current, client_id: event.target.value }))}
@@ -7428,7 +7895,7 @@ export default function Home() {
                         />
                       </label>
                       <label className="block">
-                        <span className="mb-2 block text-sm text-zinc-400">
+                        <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">
                           Client Secret{orgSsoConfig?.client_secret_masked ? "（留空保留原值）" : ""}
                         </span>
                         <input
@@ -7442,7 +7909,7 @@ export default function Home() {
                     </div>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <label className="block">
-                        <span className="mb-2 block text-sm text-zinc-400">Scopes</span>
+                        <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">Scopes</span>
                         <input
                           value={orgSsoForm.scopes}
                           onChange={(event) => setOrgSsoForm((current) => ({ ...current, scopes: event.target.value }))}
@@ -7451,7 +7918,7 @@ export default function Home() {
                         />
                       </label>
                       <label className="block">
-                        <span className="mb-2 block text-sm text-zinc-400">SSO 新用户平台角色（JIT 开户）</span>
+                        <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">SSO 新用户平台角色（JIT 开户）</span>
                         <div className="min-h-10">
                           <GlassSelect
                             value={orgSsoForm.default_role}
@@ -7467,21 +7934,21 @@ export default function Home() {
                       </label>
                     </div>
                     <div className="flex flex-wrap gap-4">
-                      <label className="flex items-center gap-2 text-sm text-zinc-300">
+                      <label className="flex items-center gap-2 text-[length:var(--text-body)] text-[var(--text-secondary)]">
                         <input
                           type="checkbox"
                           checked={orgSsoForm.jit_enabled}
                           onChange={(event) => setOrgSsoForm((current) => ({ ...current, jit_enabled: event.target.checked }))}
-                          className="h-4 w-4 rounded border-white/20 bg-white/10"
+                          className="h-4 w-4 rounded border-[var(--panel-border)] bg-[var(--surface-raised)]"
                         />
                         JIT 自动开户（首次 SSO 登录自动创建账号）
                       </label>
-                      <label className="flex items-center gap-2 text-sm text-zinc-300">
+                      <label className="flex items-center gap-2 text-[length:var(--text-body)] text-[var(--text-secondary)]">
                         <input
                           type="checkbox"
                           checked={orgSsoForm.enabled}
                           onChange={(event) => setOrgSsoForm((current) => ({ ...current, enabled: event.target.checked }))}
-                          className="h-4 w-4 rounded border-white/20 bg-white/10"
+                          className="h-4 w-4 rounded border-[var(--panel-border)] bg-[var(--surface-raised)]"
                         />
                         启用 SSO 登录
                       </label>
@@ -7528,89 +7995,129 @@ export default function Home() {
   }
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-background text-foreground">
+    <main className="relative min-h-[100dvh] overflow-hidden bg-background text-foreground">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,var(--page-glow-a),transparent_32rem),radial-gradient(circle_at_82%_14%,var(--page-glow-b),transparent_30rem),linear-gradient(135deg,rgba(255,255,255,0.035),transparent_40%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(var(--page-grid)_1px,transparent_1px),linear-gradient(90deg,var(--page-grid)_1px,transparent_1px)] bg-[size:56px_56px] opacity-25" />
-      <div className="relative grid min-h-screen grid-cols-1 lg:grid-cols-[264px_minmax(0,1fr)]">
-        <aside className="border-b border-[var(--panel-border-soft)] bg-[var(--panel-bg-soft)] px-4 py-5 shadow-[var(--sidebar-shadow)] backdrop-blur-[28px] lg:border-b-0 lg:border-r">
-          <button type="button" onClick={() => navigateTo("chat")} className="flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-all duration-200 ease-out hover:bg-white/[0.06] focus:outline-none focus:ring-2 focus:ring-teal-300/60 active:scale-[0.985]">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-teal-300/30 bg-teal-400/10 shadow-[0_0_20px_rgba(45,212,191,0.15)]">
-              <Shield className="h-5 w-5 text-teal-200" aria-hidden />
+      <div className="relative grid min-h-[100dvh] grid-cols-1 lg:grid-cols-[268px_minmax(0,1fr)]">
+        <aside className="flex flex-col gap-5 border-b border-[var(--panel-border-soft)] bg-[var(--panel-bg-soft)] px-4 py-5 shadow-[var(--sidebar-shadow)] backdrop-blur-[var(--blur-glass)] lg:sticky lg:top-0 lg:h-[100dvh] lg:border-b-0 lg:border-r">
+          {/* 品牌 */}
+          <button
+            type="button"
+            onClick={() => navigateTo("chat")}
+            className="flex w-full items-center gap-3 rounded-[var(--radius-md)] px-2 py-1.5 text-left transition-colors duration-[var(--dur-fast)] hover:bg-[var(--surface-sunken)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tone-accent)]"
+          >
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-[color-mix(in_oklab,var(--tone-accent)_32%,transparent)] bg-[var(--tone-accent-surface)]">
+              <Shield className="h-4.5 w-4.5 text-[var(--tone-accent-text)]" aria-hidden />
             </span>
-            <span>
-              <span className="block text-sm font-semibold tracking-wide text-white">Shadow Agent</span>
-              <span className="block text-xs text-zinc-400">Runtime Security</span>
+            <span className="min-w-0">
+              <span className="block truncate text-[length:var(--text-subhead)] font-semibold tracking-[-0.01em] text-[var(--text-primary)]">
+                Shadow Agent
+              </span>
+              <span className="block truncate text-[length:var(--text-micro)] uppercase tracking-[0.08em] text-[var(--text-muted)]">
+                Runtime Security
+              </span>
             </span>
           </button>
 
-          <nav className="mt-6 grid gap-1.5" aria-label="应用导航">
-            {visibleViewItems.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => navigateTo(item.id)}
-                aria-current={effectiveView === item.id ? "page" : undefined}
-                className={`flex min-h-10 items-center gap-3 rounded-xl px-3.5 text-left text-sm font-medium transition-all duration-200 ease-out focus:outline-none focus:ring-2 focus:ring-teal-300/60 active:scale-[0.985] ${
-                  effectiveView === item.id
-                    ? "border border-teal-200/30 bg-teal-300/[0.12] text-teal-50 shadow-[0_0_24px_rgba(45,212,191,0.12)]"
-                    : "border border-transparent text-zinc-400 hover:border-white/[0.06] hover:bg-white/[0.055] hover:text-zinc-100"
-                }`}
-              >
-                <item.icon className="h-4 w-4" aria-hidden />
-                {item.label}
-              </button>
-            ))}
+          {/* 主导航 */}
+          <nav className="grid gap-0.5" aria-label="应用导航">
+            {visibleViewItems.map((item) => {
+              const active = effectiveView === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => navigateTo(item.id)}
+                  aria-current={active ? "page" : undefined}
+                  className={`group relative flex min-h-9 items-center gap-3 rounded-[var(--radius-sm)] px-3 text-left text-[length:var(--text-caption)] font-medium transition-colors duration-[var(--dur-fast)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tone-accent)] ${
+                    active
+                      ? "bg-[var(--tone-accent-surface)] text-[var(--tone-accent-text)]"
+                      : "text-[var(--text-secondary)] hover:bg-[var(--surface-sunken)] hover:text-[var(--text-primary)]"
+                  }`}
+                >
+                  {/* 选中态：左侧竖条而非整块高亮 —— 更克制、不抢视线 */}
+                  <span
+                    aria-hidden
+                    className={`absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-[var(--tone-accent)] transition-opacity duration-[var(--dur-fast)] ${
+                      active ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
+                  <item.icon className="h-4 w-4 shrink-0" aria-hidden />
+                  <span className="truncate">{item.label}</span>
+                </button>
+              );
+            })}
           </nav>
 
           {hasAdminAccess ? (
             <button
               type="button"
               onClick={() => setDashboardOpen(true)}
-              className="mt-4 flex min-h-10 w-full items-center gap-3 rounded-xl border border-teal-200/25 bg-gradient-to-r from-teal-400/[0.13] to-sky-400/[0.09] px-3.5 text-left text-sm text-teal-50 shadow-[0_0_24px_rgba(45,212,191,0.12)] transition-all duration-200 ease-out hover:border-teal-200/40 hover:from-teal-400/[0.18] focus:outline-none focus:ring-2 focus:ring-teal-300/60 active:scale-[0.985]"
+              className="flex min-h-9 w-full items-center gap-3 rounded-[var(--radius-sm)] px-3 text-left text-[length:var(--text-caption)] font-medium text-[var(--text-secondary)] transition-colors duration-[var(--dur-fast)] hover:bg-[var(--surface-sunken)] hover:text-[var(--text-primary)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tone-accent)]"
             >
-              <Activity className="h-4 w-4" aria-hidden />
+              <Activity className="h-4 w-4 shrink-0" aria-hidden />
               安全大屏
-              <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-zinc-300">SOC</span>
+              <span className="ml-auto rounded-full bg-[var(--surface-raised)] px-1.5 py-0.5 text-[length:var(--text-micro)] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                SOC
+              </span>
             </button>
           ) : null}
 
-          <div className={`${glassPanelSoftClass} mt-6 p-4`}>
-            <div className="flex items-center gap-2 text-sm font-medium text-zinc-100">
-              <Network className="h-4 w-4 text-emerald-300" aria-hidden />
-              网关状态
-            </div>
-            <div className="mt-3 flex items-center justify-between gap-3 text-xs text-zinc-400">
-              <span className="truncate">{settings.apiBase}</span>
+          <div className="flex-1" />
+
+          {/* 状态区：把原先两块卡片 + 三处告警色合并成一处紧凑状态列表，
+              大幅降低左栏的视觉噪音 */}
+          <div className="grid gap-2 rounded-[var(--radius-md)] border border-[var(--panel-border-soft)] bg-[var(--surface-elevated)] p-3">
+            <div className="flex items-center gap-2">
               <span
-                className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${
+                className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                   health.status === "online"
-                    ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-100"
+                    ? "bg-[var(--tone-success)]"
                     : health.status === "offline"
-                      ? "border-red-300/30 bg-red-400/10 text-red-100"
-                      : "border-white/[0.1] bg-white/[0.06] text-zinc-300"
+                      ? "bg-[var(--tone-danger)]"
+                      : "bg-[var(--text-muted)]"
                 }`}
-              >
-                {health.status === "online" ? "Online" : health.status === "offline" ? "Offline" : "Unknown"}
+                aria-hidden
+              />
+              <span className="text-[length:var(--text-micro)] uppercase tracking-[0.08em] text-[var(--text-muted)]">
+                网关
               </span>
+              <span className="ml-auto text-[length:var(--text-micro)] font-medium tabular-nums text-[var(--text-secondary)]">
+                {health.status === "online" ? "在线" : health.status === "offline" ? "离线" : "未知"}
+              </span>
+            </div>
+            <div className="truncate text-[length:var(--text-micro)] text-[var(--text-muted)]" title={settings.apiBase || DEFAULT_API_BASE}>
+              {settings.apiBase || DEFAULT_API_BASE}
             </div>
           </div>
 
-          <div className={`${glassPanelSoftClass} mt-4 p-4`}>
-            {!hasConsoleToken && user ? (
-              <span className="mb-1.5 inline-flex rounded-full border border-amber-300/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-medium text-amber-200">
-                本地演示身份
+          <div className="grid gap-2.5 border-t border-[var(--panel-border-soft)] pt-3.5">
+            <div className="flex items-start gap-2.5">
+              <span aria-hidden className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--tone-accent-surface)] text-[length:var(--text-micro)] font-semibold uppercase text-[var(--tone-accent-text)]">
+                {(user.name || "?").slice(0, 1)}
               </span>
-            ) : null}
-            <div className="text-sm font-medium text-white">{user.name}</div>
-            <div className="mt-1 truncate text-xs text-zinc-500">{user.email}</div>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-1.5">
+                  <span className="truncate text-[length:var(--text-caption)] font-medium text-[var(--text-primary)]">
+                    {user.name}
+                  </span>
+                  {!hasConsoleToken ? (
+                    <span className="chip chip-warning shrink-0">演示</span>
+                  ) : null}
+                </span>
+                <span className="block truncate text-[length:var(--text-micro)] text-[var(--text-muted)]">
+                  {user.email}
+                </span>
+              </span>
+            </div>
 
             {hasConsoleToken && orgContext.orgs.length > 0 ? (
-              <div className="mt-3">
-                <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+              <div>
+                <div className="mb-1.5 flex items-center gap-1.5 text-[length:var(--text-micro)] font-semibold uppercase tracking-[0.08em] text-[var(--text-muted)]">
                   <Building2 className="h-3 w-3" aria-hidden />
                   当前组织
                   {orgContext.activeOrgRole ? (
-                    <span className="ml-auto rounded bg-white/10 px-1.5 py-0.5 text-[10px] normal-case text-zinc-400">
+                    <span className="ml-auto normal-case tracking-normal text-[var(--text-secondary)]">
                       {orgContext.activeOrgRole}
                     </span>
                   ) : null}
@@ -7625,47 +8132,55 @@ export default function Home() {
                     }))}
                     onChange={(value) => void switchActiveOrg(Number(value))}
                     ariaLabel="切换当前组织"
-                    buttonClassName="min-h-9 text-sm"
+                    buttonClassName="min-h-8 text-[length:var(--text-caption)]"
                   />
                 ) : (
-                  <div className="rounded-xl border border-white/[0.1] bg-white/[0.055] px-3.5 py-2 text-sm text-zinc-200">
+                  <div className="truncate rounded-[var(--radius-sm)] border border-[var(--panel-border-soft)] bg-[var(--field-bg)] px-3 py-1.5 text-[length:var(--text-caption)] text-[var(--text-secondary)]">
                     {orgContext.orgs[0]?.name ?? "未加入组织"}
                   </div>
                 )}
                 {orgSwitchBusy ? (
-                  <p className="mt-1.5 text-[11px] text-zinc-500">正在切换组织…</p>
+                  <p className="mt-1.5 text-[length:var(--text-micro)] text-[var(--text-muted)]">正在切换组织…</p>
                 ) : null}
               </div>
             ) : null}
 
-            <button type="button" onClick={logout} className={`${buttonClass("ghost")} mt-3 w-full justify-start px-2`}>
-              <LogOut className="h-4 w-4" aria-hidden />
-              退出
+            <button
+              type="button"
+              onClick={logout}
+              className="btn-ghost flex min-h-8 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 text-[length:var(--text-caption)] font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tone-accent)]"
+            >
+              <LogOut className="h-3.5 w-3.5" aria-hidden />
+              退出登录
             </button>
           </div>
         </aside>
 
-        <section className={`min-w-0 px-5 py-6 sm:px-8 ${settings.compactMode ? "text-[14px]" : ""}`}>
-          <header className={`${glassPanelSoftClass} relative flex flex-col gap-4 overflow-hidden px-5 py-4 md:flex-row md:items-end md:justify-between`}>
-            <PanelGlow />
-            <div className="relative">
-              <p className="text-sm font-medium text-teal-200">{activeView.subtitle}</p>
-              <h1 className="mt-2 text-3xl font-semibold text-white">{activeView.title}</h1>
+        <section className={`min-w-0 px-5 py-6 sm:px-8 lg:px-10 ${settings.compactMode ? "text-[length:var(--text-body)]" : ""}`}>
+          {/* 页面标题区：不做成卡片，直接用排版建立层级（编辑风的"刊头"） */}
+          <header className="relative flex flex-col gap-4 border-b border-[var(--panel-border-soft)] pb-5 md:flex-row md:items-end md:justify-between">
+            <div className="min-w-0">
+              <p className="text-[length:var(--text-micro)] font-semibold uppercase tracking-[0.1em] text-[var(--tone-accent-text)]">
+                {activeView.subtitle}
+              </p>
+              <h1 className="mt-1.5 text-[length:var(--text-title)] font-bold leading-[1.08] tracking-[-0.028em] text-[var(--text-primary)]">
+                {activeView.title}
+              </h1>
             </div>
-            <div className="relative flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {hasAdminAccess ? (
-                <button type="button" onClick={() => void loadLogs()} className={buttonClass("secondary")}>
-                  <RefreshCcw className={`h-4 w-4 ${logsLoading ? "animate-spin" : ""}`} aria-hidden />
+                <button type="button" onClick={() => void loadLogs()} className="btn-secondary inline-flex min-h-9 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-[length:var(--text-caption)] font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tone-accent)]">
+                  <RefreshCcw className={`h-3.5 w-3.5 ${logsLoading ? "animate-spin" : ""}`} aria-hidden />
                   刷新日志
                 </button>
               ) : null}
-              <button type="button" onClick={() => navigateTo("chat")} className={buttonClass("primary")}>
-                <MessageSquare className="h-4 w-4" aria-hidden />
+              <button type="button" onClick={() => navigateTo("chat")} className="btn-primary inline-flex min-h-9 items-center gap-2 rounded-[var(--radius-sm)] px-3.5 text-[length:var(--text-caption)] font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tone-accent)]">
+                <MessageSquare className="h-3.5 w-3.5" aria-hidden />
                 开始对话
               </button>
               {hasAdminAccess ? (
-                <button type="button" onClick={() => navigateTo("gateway")} className={buttonClass("secondary")}>
-                  <Play className="h-4 w-4" aria-hidden />
+                <button type="button" onClick={() => navigateTo("gateway")} className="btn-secondary inline-flex min-h-9 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-[length:var(--text-caption)] font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tone-accent)]">
+                  <Play className="h-3.5 w-3.5" aria-hidden />
                   网关测试
                 </button>
               ) : null}
@@ -7673,7 +8188,7 @@ export default function Home() {
           </header>
 
           <AnimatePresence mode="wait">
-            <motion.div key={effectiveView} variants={viewVariants} initial="hidden" animate="show" exit="exit" className="mt-6">
+            <motion.div key={effectiveView} variants={viewVariants} initial="hidden" animate="show" exit="exit" className="mt-7">
               {renderContent()}
             </motion.div>
           </AnimatePresence>
@@ -7682,32 +8197,32 @@ export default function Home() {
 
       {dashboardOpen && hasAdminAccess ? (
         <SecurityDashboard
-          apiBase={settings.apiBase.replace(/\/$/, "")}
+          apiBase={(settings.apiBase || DEFAULT_API_BASE).replace(/\/$/, "")}
           buildAuthHeaders={() => buildHeaders(settings, "admin", false, authSession)}
           onExit={() => setDashboardOpen(false)}
         />
       ) : null}
 
       {selectedLog ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/65 p-4 backdrop-blur-md transition-all duration-300" role="dialog" aria-modal="true">
+        <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/65 p-4 backdrop-blur-md transition-[color,background-color,border-color,box-shadow,transform,opacity] duration-[var(--dur-base)]" role="dialog" aria-modal="true">
           <motion.section
             initial={{ opacity: 0, y: 12, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 8, scale: 0.98 }}
-            transition={{ type: "spring", stiffness: 320, damping: 28, mass: 0.6 }}
-            className="relative max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-3xl border border-[var(--panel-border-strong)] bg-[var(--panel-bg)] shadow-[0_32px_90px_rgba(0,0,0,0.5)] backdrop-blur-[32px]"
+            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+            className="relative max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-[var(--radius-xl)] border border-[var(--panel-border-strong)] bg-[var(--panel-bg)] shadow-[var(--tooltip-shadow)] backdrop-blur-[32px]"
           >
-            <div className="flex items-start justify-between gap-4 border-b border-white/[0.07] px-6 py-5">
+            <div className="flex items-start justify-between gap-4 border-b border-[var(--divider)] px-6 py-5">
               <div>
-                <h2 className="text-lg font-semibold text-white">日志详情</h2>
-                <p className="mt-1 text-sm text-zinc-400" title={buildTimeTooltip(selectedLog.timestamp)}>
+                <h2 className="text-[length:var(--text-title)] font-semibold text-[var(--text-primary)]">日志详情</h2>
+                <p className="mt-1 text-[length:var(--text-body)] text-[var(--text-secondary)]" title={buildTimeTooltip(selectedLog.timestamp)}>
                   {formatTime(selectedLog.timestamp)} CST
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setSelectedLog(null)}
-                className="flex h-9 w-9 items-center justify-center rounded-xl text-zinc-400 transition-colors hover:bg-white/[0.08] hover:text-white focus:outline-none focus:ring-2 focus:ring-teal-300/60"
+                className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-raised)] hover:text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--tone-accent)]"
                 aria-label="关闭日志详情"
               >
                 <X className="h-5 w-5" aria-hidden />
@@ -7724,16 +8239,16 @@ export default function Home() {
                   ["原因", logReasonText(selectedLog.details)],
                 ].map(([label, value]) => (
                   <div key={label} className={`${glassPanelSoftClass} p-3.5`}>
-                    <div className="text-xs text-zinc-500">{label}</div>
-                    <div className="mt-2 break-words font-mono text-sm text-[var(--text-primary)]">{value}</div>
+                    <div className="text-[length:var(--text-micro)] text-[var(--text-muted)]">{label}</div>
+                    <div className="mt-2 break-words font-mono text-[length:var(--text-body)] text-[var(--text-primary)]">{value}</div>
                   </div>
                 ))}
               </div>
               <div className={`${glassPanelSoftClass} mt-4 p-4.5`}>
-                <div className="text-xs text-zinc-500">原始输入</div>
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[var(--text-primary)]">{selectedLog.original_prompt}</p>
+                <div className="text-[length:var(--text-micro)] text-[var(--text-muted)]">原始输入</div>
+                <p className="mt-2 whitespace-pre-wrap text-[length:var(--text-body)] leading-6 text-[var(--text-primary)]">{selectedLog.original_prompt}</p>
               </div>
-              <pre className={`${glassPanelSoftClass} mt-4 max-h-80 overflow-auto p-4.5 font-mono text-xs leading-5 text-[var(--text-secondary)]`}>{JSON.stringify(selectedLog.details, null, 2)}</pre>
+              <pre className={`${glassPanelSoftClass} mt-4 max-h-80 overflow-auto p-4.5 font-mono text-[length:var(--text-micro)] leading-5 text-[var(--text-secondary)]`}>{JSON.stringify(selectedLog.details, null, 2)}</pre>
               <div className="mt-5 flex flex-wrap justify-end gap-2.5">
                 {(() => {
                   const requestId = detailText(selectedLog.details.request_id);

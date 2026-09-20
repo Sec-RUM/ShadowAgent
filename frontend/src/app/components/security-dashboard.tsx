@@ -307,34 +307,35 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
 
   const connectionBadge =
     connection === "live"
-      ? { label: "实时连接", dotClass: "bg-emerald-300", textClass: "text-emerald-200", borderClass: "border-emerald-300/30 bg-emerald-400/10" }
+      ? { label: "实时连接", dotClass: "bg-[var(--tone-success)]", textClass: "text-[var(--tone-success-text)]", borderClass: "border-[color-mix(in_oklab,var(--tone-success)_28%,transparent)] bg-[var(--tone-success-surface)]" }
       : connection === "reconnecting"
-        ? { label: "重连中", dotClass: "bg-amber-300 animate-pulse", textClass: "text-amber-200", borderClass: "border-amber-300/30 bg-amber-400/10" }
-        : { label: "连接中", dotClass: "bg-sky-300 animate-pulse", textClass: "text-sky-200", borderClass: "border-sky-300/30 bg-sky-400/10" };
+        ? { label: "重连中", dotClass: "bg-[var(--tone-warning)] animate-pulse", textClass: "text-[var(--tone-warning-text)]", borderClass: "border-[color-mix(in_oklab,var(--tone-warning)_28%,transparent)] bg-[var(--tone-warning-surface)]" }
+        : { label: "连接中", dotClass: "bg-[var(--tone-info)] animate-pulse", textClass: "text-[var(--tone-info-text)]", borderClass: "border-[color-mix(in_oklab,var(--tone-info)_28%,transparent)] bg-[var(--tone-info-surface)]" };
 
   return (
     <div
-      className="fixed inset-0 z-[70] overflow-hidden bg-[#030712] text-zinc-200"
+      className="soc-shell fixed inset-0 z-[var(--z-modal)] overflow-hidden bg-[var(--background)] text-[var(--text-primary)]"
       role="dialog"
       aria-modal="true"
       aria-label="安全大屏"
     >
-      {/* Grid backdrop */}
+      {/* Grid backdrop —— 底纹色走 token（原先硬编码 rgba(45,212,191,.05)，
+          浅色主题下会与纸白底撞成脏绿）。 */}
       <div
         className="pointer-events-none absolute inset-0 opacity-[0.35]"
         style={{
           backgroundImage:
-            "linear-gradient(rgba(45,212,191,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(45,212,191,0.05) 1px, transparent 1px)",
+            "linear-gradient(color-mix(in oklab, var(--tone-accent) 6%, transparent) 1px, transparent 1px)," +
+            " linear-gradient(90deg, color-mix(in oklab, var(--tone-accent) 6%, transparent) 1px, transparent 1px)",
           backgroundSize: "44px 44px",
         }}
         aria-hidden
       />
-      {/* Ambient glows */}
-      <div className="pointer-events-none absolute -left-40 -top-40 h-[480px] w-[480px] rounded-full bg-teal-500/[0.07] blur-3xl" aria-hidden />
-      <div className="pointer-events-none absolute -bottom-40 -right-40 h-[480px] w-[480px] rounded-full bg-rose-500/[0.06] blur-3xl" aria-hidden />
+      {/* 环境光斑已移除：spatial-design —— 阴影/发光若明显可见就太强。
+          原先两团 480px 的 blur-3xl 光斑是纯粹的 AI 味装饰。 */}
       {/* Scan line */}
       <motion.div
-        className="pointer-events-none absolute inset-x-0 h-px bg-gradient-to-r from-transparent via-teal-300/30 to-transparent"
+        className="pointer-events-none absolute inset-x-0 h-px bg-gradient-to-r from-transparent via-[color-mix(in_oklab,var(--tone-accent)_32%,transparent)] to-transparent"
         animate={{ top: ["0%", "100%", "0%"] }}
         transition={{ duration: 18, repeat: Infinity, ease: "linear" }}
         aria-hidden
@@ -342,32 +343,32 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
 
       <div className="relative flex h-full flex-col">
         {/* Header */}
-        <header className="flex items-center justify-between gap-4 border-b border-teal-300/10 px-6 py-4">
+        <header className="flex items-center justify-between gap-4 border-b border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] px-6 py-4">
           <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl border border-teal-300/30 bg-teal-400/10 shadow-[0_0_28px_rgba(45,212,191,0.25)]">
-              <ShieldCheck className="h-6 w-6 text-teal-200" aria-hidden />
+            <span className="flex h-11 w-11 items-center justify-center rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--tone-accent-surface)]">
+              <ShieldCheck className="h-6 w-6 text-[var(--tone-accent-text)]" aria-hidden />
             </span>
             <div>
-              <h1 className="text-lg font-semibold tracking-wide text-white sm:text-xl">
-                SHADOW AGENT <span className="text-teal-200">安全作战大屏</span>
+              <h1 className="text-[length:var(--text-subhead)] font-semibold tracking-wide text-[var(--text-primary)] sm:text-[length:var(--text-heading)]">
+                SHADOW AGENT <span className="text-[var(--tone-accent-text)]">安全作战大屏</span>
               </h1>
-              <p className="text-xs text-zinc-500">Runtime Security Operations Center</p>
+              <p className="text-[length:var(--text-micro)] text-[var(--text-muted)]">Runtime Security Operations Center</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${connectionBadge.borderClass} ${connectionBadge.textClass}`}>
+            <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[length:var(--text-micro)] font-medium ${connectionBadge.borderClass} ${connectionBadge.textClass}`}>
               <span className={`h-2 w-2 rounded-full ${connectionBadge.dotClass}`} aria-hidden />
               <Radio className="h-3.5 w-3.5" aria-hidden />
               {connectionBadge.label}
             </span>
-            <span className="hidden font-mono text-2xl font-semibold tabular-nums text-teal-100 sm:block">{clock}</span>
+            <span className="hidden font-mono text-2xl font-semibold tabular-nums text-[var(--tone-accent-text)] sm:block">{clock}</span>
             <button
               type="button"
               onClick={onExit}
-              className="flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 text-sm text-zinc-300 transition-all duration-200 ease-out hover:border-rose-300/40 hover:bg-rose-400/10 hover:text-rose-100 focus:outline-none focus:ring-2 focus:ring-teal-300/60 active:scale-[0.98]"
+              className="flex h-9 items-center gap-2 rounded-[var(--radius-md)] border border-[var(--panel-border)] bg-[var(--surface-raised)] px-3.5 text-[length:var(--text-body)] text-[var(--text-secondary)] transition-[color,background-color,border-color,box-shadow,transform,opacity] duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] hover:border-[color-mix(in_oklab,var(--tone-danger)_28%,transparent)] hover:bg-[var(--tone-danger-surface)] hover:text-[var(--tone-danger-text)] focus:outline-none focus:ring-2 focus:ring-[var(--tone-accent)] active:scale-[0.98]"
             >
               <X className="h-4 w-4" aria-hidden />
-              退出大屏 <kbd className="hidden rounded-lg bg-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 sm:inline">ESC</kbd>
+              退出大屏 <kbd className="hidden rounded-lg bg-[var(--surface-raised)] px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)] sm:inline">ESC</kbd>
             </button>
           </div>
         </header>
@@ -377,51 +378,51 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
           {/* Left column: KPIs + threat distribution */}
           <div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
             <section className="grid grid-cols-2 gap-3">
-              <div className="relative overflow-hidden rounded-2xl border border-teal-300/15 bg-white/[0.035] p-4.5 backdrop-blur-md">
-                <div className="text-xs text-zinc-500">实时拦截</div>
-                <motion.div key={`events-${events.length}`} initial={{ opacity: 0.4, y: 5 }} animate={{ opacity: 1, y: 0 }} className="mt-1 font-mono text-3xl font-bold tabular-nums text-rose-300">
+              <div className="soc-card relative overflow-hidden rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--surface-raised)] p-4.5 backdrop-blur-md">
+                <div className="text-[length:var(--text-micro)] text-[var(--text-muted)]">实时拦截</div>
+                <motion.div key={`events-${events.length}`} initial={{ opacity: 0.4, y: 5 }} animate={{ opacity: 1, y: 0 }} className="mt-1 font-mono text-3xl font-bold tabular-nums text-[var(--tone-danger-text)]">
                   {events.length}
                 </motion.div>
-                <ShieldAlert className="absolute right-3.5 top-3.5 h-4 w-4 text-rose-300/60" aria-hidden />
+                <ShieldAlert className="absolute right-3.5 top-3.5 h-4 w-4 text-[var(--tone-danger-text)]/60" aria-hidden />
               </div>
-              <div className="relative overflow-hidden rounded-2xl border border-teal-300/15 bg-white/[0.035] p-4.5 backdrop-blur-md">
-                <div className="text-xs text-zinc-500">网关请求</div>
-                <div className="mt-1 font-mono text-3xl font-bold tabular-nums text-teal-200">
+              <div className="soc-card relative overflow-hidden rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--surface-raised)] p-4.5 backdrop-blur-md">
+                <div className="text-[length:var(--text-micro)] text-[var(--text-muted)]">网关请求</div>
+                <div className="mt-1 font-mono text-3xl font-bold tabular-nums text-[var(--tone-accent-text)]">
                   {metrics ? metrics.totalRequests.toLocaleString("zh-CN") : "—"}
                 </div>
-                <Activity className="absolute right-3.5 top-3.5 h-4 w-4 text-teal-200/60" aria-hidden />
+                <Activity className="absolute right-3.5 top-3.5 h-4 w-4 text-[var(--tone-accent-text)]/60" aria-hidden />
               </div>
-              <div className="relative overflow-hidden rounded-2xl border border-teal-300/15 bg-white/[0.035] p-4.5 backdrop-blur-md">
-                <div className="text-xs text-zinc-500">累计阻断 403</div>
-                <div className="mt-1 font-mono text-3xl font-bold tabular-nums text-amber-200">
+              <div className="soc-card relative overflow-hidden rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--surface-raised)] p-4.5 backdrop-blur-md">
+                <div className="text-[length:var(--text-micro)] text-[var(--text-muted)]">累计阻断 403</div>
+                <div className="mt-1 font-mono text-3xl font-bold tabular-nums text-[var(--tone-warning-text)]">
                   {metrics ? metrics.blocked.toLocaleString("zh-CN") : "—"}
                 </div>
-                <Zap className="absolute right-3.5 top-3.5 h-4 w-4 text-amber-200/60" aria-hidden />
+                <Zap className="absolute right-3.5 top-3.5 h-4 w-4 text-[var(--tone-warning-text)]/60" aria-hidden />
               </div>
-              <div className="relative overflow-hidden rounded-2xl border border-teal-300/15 bg-white/[0.035] p-4.5 backdrop-blur-md">
-                <div className="text-xs text-zinc-500">平均延迟</div>
-                <div className="mt-1 font-mono text-3xl font-bold tabular-nums text-sky-200">
+              <div className="soc-card relative overflow-hidden rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--surface-raised)] p-4.5 backdrop-blur-md">
+                <div className="text-[length:var(--text-micro)] text-[var(--text-muted)]">平均延迟</div>
+                <div className="mt-1 font-mono text-3xl font-bold tabular-nums text-[var(--tone-info-text)]">
                   {avgLatencyMs !== null ? `${avgLatencyMs.toFixed(0)}ms` : "—"}
                 </div>
-                <Timer className="absolute right-3.5 top-3.5 h-4 w-4 text-sky-200/60" aria-hidden />
+                <Timer className="absolute right-3.5 top-3.5 h-4 w-4 text-[var(--tone-info-text)]/60" aria-hidden />
               </div>
             </section>
 
-            <section className="rounded-2xl border border-teal-300/15 bg-white/[0.03] p-4.5 backdrop-blur-md">
-              <h2 className="text-sm font-semibold text-zinc-100">威胁类型分布</h2>
+            <section className="soc-card rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--surface-sunken)] p-4.5 backdrop-blur-md">
+              <h2 className="text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">威胁类型分布</h2>
               <div className="mt-4 space-y-3">
                 {threatDistribution.length === 0 && (
-                  <p className="py-6 text-center text-xs text-zinc-600">暂无拦截记录</p>
+                  <p className="py-6 text-center text-[length:var(--text-micro)] text-[var(--text-muted)]">暂无拦截记录</p>
                 )}
                 {threatDistribution.map(([threat, count]) => (
                   <div key={threat} className="space-y-1.5">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="truncate text-zinc-300">{threat}</span>
-                      <span className="ml-2 font-mono tabular-nums text-zinc-400">{count}</span>
+                    <div className="flex items-center justify-between text-[length:var(--text-micro)]">
+                      <span className="truncate text-[var(--text-secondary)]">{threat}</span>
+                      <span className="ml-2 font-mono tabular-nums text-[var(--text-secondary)]">{count}</span>
                     </div>
-                    <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+                    <div className="h-1.5 overflow-hidden rounded-full bg-[var(--surface-raised)]">
                       <motion.div
-                        className="h-full rounded-full bg-gradient-to-r from-teal-400/80 to-rose-400/80"
+                        className="h-full rounded-full bg-gradient-to-r from-[var(--tone-accent-surface)] to-[var(--tone-danger)]"
                         initial={{ width: 0 }}
                         animate={{ width: `${Math.max(4, (count / maxThreatCount) * 100)}%` }}
                         transition={{ duration: 0.5 }}
@@ -432,17 +433,17 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
               </div>
             </section>
 
-            <section className="rounded-2xl border border-teal-300/15 bg-white/[0.03] p-4.5 backdrop-blur-md">
-              <h2 className="text-sm font-semibold text-zinc-100">风险等级</h2>
+            <section className="soc-card rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--surface-sunken)] p-4.5 backdrop-blur-md">
+              <h2 className="text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">风险等级</h2>
               <div className="mt-4 grid grid-cols-3 gap-2.5 text-center">
                 {[
-                  { label: "高危", value: riskDistribution.high, className: "border-rose-300/25 bg-rose-400/10 text-rose-200" },
-                  { label: "中危", value: riskDistribution.medium, className: "border-amber-300/25 bg-amber-400/10 text-amber-200" },
-                  { label: "低危", value: riskDistribution.low, className: "border-teal-300/25 bg-teal-400/10 text-teal-200" },
+                  { label: "高危", value: riskDistribution.high, className: "border-[color-mix(in_oklab,var(--tone-danger)_28%,transparent)] bg-[var(--tone-danger-surface)] text-[var(--tone-danger-text)]" },
+                  { label: "中危", value: riskDistribution.medium, className: "border-[color-mix(in_oklab,var(--tone-warning)_28%,transparent)] bg-[var(--tone-warning-surface)] text-[var(--tone-warning-text)]" },
+                  { label: "低危", value: riskDistribution.low, className: "border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--tone-accent-surface)] text-[var(--tone-accent-text)]" },
                 ].map((item) => (
-                  <div key={item.label} className={`rounded-xl border px-2 py-3 ${item.className}`}>
+                  <div key={item.label} className={`rounded-[var(--radius-md)] border px-2 py-3 ${item.className}`}>
                     <div className="font-mono text-2xl font-bold tabular-nums">{item.value}</div>
-                    <div className="mt-1 text-xs opacity-80">{item.label}</div>
+                    <div className="mt-1 text-[length:var(--text-micro)] opacity-80">{item.label}</div>
                   </div>
                 ))}
               </div>
@@ -450,11 +451,11 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
           </div>
 
           {/* Center column: live event stream */}
-          <section className="flex min-h-0 flex-col rounded-2xl border border-teal-300/15 bg-white/[0.02] backdrop-blur-md">
-            <div className="flex items-center justify-between border-b border-teal-300/10 px-4 py-3">
-              <h2 className="text-sm font-semibold text-zinc-100">实时拦截事件流</h2>
-              <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500">
-                <span className={`h-1.5 w-1.5 rounded-full ${connection === "live" ? "bg-emerald-300" : "bg-zinc-600"}`} aria-hidden />
+          <section className="soc-card flex min-h-0 flex-col rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--surface-sunken)] backdrop-blur-md">
+            <div className="flex items-center justify-between border-b border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] px-4 py-3">
+              <h2 className="text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">实时拦截事件流</h2>
+              <span className="inline-flex items-center gap-1.5 text-[length:var(--text-micro)] text-[var(--text-muted)]">
+                <span className={`h-1.5 w-1.5 rounded-full ${connection === "live" ? "bg-[var(--tone-success)]" : "bg-[var(--divider-strong)]"}`} aria-hidden />
                 {connection === "live" ? "SSE 推送中" : "等待推送"}
               </span>
             </div>
@@ -463,9 +464,9 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
                 {events.length === 0 && (
                   <div className="flex h-full items-center justify-center px-6 text-center">
                     <div>
-                      <ShieldCheck className="mx-auto h-10 w-10 text-teal-300/30" aria-hidden />
-                      <p className="mt-3 text-sm text-zinc-500">暂无拦截事件</p>
-                      <p className="mt-1 text-xs text-zinc-600">
+                      <ShieldCheck className="mx-auto h-10 w-10 text-[var(--tone-accent-text)]/30" aria-hidden />
+                      <p className="mt-3 text-[length:var(--text-body)] text-[var(--text-muted)]">暂无拦截事件</p>
+                      <p className="mt-1 text-[length:var(--text-micro)] text-[var(--text-muted)]">
                         在「网关测试」发送恶意请求，或等待上游触发策略，事件将实时推送到此处
                       </p>
                     </div>
@@ -475,10 +476,10 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
                   const level = riskLevel(event.riskScore);
                   const levelStyle =
                     level === "high"
-                      ? "border-rose-400/30 bg-rose-500/[0.08]"
+                      ? "border-[color-mix(in_oklab,var(--tone-danger)_28%,transparent)] bg-[color-mix(in_oklab,var(--tone-danger)_8%,transparent)]"
                       : level === "medium"
-                        ? "border-amber-400/25 bg-amber-500/[0.06]"
-                        : "border-teal-400/20 bg-teal-500/[0.05]";
+                        ? "border-[color-mix(in_oklab,var(--tone-warning)_28%,transparent)] bg-[color-mix(in_oklab,var(--tone-warning)_6%,transparent)]"
+                        : "border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[color-mix(in_oklab,var(--tone-accent)_5%,transparent)]";
                   return (
                     <motion.article
                       key={event.key}
@@ -486,31 +487,31 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
                       initial={{ opacity: 0, x: -18, scale: 0.98 }}
                       animate={{ opacity: 1, x: 0, scale: 1 }}
                       exit={{ opacity: 0, x: 18 }}
-                      transition={{ type: "spring", stiffness: 320, damping: 30 }}
-                      className={`rounded-xl border px-3.5 py-3 transition-all duration-200 ${levelStyle}`}
+                      transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                      className={`rounded-[var(--radius-lg)] border px-3.5 py-3 transition-[color,background-color,border-color,box-shadow,transform,opacity] duration-[var(--dur-fast)] ${levelStyle}`}
                     >
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-2">
                           <AlertTriangle
-                            className={`h-4 w-4 shrink-0 ${level === "high" ? "text-rose-300" : level === "medium" ? "text-amber-300" : "text-teal-300"}`}
+                            className={`h-4 w-4 shrink-0 ${level === "high" ? "text-[var(--tone-danger-text)]" : level === "medium" ? "text-[var(--tone-warning-text)]" : "text-[var(--tone-accent-text)]"}`}
                             aria-hidden
                           />
-                          <span className="truncate text-sm font-semibold text-white">{event.threatType}</span>
-                          <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-zinc-400">
+                          <span className="truncate text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">{event.threatType}</span>
+                          <span className="shrink-0 rounded-full border border-[var(--panel-border)] px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-[var(--text-secondary)]">
                             {level}
                           </span>
                         </div>
-                        <span className="shrink-0 font-mono text-xs tabular-nums text-zinc-500">
+                        <span className="shrink-0 font-mono text-[length:var(--text-micro)] tabular-nums text-[var(--text-muted)]">
                           {new Date(event.ts).toLocaleTimeString("zh-CN", { hour12: false })}
                         </span>
                       </div>
-                      <div className="mt-1.5 flex items-center gap-2 text-[11px] text-zinc-500">
+                      <div className="mt-1.5 flex items-center gap-2 text-[11px] text-[var(--text-muted)]">
                         <span className="truncate font-mono">req {event.requestId}</span>
-                        <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-0.5 font-mono">{(event.riskScore * 100).toFixed(0)}%</span>
+                        <span className="shrink-0 rounded-full bg-[var(--surface-raised)] px-2 py-0.5 font-mono">{(event.riskScore * 100).toFixed(0)}%</span>
                         {event.layer && <span className="shrink-0 truncate">{event.layer}</span>}
                       </div>
                       {event.reason && (
-                        <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-zinc-400">{event.reason}</p>
+                        <p className="mt-1.5 line-clamp-2 text-[length:var(--text-micro)] leading-5 text-[var(--text-secondary)]">{event.reason}</p>
                       )}
                     </motion.article>
                   );
@@ -521,44 +522,44 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
 
           {/* Right column: recent request ids + stream info */}
           <div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
-            <section className="rounded-2xl border border-teal-300/15 bg-white/[0.03] p-4.5 backdrop-blur-md">
-              <h2 className="text-sm font-semibold text-zinc-100">最近拦截对象</h2>
+            <section className="soc-card rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--surface-sunken)] p-4.5 backdrop-blur-md">
+              <h2 className="text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">最近拦截对象</h2>
               <div className="mt-3 space-y-1.5">
                 {events.slice(0, 10).map((event) => (
-                  <div key={`rid-${event.key}`} className="flex items-center justify-between gap-2 rounded-xl border border-white/[0.06] bg-white/[0.025] px-3 py-2 font-mono text-[11px] transition-colors hover:bg-white/[0.05]">
-                    <span className="truncate text-zinc-400">{event.requestId}</span>
+                  <div key={`rid-${event.key}`} className="flex items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[var(--panel-border)] bg-[var(--surface-sunken)] px-3 py-2 font-mono text-[11px] transition-colors hover:bg-[var(--surface-raised)]">
+                    <span className="truncate text-[var(--text-secondary)]">{event.requestId}</span>
                     <span
-                      className={`shrink-0 ${(riskLevel(event.riskScore)) === "high" ? "text-rose-300" : "text-zinc-500"}`}
+                      className={`shrink-0 ${(riskLevel(event.riskScore)) === "high" ? "text-[var(--tone-danger-text)]" : "text-[var(--text-muted)]"}`}
                     >
                       {(event.riskScore * 100).toFixed(0)}
                     </span>
                   </div>
                 ))}
-                {events.length === 0 && <p className="py-4 text-center text-xs text-zinc-600">暂无数据</p>}
+                {events.length === 0 && <p className="py-4 text-center text-[length:var(--text-micro)] text-[var(--text-muted)]">暂无数据</p>}
               </div>
             </section>
 
-            <section className="rounded-2xl border border-teal-300/15 bg-white/[0.03] p-4.5 text-xs leading-6 text-zinc-400 backdrop-blur-md">
-              <h2 className="text-sm font-semibold text-zinc-100">数据通道</h2>
+            <section className="soc-card rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--surface-sunken)] p-4.5 text-[length:var(--text-micro)] leading-6 text-[var(--text-secondary)] backdrop-blur-md">
+              <h2 className="text-[length:var(--text-body)] font-semibold text-[var(--text-primary)]">数据通道</h2>
               <dl className="mt-3 space-y-2.5">
                 <div className="flex items-center justify-between gap-3">
-                  <dt className="text-zinc-500">实时事件</dt>
-                  <dd className="truncate font-mono text-[11px] text-teal-200">GET /api/v1/events/stream</dd>
+                  <dt className="text-[var(--text-muted)]">实时事件</dt>
+                  <dd className="truncate font-mono text-[11px] text-[var(--tone-accent-text)]">GET /api/v1/events/stream</dd>
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <dt className="text-zinc-500">历史日志</dt>
-                  <dd className="truncate font-mono text-[11px] text-teal-200">GET /api/v1/logs</dd>
+                  <dt className="text-[var(--text-muted)]">历史日志</dt>
+                  <dd className="truncate font-mono text-[11px] text-[var(--tone-accent-text)]">GET /api/v1/logs</dd>
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <dt className="text-zinc-500">聚合指标</dt>
-                  <dd className="truncate font-mono text-[11px] text-teal-200">GET /metrics · 10s</dd>
+                  <dt className="text-[var(--text-muted)]">聚合指标</dt>
+                  <dd className="truncate font-mono text-[11px] text-[var(--tone-accent-text)]">GET /metrics · 10s</dd>
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <dt className="text-zinc-500">网关地址</dt>
-                  <dd className="ml-2 truncate font-mono text-[11px] text-zinc-300">{apiBase}</dd>
+                  <dt className="text-[var(--text-muted)]">网关地址</dt>
+                  <dd className="ml-2 truncate font-mono text-[11px] text-[var(--text-secondary)]">{apiBase}</dd>
                 </div>
               </dl>
-              <p className="mt-4 border-t border-white/[0.06] pt-3 text-[11px] leading-5 text-zinc-500">
+              <p className="mt-4 border-t border-[var(--panel-border)] pt-3 text-[11px] leading-5 text-[var(--text-muted)]">
                 事件来自策略引擎的实时判定，断线自动重连（最长 30s 退避）；持久记录以数据库审计日志为准。
               </p>
             </section>
@@ -566,10 +567,10 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
         </div>
 
         {/* Footer ticker */}
-        <footer className="overflow-hidden border-t border-teal-300/10 bg-black/40 py-2">
+        <footer className="overflow-hidden border-t border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--surface-sunken)] py-2">
           <div className="flex whitespace-nowrap">
             <motion.div
-              className="flex shrink-0 items-center gap-10 pr-10 font-mono text-xs text-zinc-500"
+              className="flex shrink-0 items-center gap-10 pr-10 font-mono text-[length:var(--text-micro)] text-[var(--text-muted)]"
               animate={{ x: ["0%", "-100%"] }}
               transition={{ duration: 40, repeat: Infinity, ease: "linear" }}
             >
@@ -578,13 +579,13 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
                 : ["Shadow Agent 安全运行中 · 实时监控所有经过网关的 LLM 请求", "等待策略引擎事件推送…"]
               ).map((text, index) => (
                 <span key={index} className="flex items-center gap-2">
-                  <span className="h-1 w-1 rounded-full bg-teal-300/60" aria-hidden />
+                  <span className="h-1 w-1 rounded-full bg-[var(--tone-accent-surface)]" aria-hidden />
                   {text}
                 </span>
               ))}
             </motion.div>
             <motion.div
-              className="flex shrink-0 items-center gap-10 pr-10 font-mono text-xs text-zinc-500"
+              className="flex shrink-0 items-center gap-10 pr-10 font-mono text-[length:var(--text-micro)] text-[var(--text-muted)]"
               animate={{ x: ["0%", "-100%"] }}
               transition={{ duration: 40, repeat: Infinity, ease: "linear" }}
               aria-hidden
@@ -594,7 +595,7 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
                 : ["Shadow Agent 安全运行中 · 实时监控所有经过网关的 LLM 请求", "等待策略引擎事件推送…"]
               ).map((text, index) => (
                 <span key={`dup-${index}`} className="flex items-center gap-2">
-                  <span className="h-1 w-1 rounded-full bg-teal-300/60" />
+                  <span className="h-1 w-1 rounded-full bg-[var(--tone-accent-surface)]" />
                   {text}
                 </span>
               ))}

@@ -78,37 +78,37 @@ export default function SsoCallbackPage() {
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background text-foreground">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,var(--page-glow-a),transparent_32rem),radial-gradient(circle_at_86%_16%,var(--page-glow-b),transparent_32rem)]" />
-      <section className="relative w-full max-w-md rounded-2xl border border-[var(--panel-border)] bg-[var(--panel-bg)] p-6 shadow-[var(--panel-shadow)] backdrop-blur-[28px]">
+      <section className="relative w-full max-w-md rounded-[var(--radius-lg)] border border-[var(--panel-border)] bg-[var(--panel-bg)] p-6 shadow-[var(--panel-shadow)] backdrop-blur-[28px]">
         <div className="flex items-center gap-3">
-          <span className="flex h-11 w-11 items-center justify-center rounded-xl border border-teal-300/30 bg-teal-400/10 shadow-[0_0_24px_rgba(45,212,191,0.15)]">
-            <Shield className="h-5 w-5 text-teal-200" aria-hidden />
+          <span className="flex h-11 w-11 items-center justify-center rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--tone-accent-surface)]">
+            <Shield className="h-5 w-5 text-[var(--tone-accent-text)]" aria-hidden />
           </span>
           <div>
-            <h1 className="text-lg font-semibold text-white">SSO 登录</h1>
-            <p className="text-xs text-zinc-400">Shadow Agent 单点登录回调</p>
+            <h1 className="text-[length:var(--text-subhead)] font-semibold text-[var(--text-primary)]">SSO 登录</h1>
+            <p className="text-[length:var(--text-micro)] text-[var(--text-secondary)]">Shadow Agent 单点登录回调</p>
           </div>
         </div>
 
         {redirecting ? (
-          <div className="mt-6 flex items-center gap-3 text-sm text-zinc-300">
-            <LogIn className="h-4 w-4 animate-pulse text-teal-200" aria-hidden />
+          <div className="mt-6 flex items-center gap-3 text-[length:var(--text-body)] text-[var(--text-secondary)]">
+            <LogIn className="h-4 w-4 animate-pulse text-[var(--tone-accent-text)]" aria-hidden />
             正在进入控制台……
           </div>
         ) : (
           <div className="mt-6 space-y-4">
-            <div className="flex items-start gap-3 rounded-xl border border-amber-300/25 bg-amber-400/10 p-3.5 text-sm leading-6 text-amber-100">
+            <div className="flex items-start gap-3 rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-warning)_28%,transparent)] bg-[var(--tone-warning-surface)] p-3.5 text-[length:var(--text-body)] leading-6 text-[var(--tone-warning-text)]">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
               <span>
                 {ERROR_MESSAGES[error?.code ?? ""] || "单点登录失败，请重新发起登录。"}
                 {error?.description ? (
-                  <span className="mt-1 block text-xs text-amber-200/70">{error.description}</span>
+                  <span className="mt-1 block text-[length:var(--text-micro)] opacity-80">{error.description}</span>
                 ) : null}
               </span>
             </div>
             <button
               type="button"
               onClick={() => window.location.replace("/")}
-              className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-teal-200/40 bg-teal-300 px-4 text-sm font-medium text-zinc-950 shadow-[0_0_20px_rgba(45,212,191,0.2)] transition-all duration-200 ease-out hover:border-teal-100/70 hover:bg-teal-200 hover:shadow-[0_0_28px_rgba(45,212,191,0.3)] active:scale-[0.985]"
+              className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-lg)] border border-[var(--accent-solid)] bg-[var(--accent-solid)] px-4 text-[length:var(--text-body)] font-medium text-[var(--accent-on-solid)] transition-[color,background-color,border-color,transform] duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] hover:border-[var(--accent-solid-hover)] hover:bg-[var(--accent-solid-hover)] active:scale-[0.985]"
             >
               <ArrowLeft className="h-4 w-4" aria-hidden />
               返回登录页
