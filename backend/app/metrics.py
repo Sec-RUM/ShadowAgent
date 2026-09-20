@@ -16,7 +16,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.logging_setup import log_stats
 from security_controls import Principal, require_admin
+
 
 LATENCY_BUCKETS = (
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
@@ -249,6 +251,82 @@ def _render_pool_metrics(lines: list[str]) -> None:
     )
 
 
+def _render_log_metrics(lines: list[str]) -> None:
+    """Expose the log path's own health.
+
+    The log sink runs on a background thread by default (app/logging_setup.py),
+    which buys latency independence but makes the queue a hidden buffer: if the
+    sink is permanently slower than the log rate, the queue fills and records
+    start being dropped. ``dropped`` being non-zero is the alarm; ``depth``
+    trending up is the early warning.
+    """
+    stats = log_stats()
+
+    lines.append("# HELP shadow_agent_log_async_enabled 1 when log records are handed to a background sink thread, 0 when the sink runs inline on the caller.")
+    lines.append("# TYPE shadow_agent_log_async_enabled gauge")
+    lines.append("shadow_agent_log_async_enabled %d" % (1 if stats.get("async_enabled") else 0))
+
+    lines.append("# HELP shadow_agent_log_queue_depth Log records waiting for the sink thread. Sustained growth means the sink cannot keep up.")
+    lines.append("# TYPE shadow_agent_log_queue_depth gauge")
+    depth = stats.get("queue_depth")
+    if depth is not None:
+        lines.append("shadow_agent_log_queue_depth %d" % depth)
+
+    lines.append("# HELP shadow_agent_log_queued_total Log records handed to the sink thread.")
+    lines.append("# TYPE shadow_agent_log_queued_total counter")
+    lines.append("shadow_agent_log_queued_total %d" % (stats.get("queued") or 0))
+
+    lines.append("# HELP shadow_agent_log_dropped_total Log records discarded because the queue was full. Any non-zero value means the log path is losing records.")
+    lines.append("# TYPE shadow_agent_log_dropped_total counter")
+    lines.append("shadow_agent_log_dropped_total %d" % (stats.get("dropped") or 0))
+
+
+def _remote_fallback_snapshot() -> dict[str, Any] | None:
+    """Remote arbitration state, or None when that module is unavailable."""
+    try:
+        from app.remote_fallback import remote_fallback_status
+    except ImportError:  # pragma: no cover - only when the module is absent
+        return None
+    return remote_fallback_status()
+
+
+def _render_remote_fallback_metrics(lines: list[str]) -> None:
+    """Expose whether the optional remote channel is on, and how it behaves.
+
+    ``enabled=0`` is the default and the shipping configuration. When it is 1,
+    ``outcome="error"`` climbing means the gateway is paying the latency of the
+    lookup without getting a verdict, and the caller is falling back to the local
+    decision — worth alerting on even though it is not an outage.
+    """
+    stats = _remote_fallback_snapshot()
+    if not stats:
+        return
+
+    lines.append("# HELP shadow_agent_remote_fallback_enabled 1 when ambiguous traffic may be arbitrated by a remote LLM, 0 when the gateway calls nothing (default).")
+    lines.append("# TYPE shadow_agent_remote_fallback_enabled gauge")
+    lines.append("shadow_agent_remote_fallback_enabled %d" % (1 if stats.get("enabled") else 0))
+
+    lines.append("# HELP shadow_agent_remote_fallback_total Remote arbitration outcomes.")
+    lines.append("# TYPE shadow_agent_remote_fallback_total counter")
+    counters = stats.get("counters") or {}
+    for outcome in ("allowed", "blocked", "error", "timeout", "skipped"):
+        lines.append(
+            'shadow_agent_remote_fallback_total{outcome="%s"} %d'
+            % (outcome, counters.get(outcome, 0))
+        )
+
+    lines.append("# HELP shadow_agent_remote_fallback_duration_seconds Latency of remote arbitration calls.")
+    lines.append("# TYPE shadow_agent_remote_fallback_duration_seconds summary")
+    lines.append(
+        "shadow_agent_remote_fallback_duration_seconds_sum %.6f"
+        % ((stats.get("latency_sum_ms") or 0.0) / 1000.0)
+    )
+    lines.append(
+        "shadow_agent_remote_fallback_duration_seconds_count %d"
+        % (stats.get("latency_count") or 0)
+    )
+
+
 def render_metrics() -> str:
     """Render counters/histograms in Prometheus text exposition format."""
     lines: list[str] = []
@@ -362,6 +440,8 @@ def render_metrics() -> str:
         )
 
     _render_pool_metrics(lines)
+    _render_log_metrics(lines)
+    _render_remote_fallback_metrics(lines)
 
     lines.append("")
     return "\n".join(lines)
@@ -407,4 +487,6 @@ def metrics_snapshot() -> dict[str, Any]:
             },
             "dlp_matches": dict(_dlp_matches),
             "db_pool": _pool_snapshot(),
+            "logging": log_stats(),
+            "remote_fallback": _remote_fallback_snapshot(),
         }

@@ -28,6 +28,7 @@ load_local_env()
 
 from app.audit import audit_log_executor
 from app.config import _allowed_origins, _upstream_proxy_enabled
+from app.logging_setup import configure_logging
 from app.metrics import MetricsMiddleware, router as metrics_router
 from app.retention import cleanup_interval_seconds, run_retention_cleanup
 from app.routers import (
@@ -51,10 +52,10 @@ from security_engine import (
     ensure_default_tool_policies,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
+# Keep the log sink off the event loop: a synchronous sink turns log volume into
+# request latency (see app/logging_setup.py for the measurements). Opt out with
+# SHADOW_AGENT_LOG_ASYNC=0.
+configure_logging()
 logger = logging.getLogger("shadow_agent.gateway")
 
 

@@ -1494,6 +1494,27 @@ KNOWN_FALSE_POSITIVES: list[str] = [
     # The register stays in place so the next known-but-unfixed false positive
     # has somewhere to be *measured* instead of going unnoticed the way this one
     # did for so long.
+    #
+    # --- v4, 2026-09-20: a measured surface that cannot be registered here ----
+    #
+    # `tools/ablate_weak_tier_residue.py` scores layer one against 758 benign
+    # controls. It blocks 16 of them — 8 quoted strong signatures in defensive
+    # prose (long accepted: layer one is a literal matcher and documentation
+    # quotes its own rules) and 8 of a distinct defect. Restricted to this
+    # corpus, the same split is 15 of 613 benign samples: 7 documented, 8
+    # defective. The defect is a weak nominal and a *listed* verb merely sharing
+    # the text without standing in a request relation: the verb `list` matched
+    # inside the noun phrase "tool list", `show` acted on "length" rather than
+    # on the prompt, `reveal` appeared inside a sentence denying it.
+    #
+    # Those eight are *corpus* benign samples, and this register requires
+    # disjointness from the corpus (`test_known_false_positive_register_is_
+    # disjoint_and_accurate`), so they cannot live here. They are pinned instead
+    # by `tests/test_weak_tier_residue.py::test_layer_one_blocks_are_measured_
+    # over_the_corpus`, which records the count per class. Root cause is the
+    # corroboration rule shape — a whole-text co-occurrence test — not the word
+    # list; extending the table is measured net-negative. The real fix is
+    # relational and needs its own proof that no detection is lost.
 ]
 
 

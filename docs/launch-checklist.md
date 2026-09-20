@@ -48,10 +48,28 @@
 
 - [ ] Prometheus 已抓取 `/metrics`（管理员凭证），告警规则覆盖 5xx 比率、延迟 P99、限流触发量
 - [ ] 日志外送集中系统（审计防篡改）
-- [ ] **网关进程的 stdout/stderr 必须被持续消费**（阻断项）：网关在事件循环线程上同步打日志，
-  管道缓冲区写满（Windows 实测约 4KB）会让**整个进程静默停摆** —— 所有请求挂起、零字节返回、
-  且不报任何错（卡住的就是日志本身）。禁止用「无人读取的管道」启动：`subprocess.PIPE` 无读线程、
-  supervisor/journald 停止读取、重定向到已写满的磁盘、NSSM 等包装器丢弃输出等。
+- [ ] **网关进程的 stdout/stderr 必须被持续消费（阻断项）**：日志 sink 写不进去时，
+  管道缓冲区写满（Windows 实测约 4KB）会让写入方**永久阻塞**。日志已默认交给后台
+  `QueueListener` 线程（`app/logging_setup.py`），所以**被卡住的是那条线程、不再是事件循环**
+  —— 请求不会挂起，但队列会填满并开始丢日志。禁止用「无人读取的管道」启动：`subprocess.PIPE`
+  无读线程、supervisor/journald 停止读取、重定向到已写满的磁盘、NSSM 等包装器丢弃输出等。
+  ⚠️ 这只把故障从「静默停摆」降级成「静默丢日志」，判断依据从「服务没响应」变成
+  **`shadow_agent_log_dropped_total` 非零**（见下一条）。
+- [ ] **日志丢弃已纳入监控（阻断项）**：`shadow_agent_log_dropped_total` **任何非零值即告警**
+  —— 它表示后台 sink 跟不上日志速率（或 sink 被阻塞），记录正在被丢弃。
+  `shadow_agent_log_queue_depth` 持续上升是更早的预警信号。解耦只在
+  `shadow_agent_log_async_enabled == 1` 时生效；若该值为 `0`（部署方显式设了
+  `SHADOW_AGENT_LOG_ASYNC=0`），则回到同步写，上一条的「静默停摆」风险重新成立。
+- [ ] **数据外发边界已决策并留档（阻断项）**：`/metrics` 的
+  `shadow_agent_remote_fallback_enabled` 必须为 `0`（默认、出厂配置）。
+  若确要开启远程兜底（`SHADOW_AGENT_REMOTE_FALLBACK_MODE`），必须先把四件事写进部署文档：
+  (1) **哪些数据会出网**（仅语义层灰带样本，且默认经 `redact_text` 脱敏 + 截断 1500 字符）；
+  (2) **发给谁**（`..._ALLOWED_HOSTS` 白名单，空 = 通道关闭；非 loopback 强制 https）；
+  (3) **谁批准了这次外发**（本项目「零网络调用」是卖点，开启即改变产品语义）；
+  (4) **超时预算**（`..._TIMEOUT_MS`，默认 1500ms，跑在请求路径上）。
+  另需监控 `shadow_agent_remote_fallback_total{outcome="error"}`：非零增长说明在付延迟却没拿到判定。
+  ⚠️ 该通道**一律绕过 `HTTP_PROXY`**（`ProxyHandler({})`）——把安全判定流量交给无人配置过的代理
+  正是本产品要防的静默外发。
 - [ ] 日志保留期已按 [gdpr.md](compliance/gdpr.md) 第 5 节决策并设置 `SHADOW_AGENT_*_RETENTION_DAYS` 环境变量（内置自动清理，默认拦截/告警/重放 180 天、审计 365 天）
 - [ ] `/metrics` 中 `shadow_agent_retention_purged_rows_total` 已纳入监控（首次大额清理属预期行为）
 - [ ] **数据库连接池饱和已纳入监控（阻断项）**：`shadow_agent_db_pool_timeout_total`

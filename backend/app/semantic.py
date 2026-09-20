@@ -256,15 +256,20 @@ def _is_plain_word(token: str) -> bool:
     return _PLAIN_WORD_RE.fullmatch(token) is not None
 
 
-def extract_features(text: str) -> dict[int, float]:
-    """Hashed n-gram features, L2-normalized binary presence vector.
+def feature_names(text: str) -> set[str]:
+    """Unhashed feature names generated for ``text``.
+
+    Split out of ``extract_features`` so diagnostics can attribute a hashed
+    bucket back to the n-gram that produced it: the bucket function is a
+    blake2b modulus, so a bucket cannot be inverted or guessed. This is the
+    single source of truth for feature generation — ``extract_features`` calls
+    it, and so does the trainer.
 
     Latin-script words contribute unigrams/bigrams; non-word tokens (see
     ``_is_plain_word``) additionally contribute within-word character n-grams
     for obfuscation robustness. CJK runs contribute character 1/2/3-grams
     spanning the whole run. Both feed the same hashed bucket space, so a
-    mixed-language text gets both views. Shared verbatim by the trainer and the
-    runtime scorer.
+    mixed-language text gets both views. 
 
     Text is NFKC-normalized first (see ``UNICODE_NORMALIZATION``) so that
     compatibility-character obfuscation cannot hide a payload from the
@@ -277,22 +282,22 @@ def extract_features(text: str) -> dict[int, float]:
         " ", unicodedata.normalize(UNICODE_NORMALIZATION, text).lower()
     )[:MAX_SCAN_CHARS]
     if not normalized:
-        return {}
+        return set()
 
-    feature_names: set[str] = set()
+    names: set[str] = set()
     words: list[str] = []
     for segment in _SEGMENT_RE.findall(normalized):
         if _CJK_RUN_RE.fullmatch(segment):
-            _add_cjk_features(feature_names, segment)
+            _add_cjk_features(names, segment)
             continue
         capped = segment[:MAX_TOKEN_CHARS]
         words.append(capped)
-        feature_names.add(f"w:{capped}")
+        names.add(f"w:{capped}")
         if _is_plain_word(capped):
             continue
         for size in CHAR_NGRAM_SIZES:
             for start in range(len(capped) - size + 1):
-                feature_names.add(f"c{size}:{capped[start:start + size]}")
+                names.add(f"c{size}:{capped[start:start + size]}")
 
     # Word bigrams cross word boundaries only (CJK runs are excluded: adjacent
     # CJK characters are already covered by the z2/z3 features above).
@@ -300,13 +305,24 @@ def extract_features(text: str) -> dict[int, float]:
         if size < 2:
             continue
         for start in range(len(words) - size + 1):
-            feature_names.add("b:" + "|".join(words[start:start + size]))
+            names.add("b:" + "|".join(words[start:start + size]))
 
-    if not feature_names:
+    return names
+
+
+def extract_features(text: str) -> dict[int, float]:
+    """Hashed, L2-normalized presence vector over ``feature_names(text)``.
+
+    Shared verbatim by the trainer and the runtime scorer, so a change here
+    changes the meaning of every stored weight and requires a retrain.
+    """
+
+    names = feature_names(text)
+    if not names:
         return {}
 
-    scale = 1.0 / math.sqrt(len(feature_names))
-    return {_stable_feature_hash(name): scale for name in feature_names}
+    scale = 1.0 / math.sqrt(len(names))
+    return {_stable_feature_hash(name): scale for name in names}
 
 
 def _sigmoid(value: float) -> float:
