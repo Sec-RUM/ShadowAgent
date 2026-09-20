@@ -38,6 +38,109 @@ def record_retention_purged(table: str, count: int) -> None:
     with _lock:
         _retention_purged[table] += count
 
+
+# --- security decision metrics ----------------------------------------------
+#
+# The question these answer is the one an operator asks first: "how many
+# injections did we stop today, and how close is normal traffic to the
+# threshold?" Before this, ``/metrics`` only exposed HTTP-level counters, so
+# the security posture was invisible to Prometheus/Grafana.
+#
+# Cardinality is bounded on purpose. ``layer`` and ``threat_type`` are values
+# the code itself produces, but they arrive here as free strings, so each label
+# family is capped: once ``_MAX_LABEL_VALUES`` distinct values have been seen,
+# anything new collapses into ``other``. A novel or hostile value therefore
+# cannot grow the label set without bound.
+
+SEMANTIC_SCORE_BUCKETS = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
+OTHER_LABEL = "other"
+_MAX_LABEL_VALUES = 64
+_TOOL_SCOPE_PREFIX = "tool_calls["
+
+_security_actions = frozenset({"Blocked", "Monitored", "Redacted", "Allowed"})
+
+_security_decisions: dict[tuple[str, str, str], int] = defaultdict(int)
+_dlp_actions: dict[tuple[str, str], int] = defaultdict(int)
+_dlp_matches: dict[str, int] = defaultdict(int)
+_semantic_buckets: dict[tuple[str, float], int] = defaultdict(int)
+_semantic_sums: dict[str, float] = defaultdict(float)
+_semantic_counts: dict[str, int] = defaultdict(int)
+
+_seen_layers: set[str] = set()
+_seen_threat_types: set[str] = set()
+_seen_dlp_scopes: set[str] = set()
+
+
+def _bounded_label(seen: set[str], value: str) -> str:
+    """Fold unseen label values into ``other`` once the family is saturated."""
+    if value in seen:
+        return value
+    if len(seen) >= _MAX_LABEL_VALUES:
+        return OTHER_LABEL
+    seen.add(value)
+    return value
+
+
+def _normalize_dlp_scope(raw: object) -> str:
+    """Map a scan scope onto a bounded label.
+
+    Streaming scans label their scope ``tool_calls[3].function.arguments``. The
+    index is per-request and unbounded, so it must be collapsed before it can
+    become a Prometheus label.
+    """
+    text = raw if isinstance(raw, str) and raw else "unknown"
+    if text.startswith(_TOOL_SCOPE_PREFIX):
+        text = "tool_arguments"
+    return _bounded_label(_seen_dlp_scopes, text)
+
+
+def record_security_decision(*, layer: str, threat_type: str, action: str) -> None:
+    """Count one security decision (block / monitor / redact) by threat type."""
+    with _lock:
+        _security_decisions[
+            (
+                _bounded_label(_seen_layers, layer),
+                _bounded_label(_seen_threat_types, threat_type),
+                action if action in _security_actions else OTHER_LABEL,
+            )
+        ] += 1
+
+
+def record_semantic_score(*, layer: str, score: float) -> None:
+    """Observe one semantic-layer score, for allowed and blocked traffic alike.
+
+    Recording allowed traffic is the point: the operator needs to see how much
+    benign volume is piling up just below the threshold.
+    """
+    value = float(score)
+    with _lock:
+        label = _bounded_label(_seen_layers, layer)
+        _semantic_counts[label] += 1
+        _semantic_sums[label] += value
+        for bucket in SEMANTIC_SCORE_BUCKETS:
+            if value <= bucket:
+                _semantic_buckets[(label, bucket)] += 1
+                break
+        _semantic_buckets[(label, float("inf"))] += 1
+
+
+def record_dlp_scan(*, scopes: object, action: str, matches: int) -> None:
+    """Count one response-side DLP action across every scope it touched."""
+    if isinstance(scopes, str):
+        scope_list: list[str] = [scopes]
+    elif isinstance(scopes, (list, tuple, set)):
+        scope_list = [item for item in scopes if isinstance(item, str)]
+    else:
+        scope_list = []
+    if not scope_list:
+        scope_list = ["unknown"]
+
+    normalized = sorted({_normalize_dlp_scope(scope) for scope in scope_list})
+    with _lock:
+        for scope in normalized:
+            _dlp_actions[(scope, action if action in _security_actions else OTHER_LABEL)] += 1
+            _dlp_matches[scope] += max(0, int(matches))
+
 router = APIRouter(tags=["metrics"])
 
 
@@ -94,6 +197,12 @@ def render_metrics() -> str:
         sum_snapshot = dict(_latency_sums)
         count_snapshot = dict(_latency_counts)
         retention_snapshot = dict(_retention_purged)
+        decision_snapshot = dict(_security_decisions)
+        dlp_action_snapshot = dict(_dlp_actions)
+        dlp_match_snapshot = dict(_dlp_matches)
+        semantic_bucket_snapshot = dict(_semantic_buckets)
+        semantic_sum_snapshot = dict(_semantic_sums)
+        semantic_count_snapshot = dict(_semantic_counts)
 
     lines.append("# HELP shadow_agent_http_requests_total Total HTTP requests handled.")
     lines.append("# TYPE shadow_agent_http_requests_total counter")
@@ -123,6 +232,63 @@ def render_metrics() -> str:
         lines.append(
             'shadow_agent_http_request_duration_seconds_count{route="%s"} %d'
             % (_escape_label(route), count_snapshot.get(route, 0))
+        )
+
+    lines.append("# HELP shadow_agent_security_decisions_total Security decisions by layer, threat type and action.")
+    lines.append("# TYPE shadow_agent_security_decisions_total counter")
+    for (layer, threat_type, action), count in sorted(decision_snapshot.items()):
+        lines.append(
+            'shadow_agent_security_decisions_total{layer="%s",threat_type="%s",action="%s"} %d'
+            % (
+                _escape_label(layer),
+                _escape_label(threat_type),
+                _escape_label(action),
+                count,
+            )
+        )
+
+    lines.append("# HELP shadow_agent_semantic_score Raw calibrated injection probability from the semantic layer, over every scanned text slice (allowed traffic included).")
+    lines.append("# TYPE shadow_agent_semantic_score histogram")
+    semantic_labels = sorted(
+        set(semantic_count_snapshot) | {label for label, _ in semantic_bucket_snapshot}
+    )
+    for label in semantic_labels:
+        for bucket in SEMANTIC_SCORE_BUCKETS:
+            lines.append(
+                'shadow_agent_semantic_score_bucket{layer="%s",le="%s"} %d'
+                % (
+                    _escape_label(label),
+                    _format_le(bucket),
+                    semantic_bucket_snapshot.get((label, bucket), 0),
+                )
+            )
+        lines.append(
+            'shadow_agent_semantic_score_bucket{layer="%s",le="+Inf"} %d'
+            % (_escape_label(label), semantic_bucket_snapshot.get((label, float("inf")), 0))
+        )
+        lines.append(
+            'shadow_agent_semantic_score_sum{layer="%s"} %.6f'
+            % (_escape_label(label), semantic_sum_snapshot.get(label, 0.0))
+        )
+        lines.append(
+            'shadow_agent_semantic_score_count{layer="%s"} %d'
+            % (_escape_label(label), semantic_count_snapshot.get(label, 0))
+        )
+
+    lines.append("# HELP shadow_agent_dlp_actions_total Response-side DLP actions by scope.")
+    lines.append("# TYPE shadow_agent_dlp_actions_total counter")
+    for (scope, action), count in sorted(dlp_action_snapshot.items()):
+        lines.append(
+            'shadow_agent_dlp_actions_total{scope="%s",action="%s"} %d'
+            % (_escape_label(scope), _escape_label(action), count)
+        )
+
+    lines.append("# HELP shadow_agent_dlp_matches_total Sensitive-data pattern matches found by the response DLP by scope.")
+    lines.append("# TYPE shadow_agent_dlp_matches_total counter")
+    for scope, count in sorted(dlp_match_snapshot.items()):
+        lines.append(
+            'shadow_agent_dlp_matches_total{scope="%s"} %d'
+            % (_escape_label(scope), count)
         )
 
     lines.append("# HELP shadow_agent_retention_purged_rows_total Rows purged by the retention job.")
@@ -163,4 +329,17 @@ def metrics_snapshot() -> dict[str, Any]:
             },
             "latency_counts": dict(_latency_counts),
             "latency_sums": {k: round(v, 6) for k, v in _latency_sums.items()},
+            "security_decisions": {
+                f"{layer}|{threat_type}|{action}": count
+                for (layer, threat_type, action), count in _security_decisions.items()
+            },
+            "semantic_scores": {
+                "counts": dict(_semantic_counts),
+                "sums": {k: round(v, 6) for k, v in _semantic_sums.items()},
+            },
+            "dlp_actions": {
+                f"{scope}|{action}": count
+                for (scope, action), count in _dlp_actions.items()
+            },
+            "dlp_matches": dict(_dlp_matches),
         }

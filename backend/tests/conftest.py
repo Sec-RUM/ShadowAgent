@@ -41,6 +41,11 @@ from fastapi.testclient import TestClient  # noqa: E402
 from main import app  # noqa: E402
 
 
+def _sse_chunk(delta: dict) -> bytes:
+    event = {"id": "chunk", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": delta}]}
+    return ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
+
+
 class MockUpstreamHandler(BaseHTTPRequestHandler):
     """Mock OpenAI-compatible upstream supporting normal and SSE responses."""
 
@@ -62,9 +67,51 @@ class MockUpstreamHandler(BaseHTTPRequestHandler):
             for message in messages
             if isinstance(message, dict)
         )
+        # Marker for "the model answers with a tool call whose arguments carry
+        # a secret", so the DLP tool-argument path can be tested end to end.
+        wants_tool_call_demo = any(
+            "__tool_call_demo__" in str(message.get("content", ""))
+            for message in messages
+            if isinstance(message, dict)
+        )
 
         if payload.get("stream"):
-            if wants_dlp_demo:
+            if wants_tool_call_demo:
+                # Arguments are split inside the key on purpose: the streaming
+                # hold-back window must still catch the assembled secret.
+                arguments = json.dumps(
+                    {"path": "config.txt", "content": "key AKIAIOSFODNN7EXAMPLE"}
+                )
+                split_at = arguments.index("AKIA") + 4
+                body = (
+                    _sse_chunk(
+                        {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "write_file",
+                                        "arguments": arguments[:split_at],
+                                    },
+                                }
+                            ]
+                        }
+                    )
+                    + _sse_chunk(
+                        {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "function": {"arguments": arguments[split_at:]},
+                                }
+                            ]
+                        }
+                    )
+                    + b"data: [DONE]\n\n"
+                )
+            elif wants_dlp_demo:
                 # The AWS key is split across chunk boundaries on purpose so
                 # tests prove the streaming hold-back scanner still catches it.
                 body = (
@@ -84,6 +131,47 @@ class MockUpstreamHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+
+        if wants_tool_call_demo:
+            # A tool-calling assistant turn: content is null on the OpenAI wire.
+            response_body = {
+                "id": "mock-upstream-tool-call",
+                "object": "chat.completion",
+                "created": 1,
+                "model": payload.get("model"),
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "write_file",
+                                        "arguments": json.dumps(
+                                            {
+                                                "path": "config.txt",
+                                                "content": "key AKIAIOSFODNN7EXAMPLE",
+                                            }
+                                        ),
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            }
+            encoded = json.dumps(response_body).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
             return
 
         if wants_dlp_demo:

@@ -5,17 +5,47 @@ Designed to run safely on a developer laptop:
 - bounded duration (default 15s per scenario)
 - no external tooling (pure httpx + asyncio)
 
-Usage (start the gateway first, ideally with a raised rate limit):
+Usage (start the gateway first, with both rate limits raised and the upstream
+pinned to the simulated path):
 
-    # terminal 1: temp server with high rate limit + throwaway DB
+    # terminal 1: temp server with raised rate limits + throwaway DB
     $env:SHADOW_AGENT_DATABASE_PATH="$env:TEMP\perf-test.db"
     $env:SHADOW_AGENT_RATE_LIMIT_PER_MINUTE="1000000"
+    $env:SHADOW_AGENT_LOG_RATE_LIMIT_PER_MINUTE="1000000"
     $env:SHADOW_AGENT_ALLOW_SIMULATED_RESPONSES="true"
+    $env:SHADOW_AGENT_UPSTREAM_BASE_URL=" "   # space: keep backend/.env from winning
     python -m uvicorn main:app --host 127.0.0.1 --port 8018
 
     # terminal 2:
     python perf/load_test.py --base-url http://127.0.0.1:8018 \
         --client-key <client key> --admin-key <admin key>
+
+Both rate-limit variables are required, and they are not interchangeable:
+`/api/v1/logs` is governed by its own, stricter
+`SHADOW_AGENT_LOG_RATE_LIMIT_PER_MINUTE` (default 20/min), so raising only the
+general limit makes the `logs` scenario report 11k x 429 instead of throughput.
+Pinning `SHADOW_AGENT_UPSTREAM_BASE_URL` to blank is equally required: the
+dotenv loader never overrides a key that already exists in the environment, and
+`backend/.env` points at a real provider, so without it the `chat` scenario
+forwards upstream and answers 502 instead of exercising the local engine.
+Neither mistake is self-announcing — 429 and 502 both look like plausible
+results in the report table.
+
+IMPORTANT - the server's stdout/stderr must be consumed.
+    The gateway logs synchronously from the event-loop thread (`logger.info` in
+    `app/routers/gateway.py`), and `logging.basicConfig` writes to stderr. If the
+    server is launched by a script or CI job with an unread pipe
+    (`stdout=subprocess.PIPE` and nothing draining it), roughly 4 KB of log output
+    fills the OS pipe buffer and the whole process wedges: every subsequent request
+    hangs with zero bytes returned and no error logged, because the blocked call is
+    the logger itself. A real terminal or a container log driver drains the pipe, so
+    the usage above is fine. When driving the server from a harness, either use
+    `stdout=subprocess.DEVNULL` or drain the pipe on a reader thread.
+    Do not read `proc.stdout` only once in a `finally` after terminating the server:
+    the tail is truncated and the run then looks like the handler never executed.
+    Ambient proxies are ignored automatically for loopback targets. For a remote
+    target, check that `HTTP_PROXY` / `NO_PROXY` are what you intend: an unintended
+    proxy both adds a hop to every sample and can answer 502/503 under load.
 
 Scenarios:
     health     GET  /health                        (no auth, no DB writes)
@@ -179,10 +209,24 @@ async def run_load_test(
     max_requests_per_worker: int,
 ) -> Stats:
     stats = Stats()
-    limits = httpx.Limits(max_connections=concurrency + 4, max_keepalive_connections=concurrency)
+    # `run_load_test` spawns one worker per scenario entry (`scenarios * concurrency`),
+    # so the pool must be sized for the *total* worker count. Sizing it for
+    # `concurrency` alone starved the pool in the `mixed` blend (9 scenarios x 8 = 72
+    # workers sharing 12 connections), which inflated that scenario's p50 by ~6x and
+    # read like a gateway latency problem.
+    worker_count = concurrency * max(1, len(scenarios))
+    limits = httpx.Limits(max_connections=worker_count + 4, max_keepalive_connections=worker_count)
     timeout = httpx.Timeout(30.0)
 
-    async with httpx.AsyncClient(base_url=base_url, limits=limits, timeout=timeout) as client:
+    # For loopback targets an ambient HTTP_PROXY must never be used: the proxy hop
+    # adds latency and, under load, answers 502/503 or drops connections, which looks
+    # like gateway failures while the server itself logs zero 5xx.
+    target_host = httpx.URL(base_url).host
+    use_env_proxy = target_host not in ("127.0.0.1", "localhost", "::1")
+
+    async with httpx.AsyncClient(
+        base_url=base_url, limits=limits, timeout=timeout, trust_env=use_env_proxy
+    ) as client:
         # Warm-up so connection establishment does not skew the first samples.
         for scenario in scenarios:
             try:

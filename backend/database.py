@@ -30,6 +30,30 @@ def _configured_database_url() -> str:
 DATABASE_URL = _configured_database_url()
 
 
+def _pool_kwargs(database_url: str) -> dict:
+    """Connection-pool sizing for the request path.
+
+    SQLAlchemy's default QueuePool ceiling is ``pool_size=5 + max_overflow=10
+    = 15``, and ``pool.checkout()`` is a *synchronous* call executed on the
+    server's event loop. Once ~32 concurrent gateway clients contend for those
+    15 connections, the loop blocks inside ``pool.checkout()`` instead of
+    serving anything, so every request stalls:
+
+        measured (before): chat c=32 -> 3.0 rps, 32 x 30s client timeouts
+                           chat c=72 -> 3.8 rps, 72 x 30s client timeouts
+        measured (after):  chat c=32 -> 243 rps, p95 210ms, 0 errors
+                           chat c=72 -> 189 rps, p95 1.03s, 0 errors
+
+    ``pool_timeout`` is lowered from the 30s default so saturation surfaces as
+    a fast error instead of pinning the event loop for 30 seconds.
+    """
+    if database_url in ("sqlite://", "sqlite:///") or ":memory:" in database_url:
+        # In-memory SQLite is served by SingletonThreadPool, which rejects
+        # these arguments (and needs no sizing).
+        return {}
+    return {"pool_size": 20, "max_overflow": 40, "pool_timeout": 5}
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -38,6 +62,7 @@ engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
     pool_pre_ping=True,
+    **_pool_kwargs(DATABASE_URL),
 )
 
 

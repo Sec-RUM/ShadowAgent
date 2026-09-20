@@ -109,6 +109,56 @@ return a standard 403 error envelope whose `detail` carries the full security
 decision (`request_id`, `reason`, `risk_score`, `matched_rules`, …), so SDK
 callers can distinguish intercepts from upstream failures.
 
+### Forwarded request parameters
+
+The gateway forwards an explicit whitelist of standard `/chat/completions`
+parameters instead of accepting arbitrary keys:
+
+```
+temperature  top_p  max_tokens  max_completion_tokens  stop  seed  n
+presence_penalty  frequency_penalty  logprobs  top_logprobs  logit_bias
+response_format  tools  tool_choice  parallel_tool_calls  stream_options  user
+```
+
+An explicit whitelist (rather than an open passthrough) is deliberate: whatever
+reaches the model also has to be something the detection layers can inspect, and
+an open passthrough would let a caller push unbounded, uninspected keys straight
+into the upstream body. `model` / `messages` / `stream` are gateway-authoritative
+and always win over a caller-supplied value.
+
+Tool calling uses the OpenAI-native shape, so agent loops pass through unchanged:
+
+```jsonc
+{"role": "assistant", "content": null, "tool_calls": [
+  {"id": "call_1", "type": "function",
+   "function": {"name": "read_file", "arguments": "{\"path\":\"a.txt\"}"}}]}
+{"role": "tool", "tool_call_id": "call_1", "content": "..."}
+```
+
+Both the assistant turn's `content: null` and the `tool` role are accepted. Verify
+transport fidelity at any time with `python tools/check_openai_compat.py`
+(exit 0 = drop-in compatible).
+
+### Tool permission policy
+
+Every tool call found in `messages[].tool_calls` (the legacy `tool_name` /
+`parameters` fields still work) is checked against the tool policy table, and its
+arguments are screened by the behaviour-risk engine (dangerous commands,
+sensitive files, internal targets, credential access, secret exfiltration).
+
+`SHADOW_AGENT_UNKNOWN_TOOL_POLICY` decides what happens to a tool that has **no**
+policy row and no built-in default:
+
+| Value | Behaviour |
+| --- | --- |
+| `deny` (default) | Strict allowlist — only tools with an explicit policy or a built-in default may run. |
+| `allow` | Third-party agent tools the gateway has no opinion about are permitted; their arguments are still screened by the behaviour-risk engine. |
+
+Set this to `allow` when connecting real agents whose tool names you have not
+enumerated — with the default, every unrecognised tool name is refused. Built-in
+defaults: `search_web`, `http_request`, `read_file` allowed; `execute_shell`
+denied pending admin approval.
+
 ## Semantic Injection Detection (request side)
 
 Prompt-injection detection runs as a two-layer fusion inside
@@ -499,11 +549,30 @@ endpoints):
 - `shadow_agent_http_requests_total{method,status,route}` — request counter
 - `shadow_agent_http_request_duration_seconds_bucket/sum/count{route}` —
   latency histogram (buckets 5ms…10s)
+- `shadow_agent_security_decisions_total{layer,threat_type,action}` — security
+  decisions by detection layer, threat type, and action
+  (`Blocked` / `Monitored` / `Redacted`). This is what answers "how many
+  injections did we stop today, and by which layer".
+- `shadow_agent_semantic_score_bucket/sum/count{layer}` — histogram of the
+  **raw calibrated injection probability** over every scanned text slice,
+  allowed traffic included. The benign tail of this distribution is the
+  threshold headroom: when it creeps toward the threshold, precision is about
+  to degrade. Recorded in `semantic_ml_check`, i.e. only when the semantic mode
+  is not `off`.
+- `shadow_agent_dlp_actions_total{scope,action}` and
+  `shadow_agent_dlp_matches_total{scope}` — response-side DLP actions and
+  pattern matches per scan scope (`content`, `tool_arguments`).
 
-Routes are recorded as templates (`/api/v1/policies/{id}`) so label
-cardinality stays bounded. Requests throttled by the rate limiter before
-reaching the app are not counted. Rows purged by the retention job are
-exported as `shadow_agent_retention_purged_rows_total{table}`.
+Label cardinality is bounded by construction. Route labels are templates
+(`/api/v1/policies/{id}`); the per-request tool-call index in a streaming scan
+scope is collapsed to `tool_arguments`; and each of the `layer` /
+`threat_type` / `scope` label families is capped at 64 distinct values, after
+which new values fold into `other`. A novel or attacker-influenced value can
+therefore not grow the label set without bound.
+
+Requests throttled by the rate limiter before reaching the app are not
+counted. Rows purged by the retention job are exported as
+`shadow_agent_retention_purged_rows_total{table}`.
 
 ## Real-Time Event Stream (SSE)
 
@@ -539,9 +608,10 @@ deleting in bounded batches so large first runs cannot lock the database.
 concurrency/duration (safe for developer laptops):
 
 ```powershell
-# terminal 1: isolated server (raised rate limit, throwaway DB, simulated mode)
+# terminal 1: isolated server (raised rate limits, throwaway DB, simulated mode)
 $env:SHADOW_AGENT_DATABASE_PATH="$env:TEMP\perf.db"
 $env:SHADOW_AGENT_RATE_LIMIT_PER_MINUTE="1000000"
+$env:SHADOW_AGENT_LOG_RATE_LIMIT_PER_MINUTE="1000000"
 $env:SHADOW_AGENT_ALLOW_SIMULATED_RESPONSES="true"
 $env:SHADOW_AGENT_UPSTREAM_BASE_URL=" "   # space: keep .env from overriding
 python -m uvicorn main:app --host 127.0.0.1 --port 8018
@@ -550,6 +620,17 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8018
 python perf/load_test.py --base-url http://127.0.0.1:8018 `
     --client-key <client key> --admin-key <admin key>
 ```
+
+WARNING
+
+- Both rate-limit variables are needed and are independent:
+  `/api/v1/logs` uses `SHADOW_AGENT_LOG_RATE_LIMIT_PER_MINUTE` (default 20/min),
+  so raising only the general limit makes the `logs` scenario report 429s rather
+  than throughput.
+- `SHADOW_AGENT_UPSTREAM_BASE_URL` must be pinned to blank. The dotenv loader
+  does not override keys already present in the environment, and `backend/.env`
+  points at a real provider — without the pin the `chat` scenario forwards
+  upstream and answers 502 instead of exercising the local engine.
 
 Scenarios: `health`, `chat` (clean request through the full engine),
 `injection` (blocked request, exercises intercept logging), `analyze`,

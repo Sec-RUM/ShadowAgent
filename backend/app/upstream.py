@@ -74,16 +74,32 @@ def _resolved_upstream_model(requested_model: str) -> str:
 def _build_forward_messages(
     messages: list[ChatMessage],
     separated: dict[str, str],
-) -> list[dict[str, str]]:
-    trusted_instruction = separated["trusted_instruction"].strip()
-    untrusted_data = separated["untrusted_data"].strip()
+) -> list[dict[str, Any]]:
+    """Project the validated messages onto the upstream wire format.
 
-    forwarded_messages = [message.model_dump() for message in messages]
+    ``content`` is kept even when null: an assistant turn that only carries
+    ``tool_calls`` must send ``"content": null`` for most OpenAI-compatible
+    servers to accept it. Other unset fields are dropped so we never ship
+    explicit nulls the upstream would reject.
+    """
+    trusted_instruction = separated["trusted_instruction"].strip()
+
+    forwarded_messages: list[dict[str, Any]] = []
+    for message in messages:
+        dumped = message.model_dump()
+        projected = {
+            key: value
+            for key, value in dumped.items()
+            if value is not None or key == "content"
+        }
+        forwarded_messages.append(projected)
+
     for message in reversed(forwarded_messages):
         if message["role"] == "user":
             message["content"] = trusted_instruction or message["content"]
             break
 
+    untrusted_data = separated["untrusted_data"].strip()
     if untrusted_data:
         forwarded_messages.append(
             {
@@ -157,7 +173,10 @@ async def _forward_to_upstream(
         )
 
     upstream_model = _resolved_upstream_model(payload.model)
-    upstream_payload = {
+    upstream_payload: dict[str, Any] = {
+        # Standard parameters the caller set are forwarded verbatim first, so
+        # the gateway-authoritative keys below always win on collision.
+        **payload.upstream_passthrough(),
         "model": upstream_model,
         "messages": _build_forward_messages(payload.messages, separated),
         "stream": False,
@@ -239,7 +258,8 @@ async def _stream_upstream_response(
         )
 
     upstream_model = _resolved_upstream_model(payload.model)
-    upstream_payload = {
+    upstream_payload: dict[str, Any] = {
+        **payload.upstream_passthrough(),
         "model": upstream_model,
         "messages": _build_forward_messages(payload.messages, separated),
         "stream": True,
@@ -288,13 +308,48 @@ async def _stream_upstream_response(
     dlp_rules: list = []
     if dlp_mode != "off" and db is not None:
         dlp_rules = enabled_rules(db, target="response", org_id=org_id)
-    scanner = StreamingDlpScanner(
+    content_scanner = StreamingDlpScanner(
         mode=dlp_mode,
         rules=dlp_rules,
         request_id=request_id,
-        details={"mode": "proxy-stream", "model": upstream_model},
+        details={"mode": "proxy-stream", "model": upstream_model, "stream_scope": "content"},
         org_id=org_id,
     )
+    # One scanner per streamed tool call, keyed by the OpenAI ``index`` field.
+    # Tool arguments are model output exactly like ``content`` is, so they get
+    # the same hold-back guarantee instead of being forwarded unscanned.
+    argument_scanners: dict[int, StreamingDlpScanner] = {}
+
+    def _arguments_scanner(index: int) -> StreamingDlpScanner:
+        scanner = argument_scanners.get(index)
+        if scanner is None:
+            scanner = StreamingDlpScanner(
+                mode=dlp_mode,
+                rules=dlp_rules,
+                request_id=request_id,
+                details={
+                    "mode": "proxy-stream",
+                    "model": upstream_model,
+                    "stream_scope": f"tool_calls[{index}].function.arguments",
+                },
+                org_id=org_id,
+            )
+            argument_scanners[index] = scanner
+        return scanner
+
+    def _stream_blocked() -> bool:
+        return content_scanner.blocked or any(
+            scanner.blocked for scanner in argument_scanners.values()
+        )
+
+    def _blocked_payload() -> dict[str, Any]:
+        """Block payload from whichever scanner tripped first."""
+        if content_scanner.blocked:
+            return content_scanner.blocked_payload()
+        for scanner in argument_scanners.values():
+            if scanner.blocked:
+                return scanner.blocked_payload()
+        return content_scanner.blocked_payload()
 
     async def iterator():
         sse_buffer = b""
@@ -307,15 +362,29 @@ async def _stream_upstream_response(
                     out = _process_sse_frame(frame)
                     if out is not None:
                         yield out
-                    if scanner.blocked:
+                    if _stream_blocked():
                         return  # error frame already emitted; terminate stream
             if sse_buffer:
                 out = _process_sse_frame(sse_buffer)
                 if out is not None:
                     yield out
-            scanner.finalize_logging()
+            for scanner in (content_scanner, *argument_scanners.values()):
+                scanner.finalize_logging()
         finally:
             await response.aclose()
+
+    def _scan_segment(scanner: StreamingDlpScanner, text: str) -> str | None:
+        """Feed one streamed fragment to a scanner.
+
+        Returns the text to forward, or ``None`` when the fragment must be
+        withheld — either because it sits inside the hold-back window or
+        because the stream is now blocked. Callers disambiguate with
+        ``_stream_blocked()``.
+        """
+        emitted = scanner.feed(text)
+        if scanner.blocked or not emitted:
+            return None
+        return emitted
 
     def _process_sse_frame(frame: bytes) -> bytes | None:
         """Scan/redact one SSE frame; returns the bytes to forward (or None)."""
@@ -331,8 +400,8 @@ async def _stream_upstream_response(
                 continue
             data = stripped[5:].strip()
             if data == "[DONE]":
-                if not scanner.blocked:
-                    flushed = scanner.finish()
+                if not _stream_blocked():
+                    flushed = content_scanner.finish()
                     if flushed:
                         out_lines.append(
                             "data: "
@@ -341,9 +410,34 @@ async def _stream_upstream_response(
                                 ensure_ascii=False,
                             )
                         )
+                    for index in sorted(argument_scanners):
+                        tail = argument_scanners[index].finish()
+                        if not tail:
+                            continue
+                        out_lines.append(
+                            "data: "
+                            + json.dumps(
+                                {
+                                    "choices": [
+                                        {
+                                            "index": 0,
+                                            "delta": {
+                                                "tool_calls": [
+                                                    {
+                                                        "index": index,
+                                                        "function": {"arguments": tail},
+                                                    }
+                                                ]
+                                            },
+                                        }
+                                    ]
+                                },
+                                ensure_ascii=False,
+                            )
+                        )
                 out_lines.append("data: [DONE]")
                 continue
-            if scanner.blocked:
+            if _stream_blocked():
                 continue  # drop remaining content after a block
             try:
                 event = json.loads(data)
@@ -359,21 +453,67 @@ async def _stream_upstream_response(
                 out_lines.append(line)
                 continue
             delta = choices[0].get("delta")
-            content = delta.get("content") if isinstance(delta, dict) else None
-            if not isinstance(content, str) or not content:
+            if not isinstance(delta, dict):
                 out_lines.append(line)
                 continue
-            emitted = scanner.feed(content)
-            if scanner.blocked:
-                out_lines.append(
-                    "data: " + json.dumps({"error": scanner.blocked_payload()}, ensure_ascii=False)
-                )
-                out_lines.append("data: [DONE]")
-                continue
-            if emitted:
-                event["choices"][0]["delta"]["content"] = emitted
+
+            mutated = False
+
+            content = delta.get("content")
+            if isinstance(content, str) and content:
+                emitted = _scan_segment(content_scanner, content)
+                if _stream_blocked():
+                    out_lines.append(
+                        "data: "
+                        + json.dumps({"error": _blocked_payload()}, ensure_ascii=False)
+                    )
+                    out_lines.append("data: [DONE]")
+                    continue
+                if emitted is None:
+                    continue  # withhold this frame's content (hold-back window)
+                if emitted != content:
+                    delta["content"] = emitted
+                    mutated = True
+
+            tool_calls = delta.get("tool_calls")
+            if isinstance(tool_calls, list):
+                for call in tool_calls:
+                    if not isinstance(call, dict):
+                        continue
+                    function = call.get("function")
+                    if not isinstance(function, dict):
+                        continue
+                    arguments = function.get("arguments")
+                    if not isinstance(arguments, str) or not arguments:
+                        continue
+                    call_index = call.get("index")
+                    if not isinstance(call_index, int):
+                        call_index = 0
+                    emitted = _scan_segment(_arguments_scanner(call_index), arguments)
+                    if _stream_blocked():
+                        break
+                    if emitted is None:
+                        # Hold-back window: drop only the arguments fragment so
+                        # this call's id/name still reach the client; the
+                        # withheld text is emitted by a later frame.
+                        function.pop("arguments", None)
+                        mutated = True
+                        continue
+                    if emitted != arguments:
+                        function["arguments"] = emitted
+                        mutated = True
+                if _stream_blocked():
+                    out_lines.append(
+                        "data: "
+                        + json.dumps({"error": _blocked_payload()}, ensure_ascii=False)
+                    )
+                    out_lines.append("data: [DONE]")
+                    continue
+
+            if mutated:
                 out_lines.append("data: " + json.dumps(event, ensure_ascii=False))
-            # emitted == "" -> withhold this frame's content (hold-back window)
+            else:
+                out_lines.append(line)
         return ("\n".join(out_lines) + "\n\n").encode("utf-8")
 
     return StreamingResponse(

@@ -18,7 +18,12 @@ from app.audit import (
     _submit_audit_log,
     _threat_label_from_decision,
 )
-from app.config import _allow_simulated_responses, _env_text, _upstream_proxy_enabled
+from app.config import (
+    _allow_simulated_responses,
+    _env_text,
+    _unknown_tool_allowed,
+    _upstream_proxy_enabled,
+)
 from app.custom_rules import custom_prompt_check
 from app.dlp import apply_response_dlp
 from app.schemas import AnalyzeRequest, ChatCompletionRequest, ChatMessage
@@ -53,13 +58,20 @@ def _conversation_text(messages: list[ChatMessage]) -> str:
 
     System messages are treated as trusted client-side configuration; user,
     assistant, and tool history can carry smuggled injection payloads that
-    last-user-message checks alone would miss.
+    last-user-message checks alone would miss. Assistant ``tool_calls`` belong
+    to that same untrusted history: their arguments are the text the agent
+    runtime is about to execute, so omitting them would leave a blind spot.
     """
-    return "\n".join(
-        f"[{message.role}] {message.content}"
-        for message in messages
-        if message.role != "system"
-    )
+    lines: list[str] = []
+    for message in messages:
+        if message.role == "system":
+            continue
+        lines.append(f"[{message.role}] {message.text}")
+        for call in message.tool_calls or []:
+            lines.append(
+                f"[tool_call:{call.function.name}] {call.function.arguments}"
+            )
+    return "\n".join(lines)
 
 
 def _run_semantic_checks(
@@ -103,7 +115,7 @@ def _run_semantic_checks(
 def _latest_user_prompt(messages: list[ChatMessage]) -> str:
     for message in reversed(messages):
         if message.role == "user":
-            return message.content
+            return message.text
     raise HTTPException(
         status_code=400,
         detail={
@@ -136,7 +148,13 @@ async def analyze_request(
             semantic_intent_check(separated["untrusted_data"])
         ),
         "permission_control": _decision_payload(
-            permission_control(payload.tool_name, payload.parameters, db, org_id)
+            permission_control(
+                payload.tool_name,
+                payload.parameters,
+                db,
+                org_id,
+                unknown_tool_allowed=_unknown_tool_allowed(),
+            )
         ),
         "behavior_risk": _decision_payload(
             behavior_risk_check(
@@ -337,47 +355,76 @@ async def chat_completions(
         org_id=org_id,
     )
 
-    permission_decision = permission_control(payload.tool_name, payload.parameters, db, org_id)
-    _raise_if_blocked(
-        request_id=request_id,
-        layer="tool_permission",
-        decision=permission_decision,
-        source_excerpt=payload.tool_name or "",
-        original_prompt=prompt,
-        threat_type=_threat_label_from_decision(permission_decision, "tool_permission"),
-        db=db,
-        details={
-            "model": payload.model,
-            "tool_name": payload.tool_name,
-            "parameters": sanitize_json(payload.parameters or {}),
-            "principal": principal.subject,
-        },
-        org_id=org_id,
+    # Tool permission + behaviour risk, evaluated once per tool invocation.
+    #
+    # Real agent traffic declares tools with the OpenAI-native
+    # ``messages[].tool_calls`` form, so reading only the legacy
+    # ``tool_name``/``parameters`` fields left both engines dormant on
+    # production traffic. When the caller declares no tool at all we still run
+    # one pass with ``(None, None)``: ``behavior_risk_check`` inspects the
+    # prompt text in that case, which is how in-prompt dangerous commands are
+    # caught today.
+    tool_invocations = payload.tool_invocations() or [(None, None)]
+    tool_source = (
+        "tool_calls"
+        if any(message.tool_calls for message in payload.messages)
+        else "legacy_fields"
     )
+    unknown_tool_allowed = _unknown_tool_allowed()
+    for invocation_index, (invoked_tool, invoked_parameters) in enumerate(tool_invocations):
+        sanitized_parameters = sanitize_json(invoked_parameters or {})
 
-    behavior_decision = behavior_risk_check(
-        prompt=conversation_text,
-        external_context=payload.external_context,
-        tool_name=payload.tool_name,
-        parameters=payload.parameters,
-    )
-    _raise_if_blocked(
-        request_id=request_id,
-        layer="behavior_risk",
-        decision=behavior_decision,
-        source_excerpt=json.dumps(sanitize_json(payload.parameters or {}), ensure_ascii=False),
-        original_prompt=prompt,
-        threat_type=_threat_label_from_decision(behavior_decision, "behavior_risk"),
-        db=db,
-        details={
-            "model": payload.model,
-            "tool_name": payload.tool_name,
-            "parameters": sanitize_json(payload.parameters or {}),
-            "principal": principal.subject,
-            "external_context_present": bool((payload.external_context or "").strip()),
-        },
-        org_id=org_id,
-    )
+        permission_decision = permission_control(
+            invoked_tool,
+            invoked_parameters,
+            db,
+            org_id,
+            unknown_tool_allowed=unknown_tool_allowed,
+        )
+        _raise_if_blocked(
+            request_id=request_id,
+            layer="tool_permission",
+            decision=permission_decision,
+            source_excerpt=invoked_tool or "",
+            original_prompt=prompt,
+            threat_type=_threat_label_from_decision(permission_decision, "tool_permission"),
+            db=db,
+            details={
+                "model": payload.model,
+                "tool_name": invoked_tool,
+                "parameters": sanitized_parameters,
+                "principal": principal.subject,
+                "tool_source": tool_source,
+                "tool_invocation_index": invocation_index,
+            },
+            org_id=org_id,
+        )
+
+        behavior_decision = behavior_risk_check(
+            prompt=conversation_text,
+            external_context=payload.external_context,
+            tool_name=invoked_tool,
+            parameters=invoked_parameters,
+        )
+        _raise_if_blocked(
+            request_id=request_id,
+            layer="behavior_risk",
+            decision=behavior_decision,
+            source_excerpt=json.dumps(sanitized_parameters, ensure_ascii=False),
+            original_prompt=prompt,
+            threat_type=_threat_label_from_decision(behavior_decision, "behavior_risk"),
+            db=db,
+            details={
+                "model": payload.model,
+                "tool_name": invoked_tool,
+                "parameters": sanitized_parameters,
+                "principal": principal.subject,
+                "tool_source": tool_source,
+                "tool_invocation_index": invocation_index,
+                "external_context_present": bool((payload.external_context or "").strip()),
+            },
+            org_id=org_id,
+        )
 
     custom_rule_decision = custom_prompt_check(
         f"{prompt}\n{payload.external_context or ''}".strip(), db, org_id

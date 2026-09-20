@@ -463,6 +463,20 @@ def semantic_ml_check(text: str) -> dict[str, Any] | None:
     suspect_floor = semantic_suspect_floor()
     at_threshold = score >= threshold
 
+    # Observe the *raw* calibrated score, not the resulting decision.
+    #
+    # ``semantic_intent_check`` returns the layer-1 decision verbatim when the
+    # score sits below the suspicion floor, so the score never reaches the audit
+    # layer for ordinary traffic. Recording it here is the only place the
+    # threshold-proximity of benign traffic is observable — and that proximity is
+    # what tells an operator whether the threshold still has headroom.
+    #
+    # Imported lazily so the module stays importable without the web/metrics
+    # layer (``tools/train_semantic_model.py`` imports this module directly).
+    from app.metrics import record_semantic_score
+
+    record_semantic_score(layer="semantic_ml", score=score)
+
     return {
         "block": mode == "enforce" and at_threshold,
         "suspected": score >= suspect_floor,

@@ -128,4 +128,18 @@ docker compose up -d --build
       三条修法实测均为净亏或属权重放大，故**如实登记而非放宽断言**；将来真修好会主动失败提醒更新
 - [x] 基准报告数字实时化：`bench_semantic.py` 生成时**实际调用** `ablate_ngram_scope.py` 取数，
       不再把对照结果抄成字面量（此前已随语料增长悄悄失真为 `0.725`/`78.7%`，实为 `0.7531`/`78.8%`）
+- [x] 接入层 drop-in 兼容修复（4 项，均以验收工具固化）：
+      ① 标准 OpenAI 参数白名单透传（`temperature`/`max_tokens`/`top_p`/`stop`/`seed`/
+      `response_format`/`tools`/`tool_choice` 等 18 项此前被 Pydantic 默认 `extra="ignore"`
+      **静默丢弃**，客户端设了等于没设）；② 多轮工具会话支持（`ChatMessage.content`
+      原为 `min_length=1`，而 assistant 工具轮次 `content: null` 在 OpenAI 线上合法
+      → **任何 agent 工具循环第二轮即 422**；现补充 `tool_calls`/`tool_call_id`/`name`）；
+      ③ 工具策略引擎改接 `tool_calls`（原读自定义 `tool_name`/`parameters`，
+      **生产流量下引擎永不触发**）；④ 响应 DLP 覆盖工具调用参数（原只扫 `content`
+      → 密钥经 `tool_calls[].function.arguments` **原样外泄**，流式同样盲区）。
+      配套新增只读验收工具 `backend/tools/check_openai_compat.py`（exit 0 = 完全兼容）
+- [x] 未知工具策略显式化：新增 `SHADOW_AGENT_UNKNOWN_TOOL_POLICY`（`deny` 默认 / `allow`）。
+      工具策略引擎真正生效后暴露出的关键事实——**未被策略表覆盖的工具全部被拒**，
+      真实 Agent 的工具名通常不可穷举；默认保持 `deny` 不静默削弱安全语义，
+      由运维显式决定，行为风险引擎始终独立拦截危险参数
 - [ ] 语义检测升级：嵌入式向量近邻（见基准文档路线图第 9 项；可行性待重新论证）

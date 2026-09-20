@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.alerts import enqueue_alert
 from app.auth_helpers import _principal_label
 from app.events import publish_event
+from app.metrics import record_security_decision
 from database import SessionLocal
 from models import AlertEvent, ApprovalRequest, AuditLog, InterceptLog
 from security_controls import Principal, redact_text, sanitize_json
@@ -325,6 +326,8 @@ def _raise_if_blocked(
     )
     db.commit()
 
+    record_security_decision(layer=layer, threat_type=threat_type, action="Blocked")
+
     logger.warning(
         "ShadowAgent intercepted request_id=%s layer=%s reason=%s category=%s risk_score=%.2f matched_rules=%s source_excerpt=%r",
         request_id,
@@ -387,6 +390,9 @@ def _log_semantic_monitor_event(
     if not decision.allowed or decision.reason != "semantic_injection_suspected":
         return
 
+    threat_label = _threat_label_from_decision(decision, layer)
+    record_security_decision(layer=layer, threat_type=threat_label, action="Monitored")
+
     log_details = {
         "request_id": request_id,
         "layer": layer,
@@ -407,7 +413,7 @@ def _log_semantic_monitor_event(
             InterceptLog(
                 org_id=org_id,
                 request_id=request_id,
-                threat_type=_threat_label_from_decision(decision, layer),
+                threat_type=threat_label,
                 action_taken="Monitored",
                 original_prompt=redact_text(original_prompt),
                 details=json.dumps(sanitize_json(log_details), ensure_ascii=False),
@@ -428,7 +434,7 @@ def _log_semantic_monitor_event(
         "org_id": org_id,
         "request_id": request_id,
         "layer": layer,
-        "threat_type": _threat_label_from_decision(decision, layer),
+        "threat_type": threat_label,
         "category": decision.category,
         "categories": decision.categories,
         "risk_score": decision.risk_score,

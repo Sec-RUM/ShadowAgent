@@ -913,12 +913,18 @@ def permission_control(
     parameters: dict[str, Any] | None,
     db: Session | None = None,
     org_id: int | None = None,
+    *,
+    unknown_tool_allowed: bool = False,
 ) -> AuditDecision:
     """Validate whether a tool call is permitted by configured tool policy.
 
     An org-scoped policy for the tool overrides the platform-shared default
     for that organization's traffic (``org_id``); without an org context the
     platform default (``org_id IS NULL``) applies.
+
+    ``unknown_tool_allowed`` decides the outcome for a tool with no policy row
+    and no built-in default. It defaults to ``False`` so the allowlist stays
+    strict; the caller supplies the operator's configured choice.
     """
 
     if not tool_name:
@@ -960,7 +966,7 @@ def permission_control(
             allowed = bool(fallback["allowed"])
             requires_admin_approval = bool(fallback["requires_admin_approval"])
         else:
-            allowed = False
+            allowed = unknown_tool_allowed
             requires_admin_approval = False
     else:
         allowed = policy.allowed

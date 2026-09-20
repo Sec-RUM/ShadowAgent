@@ -118,6 +118,33 @@ def _allow_open_registration() -> bool:
     return raw_value in {"1", "true", "yes", "on"}
 
 
+UNKNOWN_TOOL_POLICIES = ("deny", "allow")
+
+
+def _unknown_tool_policy() -> str:
+    """How to treat a tool that has no configured policy row.
+
+    ``deny`` (default) keeps the tool allowlist strict, which is the behaviour
+    the platform has always had: only tools with an explicit policy — or one of
+    the built-in defaults — may run.
+
+    ``allow`` lets third-party agents use tools the gateway has no opinion
+    about. Their arguments are still screened by ``behavior_risk_check``
+    (dangerous commands, sensitive files, internal targets, credential access,
+    secret exfiltration), so this widens the allowlist rather than removing the
+    guard. The default is deliberately unchanged: switching it would weaken a
+    security decision, which operators must opt into explicitly.
+    """
+    raw_value = _env_text("SHADOW_AGENT_UNKNOWN_TOOL_POLICY").lower()
+    if raw_value in UNKNOWN_TOOL_POLICIES:
+        return raw_value
+    return "deny"
+
+
+def _unknown_tool_allowed() -> bool:
+    return _unknown_tool_policy() == "allow"
+
+
 def _console_invite_token() -> str:
     return _env_text("SHADOW_AGENT_CONSOLE_INVITE_TOKEN")
 

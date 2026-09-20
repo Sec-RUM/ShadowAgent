@@ -22,13 +22,14 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
 from app.alerts import enqueue_alert
 from app.custom_rules import RuleHit, enabled_rules, match_rules
 from app.events import publish_event
+from app.metrics import record_dlp_scan
 from database import SessionLocal
 from models import AlertEvent, CustomRule, InterceptLog
 from security_controls import redact_text, sanitize_json
@@ -205,6 +206,13 @@ def _log_dlp_event(
     org_id: int | None = None,
 ) -> None:
     """Persist intercept/alert records and fan out events for a DLP action."""
+    scopes = (
+        details.get("dlp_scopes")
+        or details.get("stream_scope")
+        or details.get("dlp_scope")
+        or "unknown"
+    )
+    record_dlp_scan(scopes=scopes, action=action_taken, matches=len(outcome.matches))
     db = SessionLocal()
     try:
         risk = outcome.max_risk()
@@ -282,6 +290,52 @@ def blocked_decision(outcome: ScanOutcome) -> AuditDecision:
 
 # --- non-streaming ----------------------------------------------------------
 
+_SCAN_SCOPE_CONTENT = "content"
+
+
+def _iter_message_segments(
+    message: dict[str, Any],
+) -> list[tuple[str, str, Callable[[str], None]]]:
+    """Model-output text segments inside one response message.
+
+    Returns ``(scope, text, write_back)`` triples. Tool call arguments are
+    model output just like ``content`` is — leaving them out of the scan let a
+    secret be smuggled out through a function call's arguments untouched.
+    """
+    segments: list[tuple[str, str, Callable[[str], None]]] = []
+
+    content = message.get("content")
+    if isinstance(content, str) and content:
+        segments.append(
+            (
+                _SCAN_SCOPE_CONTENT,
+                content,
+                lambda value: message.__setitem__("content", value),
+            )
+        )
+
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for index, call in enumerate(tool_calls):
+            if not isinstance(call, dict):
+                continue
+            function = call.get("function")
+            if not isinstance(function, dict):
+                continue
+            arguments = function.get("arguments")
+            if isinstance(arguments, str) and arguments:
+                segments.append(
+                    (
+                        f"tool_calls[{index}].function.arguments",
+                        arguments,
+                        lambda value, target=function: target.__setitem__(
+                            "arguments", value
+                        ),
+                    )
+                )
+
+    return segments
+
 
 def apply_response_dlp(
     data: dict[str, Any],
@@ -299,55 +353,61 @@ def apply_response_dlp(
     rules = enabled_rules(db, target="response", org_id=org_id)
     outcome_total = ScanOutcome()
     modified = False
+    matched_scopes: list[str] = []
+    first_excerpt = ""
 
     for choice in data.get("choices") or []:
         message = choice.get("message") if isinstance(choice, dict) else None
         if not isinstance(message, dict):
             continue
-        content = message.get("content")
-        if not isinstance(content, str) or not content:
-            continue
 
-        outcome = scan_text(content, rules)
-        if not outcome.matches:
-            continue
+        for scope, text, write_back in _iter_message_segments(message):
+            outcome = scan_text(text, rules)
+            if not outcome.matches:
+                continue
 
-        block_forced = mode == "block" or outcome.should_block
-        if block_forced:
-            _log_dlp_event(
-                request_id=request_id,
-                action_taken="Blocked",
-                outcome=outcome,
-                excerpt=content[:500],
-                details=details or {},
-                org_id=org_id,
-            )
-            from fastapi import HTTPException
+            if not first_excerpt:
+                first_excerpt = text[:500]
+            if scope not in matched_scopes:
+                matched_scopes.append(scope)
 
-            decision = blocked_decision(outcome)
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "shadow_agent_intercepted",
-                    "request_id": request_id,
-                    "layer": _DLP_LAYER,
-                    "reason": decision.reason,
-                    "risk_score": decision.risk_score,
-                    "matched_rules": decision.matched_rules,
-                    "category": decision.category,
-                    "categories": decision.categories,
-                    "evidence": decision.evidence,
-                    "recommended_action": decision.recommended_action,
-                },
-            )
+            block_forced = mode == "block" or outcome.should_block
+            if block_forced:
+                _log_dlp_event(
+                    request_id=request_id,
+                    action_taken="Blocked",
+                    outcome=outcome,
+                    excerpt=text[:500],
+                    details={**(details or {}), "dlp_scope": scope},
+                    org_id=org_id,
+                )
+                from fastapi import HTTPException
 
-        if mode == "redact" and outcome.has_redactions:
-            redacted = _redact_content(content, rules, outcome)
-            if redacted != content:
-                message["content"] = redacted
-                modified = True
+                decision = blocked_decision(outcome)
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "shadow_agent_intercepted",
+                        "request_id": request_id,
+                        "layer": _DLP_LAYER,
+                        "reason": decision.reason,
+                        "risk_score": decision.risk_score,
+                        "matched_rules": decision.matched_rules,
+                        "category": decision.category,
+                        "categories": decision.categories,
+                        "evidence": decision.evidence,
+                        "recommended_action": decision.recommended_action,
+                        "dlp_scope": scope,
+                    },
+                )
 
-        outcome_total.matches.extend(outcome.matches)
+            if mode == "redact" and outcome.has_redactions:
+                redacted = _redact_content(text, rules, outcome)
+                if redacted != text:
+                    write_back(redacted)
+                    modified = True
+
+            outcome_total.matches.extend(outcome.matches)
 
     if outcome_total.matches:
         if mode == "redact" and modified:
@@ -358,10 +418,8 @@ def apply_response_dlp(
             request_id=request_id,
             action_taken=action_taken,
             outcome=outcome_total,
-            excerpt=(data.get("choices") or [{}])[0]
-            .get("message", {})
-            .get("content", "")[:500],
-            details=details or {},
+            excerpt=first_excerpt,
+            details={**(details or {}), "dlp_scopes": matched_scopes},
             org_id=org_id,
         )
 

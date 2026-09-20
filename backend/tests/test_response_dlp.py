@@ -232,7 +232,7 @@ def test_dlp_intercept_log_recorded(
 # --- integration: gateway streaming ------------------------------------------
 
 
-def _read_stream(response) -> str:
+def _read_stream(response) -> tuple[str, dict | None]:
     content_parts: list[str] = []
     error_payload = None
     for line in response.iter_lines():
@@ -319,3 +319,125 @@ def test_response_dlp_mode_env_validation(monkeypatch: pytest.MonkeyPatch) -> No
     assert response_dlp_mode() == "redact"
     monkeypatch.setenv("SHADOW_AGENT_RESPONSE_DLP_MODE", "MONITOR")
     assert response_dlp_mode() == "monitor"
+
+
+# --- tool call arguments ------------------------------------------------------
+#
+# Tool arguments are model output: a secret a model writes into a function call
+# is exactly as exfiltrated as one it writes into ``content``. These used to be
+# forwarded unscanned, because only ``message.content`` / ``delta.content``
+# were ever handed to the scanner.
+
+_TOOL_CALL_DEMO = {
+    "model": "shadow-agent-simulated",
+    "messages": [{"role": "user", "content": "save the export __tool_call_demo__"}],
+}
+
+
+def _read_tool_arguments_stream(response) -> tuple[str, dict | None]:
+    """Collect streamed ``delta.tool_calls[].function.arguments`` fragments."""
+    argument_parts: list[str] = []
+    error_payload = None
+    for line in response.iter_lines():
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data == "[DONE]":
+            break
+        try:
+            event = json.loads(data)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and "error" in event:
+            error_payload = event["error"]
+            continue
+        choices = event.get("choices") or []
+        delta = choices[0].get("delta") if choices and isinstance(choices[0], dict) else None
+        if not isinstance(delta, dict):
+            continue
+        for call in delta.get("tool_calls") or []:
+            function = call.get("function") if isinstance(call, dict) else None
+            if isinstance(function, dict) and isinstance(function.get("arguments"), str):
+                argument_parts.append(function["arguments"])
+    return "".join(argument_parts), error_payload
+
+
+def test_tool_call_arguments_are_redacted_non_streaming(
+    client: TestClient,
+    client_headers: dict[str, str],
+    dlp_mode,
+) -> None:
+    dlp_mode("redact")
+    response = client.post(
+        "/api/v1/chat/completions", headers=client_headers, json=_TOOL_CALL_DEMO
+    )
+    assert response.status_code == 200, response.text
+
+    body = response.json()
+    arguments = body["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+    assert "AKIAIOSFODNN7EXAMPLE" not in arguments
+    assert "[REDACTED:aws_access_key]" in arguments
+    assert body["shadow_agent"]["response_dlp"]["matches"]
+
+
+def test_tool_call_arguments_can_be_blocked_non_streaming(
+    client: TestClient,
+    client_headers: dict[str, str],
+    dlp_mode,
+) -> None:
+    dlp_mode("block")
+    response = client.post(
+        "/api/v1/chat/completions", headers=client_headers, json=_TOOL_CALL_DEMO
+    )
+    assert response.status_code == 403, response.text
+    detail = response.json()["detail"]
+    assert detail["layer"] == "response_dlp"
+    assert "arguments" in detail["dlp_scope"]
+
+
+def test_tool_call_arguments_are_redacted_while_streaming(
+    client: TestClient,
+    client_headers: dict[str, str],
+    dlp_mode,
+) -> None:
+    """The secret is split inside the key, so the hold-back window must catch it."""
+    dlp_mode("redact")
+    with client.stream(
+        "POST",
+        "/api/v1/chat/completions",
+        headers=client_headers,
+        json={**_TOOL_CALL_DEMO, "stream": True},
+    ) as response:
+        assert response.status_code == 200
+        arguments, error = _read_tool_arguments_stream(response)
+
+    assert error is None
+    assert arguments, "the stream dropped the tool call entirely"
+    assert "AKIAIOSFODNN7EXAMPLE" not in arguments
+    assert "[REDACTED:aws_access_key]" in arguments
+
+
+def test_redaction_keeps_tool_argument_json_parsable(
+    client: TestClient,
+    client_headers: dict[str, str],
+    dlp_mode,
+) -> None:
+    """Redaction must replace the secret in place, not corrupt the arguments.
+
+    The agent runtime parses this string as JSON, so a broken document would
+    turn a security control into an outage.
+    """
+    dlp_mode("redact")
+    with client.stream(
+        "POST",
+        "/api/v1/chat/completions",
+        headers=client_headers,
+        json={**_TOOL_CALL_DEMO, "stream": True},
+    ) as response:
+        arguments, error = _read_tool_arguments_stream(response)
+
+    assert error is None
+    restored = json.loads(arguments)  # raises if the JSON document was broken
+    assert restored["path"] == "config.txt"
+    assert "AKIAIOSFODNN7EXAMPLE" not in restored["content"]
+    assert "[REDACTED:aws_access_key]" in restored["content"]
