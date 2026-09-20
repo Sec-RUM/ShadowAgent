@@ -33,7 +33,7 @@ from app.tenancy import (
     membership_role,
     user_memberships,
 )
-from app.utils import _normalized_email
+from app.utils import _normalized_email, is_valid_email
 from database import get_db
 from models import ConsoleUser, Organization, OrganizationMembership
 from security_controls import (
@@ -61,6 +61,21 @@ async def register_console_user(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     email = _normalized_email(payload.email)
+
+    # The email is the account's identity, so reject malformed shapes here
+    # rather than storing them. Login stays permissive on purpose: accounts
+    # created before this check must not be locked out.
+    if not is_valid_email(email):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_email",
+                "message": (
+                    "Enter a valid email address, for example name@example.com."
+                ),
+            },
+        )
+
     existing = db.query(ConsoleUser).filter(ConsoleUser.email == email).one_or_none()
     if existing is not None:
         raise HTTPException(

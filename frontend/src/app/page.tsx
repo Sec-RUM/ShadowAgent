@@ -1086,6 +1086,28 @@ function severityChipClass(severity: PolicyRule["severity"]) {
   return "chip-success";
 }
 
+/* 邮箱格式校验：与后端 app/utils.py 的 is_valid_email 保持同一套规则。
+   注册时账号邮箱即身份，格式必须在**发出请求前**就拦住 —— 否则用户只会看到
+   一个来自后端的 400/422，而表单本身毫无反馈。
+   ⚠️ 只用于注册；登录不做形状拦截，以免把历史上已存在的非标准账号锁在门外。 */
+const EMAIL_LOCAL_PATTERN = /^[A-Za-z0-9._%+\-]+$/;
+const EMAIL_LABEL_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?$/;
+const EMAIL_TLD_PATTERN = /^[A-Za-z]{2,63}$/;
+
+function isValidEmailInput(value: string): boolean {
+  const candidate = value.trim();
+  if (candidate.length < 3 || candidate.length > 255) return false;
+  if (candidate.split("@").length !== 2) return false;
+  const [local, domain] = candidate.split("@");
+  if (local.length < 1 || local.length > 64) return false;
+  if (!EMAIL_LOCAL_PATTERN.test(local)) return false;
+  if (local.startsWith(".") || local.endsWith(".") || local.includes("..")) return false;
+  const labels = domain.split(".");
+  if (labels.length < 2) return false;
+  if (!EMAIL_TLD_PATTERN.test(labels[labels.length - 1])) return false;
+  return labels.slice(0, -1).every((label) => EMAIL_LABEL_PATTERN.test(label));
+}
+
 /* 风险档位竖条：与拦截日志行同一套语义色，跨视图保持一致的「颜色=风险」心智。 */
 function severityTick(severity: PolicyRule["severity"]) {
   if (severity === "high") return "bg-[var(--tone-danger)]";
@@ -1753,6 +1775,8 @@ export default function Home() {
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authForm, setAuthForm] = useState({ name: "", email: "", password: "", confirmPassword: "", bootstrapToken: "", inviteToken: "" });
   const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatus | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState("");
   const [ssoSlug, setSsoSlug] = useState("");
   const [ssoBusy, setSsoBusy] = useState(false);
   const [ssoHint, setSsoHint] = useState("");
@@ -3137,26 +3161,42 @@ export default function Home() {
     const email = authForm.email.trim().toLowerCase();
     const password = authForm.password;
 
+    // 校验失败必须**同时**给内联错误与 toast：只弹 toast 时用户很容易认为
+    // 「点了没反应」——toast 会自动消失，且可能落在可视区之外。
+    const fail = (message: string) => {
+      setAuthError(message);
+      addToast(message, "error");
+    };
+
+    setAuthError("");
+
     if (!email || !password) {
-      addToast("请输入邮箱和密码", "error");
+      fail("请输入邮箱和密码");
       return;
     }
 
     if (authMode === "register") {
       if (!authForm.name.trim()) {
-        addToast("请输入姓名", "error");
+        fail("请输入姓名");
+        return;
+      }
+      // 注册即建立身份，格式必须在发请求前拦住（后端同样会校验）。
+      // 登录不做形状拦截：历史上已存在的非标准账号不能被锁在门外。
+      if (!isValidEmailInput(email)) {
+        fail("邮箱格式不正确，请填写形如 name@example.com 的地址");
         return;
       }
       if (password.length < 6) {
-        addToast("密码至少需要 6 位", "error");
+        fail("密码至少需要 6 位");
         return;
       }
       if (password !== authForm.confirmPassword) {
-        addToast("两次输入的密码不一致", "error");
+        fail("两次输入的密码不一致");
         return;
       }
     }
 
+    setAuthBusy(true);
     try {
       const endpoint =
         authMode === "login"
@@ -3207,6 +3247,7 @@ export default function Home() {
       removeStorage(STORAGE_KEYS.session);
       setAuthForm({ name: "", email: "", password: "", confirmPassword: "", bootstrapToken: "", inviteToken: "" });
       void loadBootstrapStatus();
+      setAuthError("");
       addToast(
         authMode === "login"
           ? "登录成功"
@@ -3216,7 +3257,12 @@ export default function Home() {
         "success"
       );
     } catch (error) {
-      addToast(error instanceof Error ? error.message : authMode === "login" ? "登录失败" : "注册失败", "error");
+      const message =
+        error instanceof Error ? error.message : authMode === "login" ? "登录失败" : "注册失败";
+      setAuthError(message);
+      addToast(message, "error");
+    } finally {
+      setAuthBusy(false);
     }
   };
 
@@ -4560,7 +4606,10 @@ export default function Home() {
             <div className="flex gap-1 rounded-[var(--radius-sm)] border border-[var(--panel-border-soft)] bg-[var(--surface-sunken)] p-1">
               <button
                 type="button"
-                onClick={() => setAuthMode("login")}
+                onClick={() => {
+                  setAuthMode("login");
+                  setAuthError("");
+                }}
                 className={`min-h-9 flex-1 rounded-[var(--radius-xs)] text-[length:var(--text-caption)] font-semibold transition-colors duration-[var(--dur-fast)] ${
                   authMode === "login"
                     ? "border border-[var(--panel-border)] bg-[var(--panel-bg-solid)] text-[var(--text-primary)] shadow-[var(--panel-shadow-soft)]"
@@ -4571,7 +4620,10 @@ export default function Home() {
               </button>
               <button
                 type="button"
-                onClick={() => setAuthMode("register")}
+                onClick={() => {
+                  setAuthMode("register");
+                  setAuthError("");
+                }}
                 className={`min-h-9 flex-1 rounded-[var(--radius-xs)] text-[length:var(--text-caption)] font-semibold transition-colors duration-[var(--dur-fast)] ${
                   authMode === "register"
                     ? "border border-[var(--panel-border)] bg-[var(--panel-bg-solid)] text-[var(--text-primary)] shadow-[var(--panel-shadow-soft)]"
@@ -4618,7 +4670,14 @@ export default function Home() {
                   className={inputBase}
                   type="email"
                   autoComplete="email"
+                  required
+                  aria-describedby="auth-form-error"
                 />
+                {authMode === "register" ? (
+                  <span className="mt-2 block text-[length:var(--text-micro)] leading-5 text-[var(--text-muted)]">
+                    将作为账号身份与登录凭据，须为有效邮箱地址，如 name@example.com
+                  </span>
+                ) : null}
               </label>
               <label className="block">
                 <span className="mb-2 block text-[length:var(--text-body)] text-[var(--text-secondary)]">密码</span>
@@ -4628,7 +4687,15 @@ export default function Home() {
                   className={inputBase}
                   type="password"
                   autoComplete={authMode === "login" ? "current-password" : "new-password"}
+                  required
+                  minLength={authMode === "register" ? 6 : undefined}
+                  aria-describedby="auth-form-error"
                 />
+                {authMode === "register" ? (
+                  <span className="mt-2 block text-[length:var(--text-micro)] leading-5 text-[var(--text-muted)]">
+                    至少 6 位
+                  </span>
+                ) : null}
               </label>
               {authMode === "register" ? (
                 <label className="block">
@@ -4666,9 +4733,31 @@ export default function Home() {
                   />
                 </label>
               ) : null}
-              <button type="submit" className={`${buttonClass("primary")} w-full`}>
-                {authMode === "login" ? <LogIn className="h-4 w-4" aria-hidden /> : <UserPlus className="h-4 w-4" aria-hidden />}
-                {authMode === "login" ? "进入控制台" : "创建账号并进入"}
+              {authError ? (
+                <p
+                  id="auth-form-error"
+                  role="alert"
+                  aria-live="polite"
+                  className="flex items-start gap-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--tone-danger)_30%,transparent)] bg-[var(--tone-danger-surface)] px-3 py-2 text-[length:var(--text-caption)] leading-5 text-[var(--tone-danger-text)]"
+                >
+                  <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+                  <span>{authError}</span>
+                </p>
+              ) : null}
+              <button
+                type="submit"
+                disabled={authBusy}
+                aria-busy={authBusy}
+                className={`${buttonClass("primary")} w-full disabled:cursor-not-allowed disabled:opacity-60`}
+              >
+                {authBusy ? (
+                  <RefreshCcw className="h-4 w-4 animate-spin" aria-hidden />
+                ) : authMode === "login" ? (
+                  <LogIn className="h-4 w-4" aria-hidden />
+                ) : (
+                  <UserPlus className="h-4 w-4" aria-hidden />
+                )}
+                {authBusy ? "提交中…" : authMode === "login" ? "进入控制台" : "创建账号并进入"}
               </button>
             </form>
 
