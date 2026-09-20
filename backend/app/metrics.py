@@ -187,6 +187,68 @@ def _escape_label(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
+def _pool_snapshot() -> dict[str, Any] | None:
+    """Live connection-pool state, or None if the DB layer is unavailable.
+
+    Imported lazily so this renderer stays usable (and unit-testable) without
+    initialising a database engine.
+    """
+    try:
+        from database import pool_stats
+    except ImportError:  # pragma: no cover - only when the DB layer is absent
+        return None
+    return pool_stats()
+
+
+def _render_pool_metrics(lines: list[str]) -> None:
+    """Expose pool saturation, which used to be invisible from the outside.
+
+    When the pool ceiling is reached, ``pool.checkout()`` blocks the event loop:
+    the gateway stops answering with no 5xx and no log line. Nothing about that
+    was observable from ``/metrics``, so the 2026-09-20 outage looked like a
+    network fault. ``saturation_events_total`` and the ``in_use`` gauge are the
+    two signals an operator should alarm on.
+    """
+    pool = _pool_snapshot()
+    if not pool:
+        return
+
+    lines.append("# HELP shadow_agent_db_pool_connections DB connection-pool usage.")
+    lines.append("# TYPE shadow_agent_db_pool_connections gauge")
+    for state in ("in_use", "available", "overflow"):
+        value = pool.get(state)
+        if value is None:
+            continue
+        lines.append('shadow_agent_db_pool_connections{state="%s"} %d' % (state, value))
+
+    lines.append("# HELP shadow_agent_db_pool_capacity Configured ceiling (pool_size + max_overflow); 0 means no ceiling.")
+    lines.append("# TYPE shadow_agent_db_pool_capacity gauge")
+    lines.append("shadow_agent_db_pool_capacity %d" % (pool.get("capacity") or 0))
+
+    lines.append("# HELP shadow_agent_db_pool_checkouts_total Connections handed out since start.")
+    lines.append("# TYPE shadow_agent_db_pool_checkouts_total counter")
+    lines.append("shadow_agent_db_pool_checkouts_total %d" % (pool.get("checkouts") or 0))
+
+    lines.append("# HELP shadow_agent_db_pool_max_in_use_since_start High-water mark of simultaneously held connections. Approaching capacity means the next traffic burst will stall the gateway.")
+    lines.append("# TYPE shadow_agent_db_pool_max_in_use_since_start gauge")
+    lines.append(
+        "shadow_agent_db_pool_max_in_use_since_start %d" % (pool.get("max_in_use") or 0)
+    )
+
+    lines.append("# HELP shadow_agent_db_pool_saturated_checkouts_total Checkouts granted while every connection was already held. A LOWER BOUND: a request that blocks in checkout() and gives up never reaches this event.")
+    lines.append("# TYPE shadow_agent_db_pool_saturated_checkouts_total counter")
+    lines.append(
+        "shadow_agent_db_pool_saturated_checkouts_total %d"
+        % (pool.get("saturated_checkouts") or 0)
+    )
+
+    lines.append("# HELP shadow_agent_db_pool_timeout_total Requests that gave up waiting for a connection (sqlalchemy.exc.TimeoutError). This is the accurate starvation count: any non-zero value means the gateway stalled.")
+    lines.append("# TYPE shadow_agent_db_pool_timeout_total counter")
+    lines.append(
+        "shadow_agent_db_pool_timeout_total %d" % (pool.get("timeouts") or 0)
+    )
+
+
 def render_metrics() -> str:
     """Render counters/histograms in Prometheus text exposition format."""
     lines: list[str] = []
@@ -299,6 +361,8 @@ def render_metrics() -> str:
             % (_escape_label(table), count)
         )
 
+    _render_pool_metrics(lines)
+
     lines.append("")
     return "\n".join(lines)
 
@@ -342,4 +406,5 @@ def metrics_snapshot() -> dict[str, Any]:
                 for (scope, action), count in _dlp_actions.items()
             },
             "dlp_matches": dict(_dlp_matches),
+            "db_pool": _pool_snapshot(),
         }

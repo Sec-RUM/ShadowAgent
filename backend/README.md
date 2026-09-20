@@ -635,7 +635,52 @@ WARNING
 Scenarios: `health`, `chat` (clean request through the full engine),
 `injection` (blocked request, exercises intercept logging), `analyze`,
 `logs`, `mixed`. Output includes RPS, p50/p90/p95/p99, and status-code
-distribution. See `docs/launch-checklist.md` for recorded baselines.
+distribution. Note `--concurrency` is workers **per scenario**, so `mixed`
+(9 entries) runs at 9x that many concurrent workers and its latency is not
+comparable to a single-scenario row. See `docs/launch-checklist.md` for
+recorded baselines.
+
+### Concurrency gate (pass/fail, hardware-independent)
+
+Absolute RPS is not portable — the same commit measured 13-20% apart across
+sessions, and a pristine `HEAD` reproduced the lower figure, so the drift is
+machine load rather than code. `tools/perf_gate.py` therefore gates on the
+*shape* of the load response instead:
+
+```powershell
+cd backend
+python tools/perf_gate.py          # boots its own server
+python tools/perf_gate.py --base-url http://127.0.0.1:8018 `
+    --client-key <key> --admin-key <key>
+```
+
+Two tiers, because offered concurrency must exceed the pool ceiling for that
+ceiling to be tested at all — the connection-pool defect of 2026-09-20 was
+invisible at `c=8` (pool peak 7 of 15) and only appeared at `c=32` (peak 23):
+
+- **tier 1** `chat` at `c=32`: no 5xx, no client timeouts, p95 far below the
+  30s client timeout
+- **tier 2** the five single scenarios at `c=8`: no 5xx/599, blocked-path p95
+  within `--max-blocked-ratio` of allowed-path p95
+- both tiers: `/health` still answers afterwards, and the pool starved nobody
+  (`shadow_agent_db_pool_timeout_total == 0`)
+
+Exit codes: `0` pass, `1` criteria failed, `2` could not run.
+
+### Connection-pool sizing
+
+`SHADOW_AGENT_DB_POOL_SIZE` (default 20), `SHADOW_AGENT_DB_MAX_OVERFLOW`
+(default 40) and `SHADOW_AGENT_DB_POOL_TIMEOUT` (default 5, seconds) size the
+request-path pool. Defaults give a 60-connection ceiling against a measured
+peak demand of 23 at `c=32`.
+
+**The ceiling must exceed peak concurrent connection demand, which depends on
+concurrency and on connection hold time — not on handler CPU time.** Measured
+hold time is 8-24 ms while the handler spends ~2 ms on CPU, so "the handler is
+fast, the pool must be sufficient" is a false inference. Re-measure the peak
+before moving to PostgreSQL or multiple workers; do not carry these numbers
+over. Watch `shadow_agent_db_pool_timeout_total` (any non-zero value means
+requests starved) and `shadow_agent_db_pool_max_in_use_since_start`.
 
 ## High Availability / Multi-Instance
 

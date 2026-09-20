@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 from pathlib import Path
 from threading import Lock
 from typing import Generator
 
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+logger = logging.getLogger("shadow_agent.db")
 
 
 def _configured_database_url() -> str:
@@ -30,28 +34,70 @@ def _configured_database_url() -> str:
 DATABASE_URL = _configured_database_url()
 
 
+DEFAULT_POOL_SIZE = 20
+DEFAULT_MAX_OVERFLOW = 40
+DEFAULT_POOL_TIMEOUT = 5
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    """Read a positive integer override, falling back on anything unusable."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("%s=%r is not an integer; using %d", name, raw, default)
+        return default
+    if value <= 0:
+        logger.warning("%s=%d must be positive; using %d", name, value, default)
+        return default
+    return value
+
+
 def _pool_kwargs(database_url: str) -> dict:
     """Connection-pool sizing for the request path.
 
     SQLAlchemy's default QueuePool ceiling is ``pool_size=5 + max_overflow=10
     = 15``, and ``pool.checkout()`` is a *synchronous* call executed on the
-    server's event loop. Once ~32 concurrent gateway clients contend for those
-    15 connections, the loop blocks inside ``pool.checkout()`` instead of
-    serving anything, so every request stalls:
+    server's event loop. Once more connections are wanted than exist, the loop
+    blocks inside ``pool.checkout()`` instead of serving anything, so every
+    request stalls with no 5xx and nothing logged -- it reads like a network
+    fault. Measured with pool checkout/checkin events (``chat``, simulated
+    upstream):
 
-        measured (before): chat c=32 -> 3.0 rps, 32 x 30s client timeouts
-                           chat c=72 -> 3.8 rps, 72 x 30s client timeouts
-        measured (after):  chat c=32 -> 243 rps, p95 210ms, 0 errors
-                           chat c=72 -> 189 rps, p95 1.03s, 0 errors
+        original 15, c=32 ->   4.8 rps, 32 x 30s client timeouts,
+                               peak held 15, connection hold p95 30046 ms
+        fixed    60, c=32 -> 246.4 rps, 0 errors, peak held 23, hold p95 51 ms
+        original 15, c=8  -> 283.5 rps, 0 errors, peak held  7, hold p95 15 ms
 
-    ``pool_timeout`` is lowered from the 30s default so saturation surfaces as
-    a fast error instead of pinning the event loop for 30 seconds.
+    The ceiling of 15 was genuinely too low: peak demand at c=32 is 23
+    concurrent connections. Note that a connection is held for 8-24 ms, *not*
+    for the ~2 ms the handler spends on CPU -- so "the handler is fast, the pool
+    must be sufficient" is not a valid inference.
+
+    ``pool_timeout`` is lowered from the 30s default so a future shortage
+    surfaces as a fast error instead of pinning the event loop for 30 seconds.
+
+    Override per deployment with ``SHADOW_AGENT_DB_POOL_SIZE``,
+    ``SHADOW_AGENT_DB_MAX_OVERFLOW`` and ``SHADOW_AGENT_DB_POOL_TIMEOUT``.
+    **The ceiling must exceed peak concurrent connection demand, which is a
+    function of concurrency and hold time -- re-measure it before going to
+    PostgreSQL or multiple workers; do not assume these numbers carry over.**
     """
     if database_url in ("sqlite://", "sqlite:///") or ":memory:" in database_url:
         # In-memory SQLite is served by SingletonThreadPool, which rejects
         # these arguments (and needs no sizing).
         return {}
-    return {"pool_size": 20, "max_overflow": 40, "pool_timeout": 5}
+    return {
+        "pool_size": _env_positive_int("SHADOW_AGENT_DB_POOL_SIZE", DEFAULT_POOL_SIZE),
+        "max_overflow": _env_positive_int(
+            "SHADOW_AGENT_DB_MAX_OVERFLOW", DEFAULT_MAX_OVERFLOW
+        ),
+        "pool_timeout": _env_positive_int(
+            "SHADOW_AGENT_DB_POOL_TIMEOUT", DEFAULT_POOL_TIMEOUT
+        ),
+    }
 
 
 class Base(DeclarativeBase):
@@ -78,6 +124,128 @@ if DATABASE_URL.startswith("sqlite"):
             cursor.execute("PRAGMA busy_timeout=5000")
         finally:
             cursor.close()
+
+
+# --- connection-pool instrumentation ----------------------------------------
+#
+# The pool's failure mode is a *silent* stall: `pool.checkout()` runs on the
+# event loop, so when every connection is held the process stops serving rather
+# than raising, and nothing is logged. That is precisely why the 2026-09-20
+# incident took a whole session to localise -- it presented as a network fault
+# (zero bytes returned, no errors, `/health` dead too). These counters exist so
+# that the next occurrence is one glance at `/metrics`, and so an operator can
+# alarm on the ceiling being approached instead of discovering it in an outage.
+#
+# Cost: one lock acquire plus a few integer updates per checkout/checkin, and a
+# `pool.size()` call. Negligible against a request that performs DB I/O.
+
+_pool_lock = Lock()
+_pool_state: dict[str, int] = {
+    "checkouts": 0,
+    "in_use": 0,
+    "max_in_use": 0,
+    "saturated_checkouts": 0,
+    "timeouts": 0,
+}
+_last_saturation_warning = 0.0
+_SATURATION_WARNING_INTERVAL_SECONDS = 10.0
+
+
+def record_pool_timeout() -> None:
+    """Count one request that gave up waiting for a connection.
+
+    This is the *accurate* starvation signal. The ``saturated_checkouts``
+    counter below can only see checkouts that eventually succeeded, so it
+    undercounts precisely when it matters: a request that blocks in
+    ``checkout()`` until ``pool_timeout`` raises never reaches the ``checkout``
+    event. Main registers an exception handler for
+    ``sqlalchemy.exc.TimeoutError`` that calls this.
+    """
+    with _pool_lock:
+        _pool_state["timeouts"] += 1
+
+
+def _pool_capacity() -> int | None:
+    """Configured ceiling (pool_size + max_overflow), or None if not applicable.
+
+    Returns None for pools that have no ceiling -- notably the
+    SingletonThreadPool used by in-memory SQLite.
+    """
+    pool = engine.pool
+    try:
+        return int(pool.size()) + int(pool._max_overflow)  # noqa: SLF001
+    except (AttributeError, TypeError):
+        return None
+
+
+@event.listens_for(engine, "checkout")
+def _on_pool_checkout(_dbapi_connection, _connection_record, _connection_proxy) -> None:
+    """Track pool usage and shout once when the ceiling is actually reached."""
+    global _last_saturation_warning
+
+    with _pool_lock:
+        _pool_state["checkouts"] += 1
+        _pool_state["in_use"] += 1
+        if _pool_state["in_use"] > _pool_state["max_in_use"]:
+            _pool_state["max_in_use"] = _pool_state["in_use"]
+        capacity = _pool_capacity()
+        saturated = capacity is not None and _pool_state["in_use"] >= capacity
+        if saturated:
+            _pool_state["saturated_checkouts"] += 1
+        now = time.monotonic()
+        should_warn = saturated and (
+            now - _last_saturation_warning >= _SATURATION_WARNING_INTERVAL_SECONDS
+        )
+        if should_warn:
+            _last_saturation_warning = now
+        in_use = _pool_state["in_use"]
+        checkouts = _pool_state["checkouts"]
+        saturated_checkouts = _pool_state["saturated_checkouts"]
+        timeouts = _pool_state["timeouts"]
+
+    if should_warn:
+        # Rate-limited: at saturation this fires once per interval, not per
+        # request, so it cannot itself flood the log.
+        logger.warning(
+            "DB connection pool saturated: %d/%s connections held "
+            "(%d checkouts, %d saturated, %d requests already timed out waiting "
+            "since start). Requests stall while this holds because "
+            "pool.checkout() blocks the event loop. Raise "
+            "SHADOW_AGENT_DB_POOL_SIZE / SHADOW_AGENT_DB_MAX_OVERFLOW, or lower "
+            "client concurrency.",
+            in_use,
+            capacity,
+            checkouts,
+            saturated_checkouts,
+            timeouts,
+        )
+
+
+@event.listens_for(engine, "checkin")
+def _on_pool_checkin(_dbapi_connection, _connection_record) -> None:
+    with _pool_lock:
+        if _pool_state["in_use"] > 0:
+            _pool_state["in_use"] -= 1
+
+
+def pool_stats() -> dict[str, int | None]:
+    """Pool configuration plus live usage, for ``/metrics`` and diagnostics."""
+    pool = engine.pool
+    with _pool_lock:
+        state: dict[str, int | None] = dict(_pool_state)
+    state["capacity"] = _pool_capacity()
+
+    def _safe(call) -> int | None:  # noqa: ANN001
+        try:
+            return int(call())
+        except (AttributeError, TypeError):
+            return None
+
+    state["size"] = _safe(pool.size)
+    state["overflow"] = _safe(pool.overflow)
+    state["available"] = _safe(pool.checkedin)
+    return state
+
 
 SessionLocal = sessionmaker(
     autocommit=False,

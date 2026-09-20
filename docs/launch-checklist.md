@@ -54,6 +54,13 @@
   supervisor/journald 停止读取、重定向到已写满的磁盘、NSSM 等包装器丢弃输出等。
 - [ ] 日志保留期已按 [gdpr.md](compliance/gdpr.md) 第 5 节决策并设置 `SHADOW_AGENT_*_RETENTION_DAYS` 环境变量（内置自动清理，默认拦截/告警/重放 180 天、审计 365 天）
 - [ ] `/metrics` 中 `shadow_agent_retention_purged_rows_total` 已纳入监控（首次大额清理属预期行为）
+- [ ] **数据库连接池饱和已纳入监控（阻断项）**：`shadow_agent_db_pool_timeout_total`
+  **任何非零值即告警** —— 它表示有请求在等连接时耗尽了 `pool_timeout`，也就是网关发生了停顿。
+  `shadow_agent_db_pool_connections{state="in_use"}` 与 `shadow_agent_db_pool_capacity`
+  接近（>80%）时应提前扩容。**池上限必须大于峰值并发连接需求**（进程内实测：c=8 峰值 7 条、
+  c=32 峰值 23 条；持有时长 8–24ms，与 handler 的 ~2ms CPU 时间无关）。
+  历史教训：该指标此前**完全不存在**，池饱和时网关静默停摆（零字节返回、无 5xx、无日志），
+  排查耗时一整轮会话，最终靠 `faulthandler` 抓栈才发现。
 - [ ] 备份恢复演练至少完成一次
 - [ ] Redis 故障时的 fail-open 降级行为已纳入应急预案（限流退化为单实例）
 
@@ -131,6 +138,17 @@ health 841 / chat 294 / injection 152 / analyze 357 / logs 499 rps，
 
 生产环境用 `backend/perf/load_test.py` 重测并记录到运维文档（注意其 docstring 中的
 stdout 消费与限流/上游三条要求，否则测得的数字无效）。
+
+**自动门禁（相对判据，硬件无关）**：`cd backend && python tools/perf_gate.py`
+（exit 0 通过 / 1 判据失败 / 2 无法运行）。两档：
+
+- **档 1 并发压力**：`chat` @ `c=32`（**必须超过池上限才压得到上限**——原缺陷在 c=8 完全不显形）
+- **档 2 相对延迟形状**：5 个单场景 @ `c=8`（不含 `mixed`，它是 72 路并发，不可比）
+
+判据：无 5xx、无客户端超时(599)、阻断路径 p95 不劣化放行路径 4 倍以上、压测后 `/health`
+仍在服务（无静默停摆）、**连接池未饿死任何请求**（`shadow_agent_db_pool_timeout_total == 0`）。
+已验证：旧配置（`SHADOW_AGENT_DB_POOL_SIZE=5 SHADOW_AGENT_DB_MAX_OVERFLOW=10`，即缺陷当时的 15 条）
+下门禁**失败**，默认配置下**通过**。
 
 
 ## 7. 发布后迭代

@@ -54,6 +54,11 @@ Scenarios:
     analyze    POST /api/v1/analyze                (analysis endpoint, no writes)
     logs       GET  /api/v1/logs                   (admin auth + DB read)
     mixed      weighted blend of the above
+
+Note that ``--concurrency`` is workers per scenario, so `mixed` (9 entries)
+runs at 9x that number of concurrent workers and its latency is not comparable
+to a single-scenario row. Use the two-tier gate in ``tools/perf_gate.py`` if you
+want a pass/fail signal rather than numbers to read.
 """
 
 from __future__ import annotations
@@ -295,6 +300,19 @@ def main() -> None:
 
     print(f"Load test against {args.base_url}")
     print(f"concurrency={args.concurrency}/scenario duration={args.duration}s scenarios={selected}")
+    # `--concurrency` is workers *per scenario*, so a blend runs far more
+    # concurrently than the flag suggests, and its latency is then compared
+    # against single-scenario rows that ran with a fraction of the load. State
+    # the effective number rather than leaving it to be inferred: reading the
+    # `mixed` row as "c=8" cost real time on 2026-09-20.
+    for name in selected:
+        entries = len(scenarios[name])
+        if entries > 1:
+            print(
+                f"  NOTE {name}: {entries} scenarios x {args.concurrency} = "
+                f"{entries * args.concurrency} concurrent workers -- not comparable "
+                f"to the single-scenario rows."
+            )
 
     overall_started = time.perf_counter()
     for name in selected:

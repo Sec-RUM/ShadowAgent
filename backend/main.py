@@ -17,8 +17,10 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import TimeoutError as DatabasePoolTimeout
 
 from env_loader import load_local_env
 
@@ -42,7 +44,7 @@ from app.routers import (
 from app import sso
 from app.tenancy import ensure_default_organization
 from app.upstream import _close_upstream_client
-from database import SessionLocal, init_database
+from database import SessionLocal, init_database, record_pool_timeout
 from security_controls import rate_limit_middleware, shared_state_backend
 from security_engine import (
     ensure_default_security_policies,
@@ -106,6 +108,40 @@ app.add_middleware(
 )
 app.add_middleware(MetricsMiddleware)
 app.middleware("http")(rate_limit_middleware)
+
+
+@app.exception_handler(DatabasePoolTimeout)
+async def _database_pool_timeout(_request: Request, _exc: DatabasePoolTimeout) -> JSONResponse:
+    """Report connection-pool exhaustion as a capacity fault, not a server bug.
+
+    Unhandled, ``sqlalchemy.exc.TimeoutError`` reaches Starlette's catch-all and
+    leaves as HTTP 500 with a full traceback: an operator gets paged for a code
+    fault, and the client receives no signal that retrying is safe. Verified on
+    2026-09-20 -- with the ceiling forced back to 15, a c=32 burst produced
+    ``sqlalchemy.exc.TimeoutError: QueuePool limit of size 5 overflow 10
+    reached`` as a bare 500. Answering 503 + Retry-After matches how the rate
+    limiter already replies (429 + Retry-After) and tells an OpenAI-compatible
+    client to back off.
+
+    This does not make exhaustion harmless; it makes it legible. The capacity
+    itself is fixed by a pool ceiling above peak concurrent demand (see
+    ``database._pool_kwargs``) and watched via
+    ``shadow_agent_db_pool_timeout_total``.
+    """
+    record_pool_timeout()
+    logging.getLogger("shadow_agent.db").error(
+        "Connection-pool timeout served as 503: every pooled connection is held. "
+        "Raise SHADOW_AGENT_DB_POOL_SIZE / SHADOW_AGENT_DB_MAX_OVERFLOW or lower "
+        "client concurrency."
+    )
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "database_pool_exhausted",
+            "message": "The gateway is out of database connections. Retry shortly.",
+        },
+        headers={"Retry-After": "1"},
+    )
 
 app.include_router(auth.router)
 app.include_router(api_keys.router)
