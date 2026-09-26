@@ -96,7 +96,7 @@ async def _app_lifespan(app: FastAPI):
 app = FastAPI(
     title="Shadow Agent Gateway",
     description="Middleware sandbox prototype for LLM agent runtime security.",
-    version="0.2.1",
+    version="0.3.0",
     lifespan=_app_lifespan,
 )
 
