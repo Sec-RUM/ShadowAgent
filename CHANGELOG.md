@@ -18,6 +18,84 @@
 
 ## [Unreleased]
 
+### Added
+
+- **审计留痕脱敏**：`SHADOW_AGENT_LOG_REDACT` = `secrets`（默认）/ `full` / `off`。
+  写入 `intercept_logs` / `audit_logs` 的 prompt 与上下文片段统一走
+  `app.dlp.redact_for_log()`：默认在原有 `key=value` / `Bearer` 之外，补齐
+  AWS / GitHub / OpenAI / Slack / Google 密钥、JWT 与**整段 PEM 私钥**（此前只遮蔽
+  `-----BEGIN ...-----` 头部而留下密钥本体）。`full` 追加邮箱 / 中国大陆手机号 / 身份证号；
+  `off` 原样存储（仅限把审计库当取证材料的部署，启动时会打警告）。非法取值一律回退 `secrets`。
+- **请求体上限**：`SHADOW_AGENT_MAX_BODY_BYTES`（默认 2 MiB，`0` 关闭）。
+  两道判定：`Content-Length` 超限则在**读取任何字节前**返回 413；无声明长度（chunked）
+  则按实际到达的字节累计，越界即中断。计数区分 `declared` / `actual`，接进
+  `shadow_agent_body_rejected_total`。
+- **`/docs` 默认关闭**：`SHADOW_AGENT_DOCS_ENABLED`（默认 `false`）控制
+  `/docs`、`/redoc`、`/openapi.json` 是否注册 —— 关闭时这些路由**根本不存在**（404），
+  而不是"注册了再拦"。
+- **CI 依赖漏洞门禁**：新增 `dependency-audit` job，后端
+  `pip-audit -r requirements.txt --strict`（**阻断**，实测已清零），
+  前端 `npm audit --audit-level=high`（**当前 report-only**，原因见下方已知缺口）；
+  `backend/tests/test_ci_gates.py` 守护两者不被静默删除或悄悄改变阻断性。
+- 新增 `frontend/tools/osv_npm_audit.py`：当 registry 的审计接口不可达时，
+  用 OSV 批量接口直接对 `package-lock.json` 复核，并区分**生产树 / 仅开发**。
+- 启动时打印一次**安全姿态**（`log_redact` / `docs` / `max_body_bytes` / `upstream`）。
+
+### Changed
+
+- 中间件顺序显式化并加了注释：限流 → 指标 → CORS → 请求体上限 → 路由。
+  把 CORS 移到请求体护栏**外层**，使浏览器客户端能读到 413（限流 429 仍不含 CORS 头，
+  属既有缺口，本次未扩大亦未关闭）。
+- `security_controls` 拆出 `redact_sensitive_assignments()`（无截断版），
+  `redact_text()` 行为与输出**逐字节不变**，仅供组合式脱敏复用。
+- **`cryptography` 48.0.0 → 50.0.1**（补丁级升级，非重写）：
+  48.0.0 命中 4 条公告（3 HIGH），其中 `GHSA-537c-gmf6-5ccf` 是随 wheel 静态链接的
+  OpenSSL 越界读；另外三条 `CVE-2026-69247/69248/69249` 的修复线分别落在 49.0.0 与 50.0.0。
+  50.0.1 是该包首个 OSV 报告为空白的补丁版。全量测试在升级后复跑通过。
+
+### Fixed
+
+- **凭据曾以明文落库**：脱敏此前只覆盖 `key=value` 与 `Bearer <token>`，
+  一句"我的 key 是 `sk-proj-…`"会原样写进 `intercept_logs.original_prompt`。
+  该路径已修复，并有测试固定"旧函数确实漏、新函数确实拦"这一前提。
+- 请求体**此前完全无上限**：单个超大 POST 的内存开销只受宿主内存约束。
+- **后端运行时依赖存在已知漏洞**：`pip-audit --strict` 从"跑不出来的怀疑"变成"实测通过"，
+  入口是 `cryptography` 的那 4 条（详见 Changed）。
+
+### Security
+
+- 已核对 `cryptography` 4 条公告在本项目的可达性：本项目只经 PyJWT 用它做
+  **RS256/RS384/ES256/ES384 签名校验**（`app/sso.py`，密钥来自已配置的 IdP JWKS），
+  不涉及 X.509 路径构建、PKCS#7 EnvelopedData 或证书 name-constraint 校验。
+  换言之三条 X.509/PKCS#7 公告在本部署中不可达 —— 但**仍升级**，因为对安全产品而言，
+  把已修复的漏洞留在依赖里没有正当理由。
+
+### Performance
+
+- 落库脱敏的开销实测（4 KB 载荷，2000 次取分位）：`redact_for_log` p50 **0.74 ms** / p95 **0.99 ms**，
+  相对旧的 `redact_text`（p50 0.196 ms / p95 0.297 ms）增加约 0.54 ms。**放行路径不受影响** ——
+  它只在拦截写入、monitor 留痕与后台审计线程（`audit_log_executor`）三条非热路径上调用。
+- 请求体护栏的头部解析实测 p50 **0.4 µs**/请求（纯内存操作，无正则）；超限才走计数分支。
+
+### Known limitations
+
+- 🔴 **前端依赖存在未修复的真实公告（待决策）**。以 OSV 复核 `frontend/package-lock.json`
+  （428 个包）：**生产树 56 个包中有 5 个命中**，另有 6 个仅开发（构建期）包：
+
+  | 包 | 版本 | 命中 | 严重度 | 修复版本 |
+  | --- | --- | --- | --- | --- |
+  | `next` | 16.2.4 | 24 条 | **2 CRITICAL + 12 HIGH** + 其余 | **16.3.6**（最新稳定版） |
+  | `sharp` | 0.34.5 | 2 条 | 2 HIGH | 0.35.4 |
+  | `postcss` | 8.4.31 | 4 条 | 1 HIGH | 8.5.23 |
+  | `nanoid` | 3.3.12 | 2 条 | 2 HIGH | 3.3.18 |
+  | `baseline-browser-mapping` | 2.10.27 | 1 条 | MODERATE | 2.11.0 |
+
+  两条 CRITICAL 均为**未认证 RCE**（Image Optimization API / Windows 主机上的 server）。
+  修复方式是一次同主版本的小版本升级（`next` 16.2.4 → 16.3.6 需连 `eslint-config-next` 一起升），
+  但**本次未能完成**：本机 `npm install` 经可用代理 28 分钟仍未拉完（退出码 124），
+  因此没有把半成品的锁文件写进仓库，也没把前端这一步设成阻断（那会让 CI 从第一天起常红）。
+  在刷新依赖的那个 PR 里删掉 `continue-on-error` 与本条。
+
 ## [0.3.0] - 2026-09-26
 
 首个带 tag 的发布。以下按类别汇总自项目初始化以来的主要能力，条目均可追溯至提交历史。

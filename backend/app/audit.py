@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.alerts import enqueue_alert
 from app.auth_helpers import _principal_label
+from app.dlp import redact_for_log
 from app.events import publish_event
 from app.metrics import record_security_decision
 from database import SessionLocal
@@ -85,7 +86,7 @@ def _persist_audit_log(
             AuditLog(
                 org_id=org_id,
                 request_id=request_id,
-                original_instruction=redact_text(original_instruction),
+                original_instruction=redact_for_log(original_instruction),
                 risk_level=_risk_level(decision.risk_score),
                 triggered_rule_name=", ".join(decision.matched_rules) or "none",
                 intercept_reason=reason,
@@ -129,7 +130,13 @@ def _record_admin_action(
 
 
 def _record_auth_event(db: Session, action: str, email: str) -> None:
-    """Persist console authentication events for accountability."""
+    """Persist console authentication events for accountability.
+
+    Uses plain ``redact_text`` rather than ``redact_for_log``: the account is an
+    identity field, not payload. Masking it would erase who did what, which is
+    the only thing this record is for. Payload redaction (``redact_for_log``) is
+    for prompt and context text, where a secret may have been pasted by accident.
+    """
     db.add(
         AuditLog(
             request_id=f"auth-{uuid.uuid4()}",
@@ -222,7 +229,7 @@ def _create_approval_request(
             threat_type=threat_type,
             reason=decision.reason,
             recommended_action=decision.recommended_action,
-            original_prompt=redact_text(original_prompt),
+            original_prompt=redact_for_log(original_prompt),
             tool_name=(tool_name or "").strip(),
             categories=json.dumps(decision.categories, ensure_ascii=False),
             evidence=json.dumps(decision.evidence, ensure_ascii=False),
@@ -293,7 +300,7 @@ def _raise_if_blocked(
         "categories": decision.categories,
         "evidence": decision.evidence,
         "recommended_action": decision.recommended_action,
-        "source_excerpt": redact_text(source_excerpt, max_chars=500),
+        "source_excerpt": redact_for_log(source_excerpt, max_chars=500),
         **(details or {}),
     }
     db.add(
@@ -302,7 +309,7 @@ def _raise_if_blocked(
             request_id=request_id,
             threat_type=threat_type,
             action_taken="Blocked",
-            original_prompt=redact_text(original_prompt),
+            original_prompt=redact_for_log(original_prompt),
             details=json.dumps(sanitize_json(log_details), ensure_ascii=False),
         )
     )
@@ -403,7 +410,7 @@ def _log_semantic_monitor_event(
         "categories": decision.categories,
         "evidence": decision.evidence,
         "recommended_action": decision.recommended_action,
-        "source_excerpt": redact_text(source_excerpt, max_chars=500),
+        "source_excerpt": redact_for_log(source_excerpt, max_chars=500),
         "action_taken": "Monitored",
         **(details or {}),
     }
@@ -415,7 +422,7 @@ def _log_semantic_monitor_event(
                 request_id=request_id,
                 threat_type=threat_label,
                 action_taken="Monitored",
-                original_prompt=redact_text(original_prompt),
+                original_prompt=redact_for_log(original_prompt),
                 details=json.dumps(sanitize_json(log_details), ensure_ascii=False),
             )
         )

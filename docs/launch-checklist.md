@@ -42,7 +42,17 @@
 - [ ] 多租户隔离抽测：A 组织管理员按 id 访问/修改 B 组织的规则、密钥、日志均返回 404；SSE 事件流仅含本组织事件
 - [ ] SSO 回调校验：错误 state / 过期 state 重放被拒绝（`#error=sso_invalid_state`）；停用账号在回调时被拒绝
 - [ ] 若启用 SSO：`SHADOW_AGENT_CONSOLE_URL` / `SHADOW_AGENT_PUBLIC_BASE_URL` 为生产域名，IdP 侧已注册 `{PUBLIC_BASE_URL}/api/v1/auth/sso/callback` 回调地址，JIT 默认角色与邀请策略经过评审
-- [ ] 无任何测试后门/调试端点残留（`/docs`、`/redoc` 视需要经反代屏蔽）
+- [ ] 无任何测试后门/调试端点残留：`SHADOW_AGENT_DOCS_ENABLED` 保持 `false`（默认），
+      `GET /docs`、`/redoc`、`/openapi.json` 均返回 404 —— **应用内已强制**，不再依赖反代屏蔽
+- [ ] 已按业务决定 `SHADOW_AGENT_LOG_REDACT`：默认 `secrets` 会遮蔽凭据形状后再落库；
+      若某次排查确需原文，临时切 `full`（更严）而不是 `off`
+- [ ] 已确认 `SHADOW_AGENT_MAX_BODY_BYTES`（默认 2 MiB）不会截断真实业务的最大上下文；
+      该值与前置反代/网关的上限**取更小者生效**，压测时的超大用例需相应调整
+- [ ] 启动日志中的 `ShadowAgent posture:` 一行与预期一致（`log_redact` / `docs` / `max_body_bytes` / `upstream`）
+- [ ] **依赖漏洞已清零（前端当前不满足）**：后端 `pip-audit -r backend/requirements.txt --strict`
+      退出码为 0（2026-09-26 实测通过）；前端生产树仍有 `next` 等 5 个包的公告
+      （含 2 条未认证 RCE），需先做一次依赖刷新 —— 详见 CHANGELOG「Known limitations」。
+      刷新后再把 CI 里的 `continue-on-error` 去掉，该步即转为阻断
 
 ## 4. 可观测性与运维
 

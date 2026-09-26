@@ -41,6 +41,15 @@ services:
       # deny (default) keeps the tool allowlist strict; set "allow" when
       # connecting real agents whose tool names are not enumerated as policies.
       SHADOW_AGENT_UNKNOWN_TOOL_POLICY: ${SHADOW_AGENT_UNKNOWN_TOOL_POLICY:-deny}
+      # How much of a prompt is masked before it is written to intercept_logs /
+      # audit_logs: secrets (default) | full | off. "off" stores payloads as
+      # received and is only for forensic deployments.
+      SHADOW_AGENT_LOG_REDACT: ${SHADOW_AGENT_LOG_REDACT:-secrets}
+      # Request body ceiling in bytes (default 2 MiB); 0 disables the guard.
+      SHADOW_AGENT_MAX_BODY_BYTES: ${SHADOW_AGENT_MAX_BODY_BYTES:-2097152}
+      # /docs, /redoc and /openapi.json are opt-in: they map every route,
+      # including the admin-only ones, for an unauthenticated caller.
+      SHADOW_AGENT_DOCS_ENABLED: ${SHADOW_AGENT_DOCS_ENABLED:-false}
       SHADOW_AGENT_REDIS_URL: ${SHADOW_AGENT_REDIS_URL:-}
       SHADOW_AGENT_LOG_RETENTION_DAYS: ${SHADOW_AGENT_LOG_RETENTION_DAYS:-180}
       SHADOW_AGENT_AUDIT_LOG_RETENTION_DAYS: ${SHADOW_AGENT_AUDIT_LOG_RETENTION_DAYS:-365}

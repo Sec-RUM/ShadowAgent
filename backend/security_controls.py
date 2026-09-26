@@ -775,7 +775,14 @@ def sanitize_request_id(value: str | None) -> str:
     return REQUEST_ID_PATTERN.sub("-", value)[:96]
 
 
-def redact_text(value: str, max_chars: int = 4000) -> str:
+def redact_sensitive_assignments(value: str) -> str:
+    """Mask ``key=value`` credential assignments and ``Bearer <token>``.
+
+    Only the two ``SENSITIVE_TEXT_PATTERNS`` shapes; no truncation. Split out of
+    :func:`redact_text` so a caller that composes further redaction (see
+    ``app.dlp.redact_for_log``) can reuse the exact same substitution instead of
+    re-implementing it.
+    """
     redacted = value
     for pattern in SENSITIVE_TEXT_PATTERNS:
         redacted = pattern.sub(
@@ -786,6 +793,11 @@ def redact_text(value: str, max_chars: int = 4000) -> str:
             ),
             redacted,
         )
+    return redacted
+
+
+def redact_text(value: str, max_chars: int = 4000) -> str:
+    redacted = redact_sensitive_assignments(value)
     if len(redacted) > max_chars:
         return redacted[:max_chars] + "...[truncated]"
     return redacted

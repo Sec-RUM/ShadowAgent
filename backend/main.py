@@ -27,9 +27,11 @@ from env_loader import load_local_env
 load_local_env()
 
 from app.audit import audit_log_executor
-from app.config import _allowed_origins, _upstream_proxy_enabled
+from app.config import _allowed_origins, _upstream_proxy_enabled, docs_urls
+from app.dlp import log_redact_mode
 from app.logging_setup import configure_logging
 from app.metrics import MetricsMiddleware, router as metrics_router
+from app.request_guards import BodySizeLimitMiddleware, max_body_bytes
 from app.retention import cleanup_interval_seconds, run_retention_cleanup
 from app.routers import (
     api_keys,
@@ -74,11 +76,36 @@ async def _retention_cleanup_loop() -> None:
         await asyncio.sleep(interval)
 
 
+def _log_startup_posture() -> None:
+    """State the resolved security posture once, at startup.
+
+    A deployment that has switched a protection off should be able to find that
+    in the logs without reading the code, and one that believes it is protected
+    should be able to confirm it. Silent defaults are how "we thought that was
+    on" incidents start.
+    """
+    log_redact = log_redact_mode()
+    logger.info(
+        "ShadowAgent posture: log_redact=%s docs=%s max_body_bytes=%s upstream=%s",
+        log_redact,
+        "enabled" if _docs_url else "disabled",
+        max_body_bytes() or "unlimited",
+        "proxy" if _upstream_proxy_enabled() else "simulated",
+    )
+    if log_redact == "off":
+        logger.warning(
+            "SHADOW_AGENT_LOG_REDACT=off: intercept/audit rows are stored as "
+            "received. A prompt carrying a credential is persisted in clear and "
+            "readable by anyone with database access."
+        )
+
+
 @asynccontextmanager
 async def _app_lifespan(app: FastAPI):
     from app import events as event_bus
     from app import alerts as alert_bus
 
+    _log_startup_posture()
     event_bus.bind_main_loop(asyncio.get_running_loop())
     alert_bus.bind_main_loop(asyncio.get_running_loop())
     retention_task = asyncio.create_task(_retention_cleanup_loop())
@@ -93,13 +120,28 @@ async def _app_lifespan(app: FastAPI):
     audit_log_executor.shutdown(wait=True)
 
 
+_docs_url, _redoc_url, _openapi_url = docs_urls()
+
 app = FastAPI(
     title="Shadow Agent Gateway",
     description="Middleware sandbox prototype for LLM agent runtime security.",
     version="0.3.0",
     lifespan=_app_lifespan,
+    docs_url=_docs_url,
+    redoc_url=_redoc_url,
+    openapi_url=_openapi_url,
 )
 
+# Middleware order is load-bearing, and ``add_middleware`` prepends: the LAST
+# call ends up OUTERMOST. Reading outward-in, this stack is
+# rate limit -> metrics -> CORS -> body size -> routes.
+#
+# - Rate limiting outermost: nothing above it may be reached by a flood.
+# - Metrics above CORS and the body guard so their rejections are still counted.
+# - CORS wrapped *around* the body-size guard so a 413 is readable by a browser
+#   client. (A 429 from the rate limiter is still unreadable cross-origin -- a
+#   pre-existing gap this change does not widen or close.)
+app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),

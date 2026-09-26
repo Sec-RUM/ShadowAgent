@@ -73,6 +73,12 @@ SHADOW_AGENT_ALLOW_SIMULATED_RESPONSES=true
 SHADOW_AGENT_DATABASE_PATH=shadow_agent.db
 SHADOW_AGENT_SEMANTIC_MODE=enforce
 SHADOW_AGENT_RESPONSE_DLP_MODE=redact
+# What gets masked before a prompt is persisted (secrets|full|off).
+SHADOW_AGENT_LOG_REDACT=secrets
+# Request body ceiling in bytes; 0 disables the guard.
+SHADOW_AGENT_MAX_BODY_BYTES=2097152
+# /docs, /redoc and /openapi.json are opt-in.
+SHADOW_AGENT_DOCS_ENABLED=false
 ```
 
 Protected endpoints accept either:
@@ -425,6 +431,46 @@ keys, plus admin-managed custom rules) with
 (default `redact`). Streaming responses use a hold-back buffer so secrets
 split across SSE chunks are still caught. Custom rules are managed via
 `/api/v1/rules*` (admin-only CRUD with audit logging and validation).
+
+## What the Gateway Writes Down, Accepts and Serves
+
+Three knobs that decide how much the gateway exposes; all three default to the
+conservative side.
+
+`SHADOW_AGENT_LOG_REDACT` = `secrets` (default) | `full` | `off` — how much of a
+prompt is masked before it reaches `intercept_logs` / `audit_logs`. `secrets`
+masks credential shapes: `key=value` and `Bearer …` as before, plus bare
+AWS / GitHub / OpenAI-style / Slack / Google keys, JWTs and whole PEM private
+keys (masking only the `-----BEGIN …-----` header would leave the key material
+itself in the log). `full` adds email / mainland-China mobile / ID numbers.
+`off` stores payloads as received — for a deployment whose audit trail is read
+as forensic evidence; it makes every stored prompt a potential secret at rest,
+so the gateway logs a warning at startup. An unrecognized value falls back to
+`secrets`, never to `off`.
+
+Audit rows also survive a `retention` sweep, so the failure mode this guards
+against is a leaked backup of a 180-day-old prompt, not just a live request.
+
+`SHADOW_AGENT_MAX_BODY_BYTES` (default 2 MiB, `0` disables) caps the request
+body. Two checks: a `Content-Length` over the ceiling is refused before a single
+body byte is read, and a body with no declared length (chunked) is refused by
+counting the bytes that actually arrive. Without the second check the first is
+just a suggestion. Rejections are 413 with
+`{"error": "payload_too_large", ...}` and are counted in
+`shadow_agent_body_rejected_total{reason="declared"|"actual"}` — a spike in
+`actual` means a client is understating or omitting the length on purpose.
+
+`SHADOW_AGENT_DOCS_ENABLED` (default `false`) controls `/docs`, `/redoc` and
+`/openapi.json`. When off those routes are **never registered**, so they 404
+like any unknown path — `/openapi.json` enumerates every route including the
+admin-only ones, which is free reconnaissance for an unauthenticated caller.
+Nothing in the product needs them at runtime: the frontend has its own typed
+client and the SDK ships its own models. Turn this on only on a trusted
+interface.
+
+At startup the gateway logs one line stating the resolved posture
+(`log_redact=… docs=… max_body_bytes=… upstream=…`), so "we thought that was on"
+is answerable from the logs.
 
 ## Multi-Tenancy (Organizations)
 

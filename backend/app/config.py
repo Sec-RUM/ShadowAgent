@@ -149,6 +149,31 @@ def _console_invite_token() -> str:
     return _env_text("SHADOW_AGENT_CONSOLE_INVITE_TOKEN")
 
 
+def _docs_enabled() -> bool:
+    """Whether the OpenAPI schema and the interactive API docs are served.
+
+    Off by default. ``/openapi.json`` enumerates every route, parameter and
+    response shape -- including the admin-only ones -- and ``/docs`` renders it
+    as a clickable map. For an unauthenticated caller that is free
+    reconnaissance, and nothing in the product needs it at runtime: the frontend
+    has its own typed client and the SDK ships its own models. Operators who
+    want to explore the API set ``SHADOW_AGENT_DOCS_ENABLED=true`` (and should
+    keep the gateway on a trusted interface while they do).
+    """
+    return _env_text("SHADOW_AGENT_DOCS_ENABLED").lower() in {"1", "true", "yes", "on"}
+
+
+def docs_urls() -> tuple[str | None, str | None, str | None]:
+    """``(docs_url, redoc_url, openapi_url)``; all ``None`` when disabled.
+
+    ``None`` is how FastAPI is told not to register the route at all -- the paths
+    then 404 like any other unknown path, rather than being served and filtered.
+    """
+    if not _docs_enabled():
+        return None, None, None
+    return "/docs", "/redoc", "/openapi.json"
+
+
 def _console_bootstrap_required(db: Session) -> bool:
     return db.query(ConsoleUser.id).count() == 0
 

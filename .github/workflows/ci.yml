@@ -98,6 +98,63 @@ jobs:
       - name: Build
         run: npm run build
 
+  dependency-audit:
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Not pinned in requirements-dev.txt: a scanner is only useful if it can
+      # pick up new parsers and advisory sources, and it never ships in the
+      # image. The range keeps it on a known-major version.
+      - name: Install pip-audit
+        run: pip install "pip-audit>=2.7,<3"
+
+      # Blocking. Verified clean on 2026-09-26: cryptography 48.0.0 carried 4
+      # advisories (3 HIGH) and was bumped to 50.0.1, the first patch release
+      # with an empty OSV report for that package.
+      # --strict also fails when the dependency graph cannot be resolved, so a
+      # package that disappears upstream cannot silently turn this job green.
+      # Waive a specific advisory only with `--ignore-vuln <ID>` plus a comment
+      # saying why, and track it like any other accepted risk.
+      - name: Audit backend runtime dependencies
+        working-directory: backend
+        run: pip-audit -r requirements.txt --strict
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # Report-only FOR NOW, deliberately: the frontend tree currently carries
+      # real production advisories, so a blocking step would be red on every run
+      # and train people to ignore it. As of 2026-09-26 the production tree
+      # (56 packages) has 5 flagged:
+      #   next@16.2.4    24 advisories incl. 2 CRITICAL unauthenticated RCE
+      #                  -> 16.3.6 clears them all
+      #   sharp@0.34.5   2 HIGH  -> 0.35.4
+      #   postcss@8.4.31 1 HIGH  -> 8.5.23
+      #   nanoid@3.3.12  2 HIGH  -> 3.3.18
+      #   baseline-browser-mapping@2.10.27 (moderate) -> 2.11.0
+      # plus 6 dev-only packages (brace-expansion, browserslist, js-yaml,
+      # @babel/core, postcss) that are build-time only.
+      # The refresh could not be completed on the development machine (registry
+      # throughput through the available proxy), so it is tracked as a follow-up
+      # rather than smuggled in. Remove `continue-on-error` in the PR that
+      # refreshes these versions -- a failed step is still shown in the run UI,
+      # so the finding stays visible without blocking unrelated work.
+      # `frontend/tools/osv_npm_audit.py --prod-only` reproduces this list from
+      # the lockfile through OSV when the registry audit endpoint is unreachable.
+      - name: Audit frontend dependencies (report-only, see comment)
+        working-directory: frontend
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
   docker-build:
     name: Docker image build
     runs-on: ubuntu-latest

@@ -67,6 +67,7 @@ _dlp_matches: dict[str, int] = defaultdict(int)
 _semantic_buckets: dict[tuple[str, float], int] = defaultdict(int)
 _semantic_sums: dict[str, float] = defaultdict(float)
 _semantic_counts: dict[str, int] = defaultdict(int)
+_body_rejected: dict[str, int] = defaultdict(int)
 
 _seen_layers: set[str] = set()
 _seen_threat_types: set[str] = set()
@@ -124,6 +125,24 @@ def record_semantic_score(*, layer: str, score: float) -> None:
                 _semantic_buckets[(label, bucket)] += 1
                 break
         _semantic_buckets[(label, float("inf"))] += 1
+
+
+_BODY_REJECT_REASONS = frozenset({"declared", "actual"})
+
+
+def record_body_rejected(*, reason: str) -> None:
+    """Count a request refused by the body-size guard (app/request_guards.py).
+
+    ``declared`` means ``Content-Length`` alone exceeded the ceiling, so no body
+    byte was read; ``actual`` means the running total crossed it while reading,
+    i.e. the client lied about or omitted the length. A spike in ``actual`` is a
+    different signal from a spike in ``declared``: the first suggests a client
+    that is actively trying to get around the check.
+    """
+    with _lock:
+        _body_rejected[
+            reason if reason in _BODY_REJECT_REASONS else OTHER_LABEL
+        ] += 1
 
 
 def record_dlp_scan(*, scopes: object, action: str, matches: int) -> None:
@@ -343,6 +362,7 @@ def render_metrics() -> str:
         semantic_bucket_snapshot = dict(_semantic_buckets)
         semantic_sum_snapshot = dict(_semantic_sums)
         semantic_count_snapshot = dict(_semantic_counts)
+        body_rejected_snapshot = dict(_body_rejected)
 
     lines.append("# HELP shadow_agent_http_requests_total Total HTTP requests handled.")
     lines.append("# TYPE shadow_agent_http_requests_total counter")
@@ -431,6 +451,14 @@ def render_metrics() -> str:
             % (_escape_label(scope), count)
         )
 
+    lines.append("# HELP shadow_agent_body_rejected_total Requests refused by the body-size guard.")
+    lines.append("# TYPE shadow_agent_body_rejected_total counter")
+    for reason, count in sorted(body_rejected_snapshot.items()):
+        lines.append(
+            'shadow_agent_body_rejected_total{reason="%s"} %d'
+            % (_escape_label(reason), count)
+        )
+
     lines.append("# HELP shadow_agent_retention_purged_rows_total Rows purged by the retention job.")
     lines.append("# TYPE shadow_agent_retention_purged_rows_total counter")
     for table, count in sorted(retention_snapshot.items()):
@@ -486,6 +514,7 @@ def metrics_snapshot() -> dict[str, Any]:
                 for (scope, action), count in _dlp_actions.items()
             },
             "dlp_matches": dict(_dlp_matches),
+            "body_rejected": dict(_body_rejected),
             "db_pool": _pool_snapshot(),
             "logging": log_stats(),
             "remote_fallback": _remote_fallback_snapshot(),

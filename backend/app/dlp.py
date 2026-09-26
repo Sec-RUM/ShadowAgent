@@ -32,7 +32,7 @@ from app.events import publish_event
 from app.metrics import record_dlp_scan
 from database import SessionLocal
 from models import AlertEvent, CustomRule, InterceptLog
-from security_controls import redact_text, sanitize_json
+from security_controls import redact_sensitive_assignments, sanitize_json
 from security_engine import AuditDecision
 
 logger = logging.getLogger("shadow_agent.dlp")
@@ -192,6 +192,104 @@ def apply_redactions(text: str, outcome: ScanOutcome) -> str:
     return "".join(pieces)
 
 
+# --- log persistence redaction ---------------------------------------------
+#
+# Intercept and audit rows are the longest-lived records the gateway keeps
+# (180-365 days, see app/retention.py) and are read back by the console, by
+# exports and by anyone with database access. A prompt that merely *mentions* a
+# credential therefore becomes a durable secret at rest, even when the request
+# itself was allowed -- the DLP guarantee applies to what leaves the gateway,
+# not to what it remembers.
+#
+# ``redact_text`` was already called on every write, but its pattern set only
+# covers ``key=value`` assignments and ``Bearer <token>``. A bare secret --
+# ``sk-...``, ``AKIA...``, a JWT, a PEM block -- has no assignment prefix, so it
+# used to land in ``intercept_logs.original_prompt`` verbatim. Measured before
+# the fix: a prompt containing ``sk-proj-...`` was stored in clear.
+#
+# ``SHADOW_AGENT_LOG_REDACT`` closes that gap and makes the strength a deliberate
+# deployment choice.
+
+LOG_REDACT_MODES = ("off", "secrets", "full")
+
+# Credential *shapes* worth masking in stored text, reused from the response
+# scanner so a secret is judged identically whether it is leaving the gateway or
+# being written down by it.
+_LOG_SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    # The whole PEM block first: ``BUILTIN_DLP_PATTERNS`` only matches the
+    # ``-----BEGIN ... PRIVATE KEY-----`` header, which would leave the key
+    # material itself in the log and look like a redaction while doing nothing.
+    (
+        "private_key",
+        re.compile(
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]{0,16384}?-----END [A-Z ]*PRIVATE KEY-----"
+        ),
+    ),
+    *((match_type, pattern) for match_type, pattern, _risk in BUILTIN_DLP_PATTERNS),
+]
+
+# ``full`` adds personal data on top of the credential shapes. Kept short and
+# anchored on purpose: PII regexes false-positive easily, and this mode is for
+# deployments that would rather over-redact their own audit trail than store a
+# customer identifier.
+_LOG_PII_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("pii_email", re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")),
+    ("pii_cn_mobile", re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")),
+    ("pii_cn_id", re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")),
+]
+
+
+def log_redact_mode() -> str:
+    """How much of a payload is masked before it is persisted.
+
+    - ``secrets`` (default): mask credential shapes -- ``key=value`` and
+      ``Bearer`` as before, plus bare AWS / GitHub / OpenAI-style / Slack /
+      Google keys, JWTs and private keys.
+    - ``full``: ``secrets`` plus email, mainland-China mobile and ID numbers.
+    - ``off``: store the payload as received. For a deployment whose audit trail
+      is read as forensic evidence; it makes every stored prompt a potential
+      secret at rest, so it has to be opted into explicitly.
+
+    An unrecognized value falls back to ``secrets``, never to ``off``: a typo
+    must not silently turn redaction off.
+    """
+    import os
+
+    mode = os.getenv("SHADOW_AGENT_LOG_REDACT", "secrets").strip().lower()
+    if mode not in LOG_REDACT_MODES:
+        logger.warning("Invalid SHADOW_AGENT_LOG_REDACT=%r, falling back to secrets", mode)
+        return "secrets"
+    return mode
+
+
+def redact_for_log(value: str, max_chars: int = 4000) -> str:
+    """Mask a payload on its way into the audit trail and cap its length.
+
+    ``off`` still truncates: retention governs how long a row lives, this only
+    governs how much of the payload is kept. Redaction is best-effort by nature
+    -- it lowers the blast radius of a leaked database, it does not make storing
+    prompts safe.
+    """
+    if not value:
+        return value
+
+    mode = log_redact_mode()
+    redacted = value
+    if mode != "off":
+        patterns = _LOG_SECRET_PATTERNS + (_LOG_PII_PATTERNS if mode == "full" else [])
+        for match_type, pattern in patterns:
+            redacted = pattern.sub(f"[REDACTED:{match_type}]", redacted)
+        # Then the narrow ``key=value`` / ``Bearer`` forms the shape patterns
+        # miss: short values, and key names that are not credentials at all
+        # (``password: hunter2``). Substituting can grow the string slightly,
+        # which is why this runs before the final truncation.
+        redacted = redact_sensitive_assignments(redacted)
+
+    if len(redacted) > max_chars:
+        return redacted[:max_chars] + "...[truncated]"
+    return redacted
+
+
 # --- logging ---------------------------------------------------------------
 
 
@@ -225,7 +323,7 @@ def _log_dlp_event(
             "matched_rules": [match.rule_name for match in outcome.matches][:10],
             "category": "secret_exfiltration",
             "categories": ["secret_exfiltration"],
-            "evidence": [redact_text(excerpt, max_chars=200)],
+            "evidence": [redact_for_log(excerpt, max_chars=200)],
             "recommended_action": "block" if outcome.should_block else "redact",
             "action_taken": action_taken,
             "dlp_summary": outcome.summary(),
@@ -237,7 +335,7 @@ def _log_dlp_event(
                 request_id=request_id,
                 threat_type=_DLP_THREAT_TYPE,
                 action_taken=action_taken,
-                original_prompt=redact_text(excerpt),
+                original_prompt=redact_for_log(excerpt),
                 details=json.dumps(sanitize_json(log_details), ensure_ascii=False),
             )
         )
