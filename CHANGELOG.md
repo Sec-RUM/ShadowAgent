@@ -7,16 +7,25 @@
 
 > **发版说明**
 >
-> `0.3.0` 是本项目**第一个打 tag 的版本**。此前 26 个提交没有 tag，完整历史见 `git log`。
+> `0.3.0` 是本项目**第一个打 tag 的版本**（此前 26 个提交没有 tag，完整历史见 `git log`）；
+> `0.4.0` 是第二个，收口了「依赖公告清零 + 上游韧性」两条改动。
 > 版本号已统一为**单一来源的四处同步**（`backend/main.py`、`sdk/python/pyproject.toml`、
-> `sdk/python/shadowagent/__init__.py`、`frontend/package.json`），
-> 并由 `backend/tests/test_version_consistency.py` 在 CI 中守护 —— 任一漂移即测试失败。
+> `sdk/python/shadowagent/__init__.py`、`frontend/package.json`），加上
+> `frontend/package-lock.json` 的**顶层 version** 共**五处** ——
+> npm 不会回写锁文件版本，失配会让 `npm ci` 直接拒绝安装。
+> ⚠️ 锁文件里**同名依赖**的 `version` 字段（例如 `yocto-queue` 也是 `0.1.0`）**不能动**，
+> 用 `"name": "frontend"` 锚点定位顶层那一处。
+> 五处是否一致由 `backend/tests/test_version_consistency.py` 在 CI 中守护 —— 任一漂移即测试失败。
 >
-> **发版步骤**：改四处版本号 → 在本文档顶部新增 `## [x.y.z] - YYYY-MM-DD` 段 →
-> `cd backend && python -m pytest tests/test_version_consistency.py` →
-> 提交 → `git tag -a vX.Y.Z -m "..."` → 推送提交与 tag。
+> **发版步骤**：改五处版本号 → 把 `## [Unreleased]` 段改名为 `## [x.y.z] - YYYY-MM-DD` 并补一个空的
+> `[Unreleased]`（测试要求它始终存在）→ `cd backend && python -m pytest tests/test_version_consistency.py`
+> → 提交 → `git tag -a vX.Y.Z -m "..."` → 推送提交与 tag。
 
 ## [Unreleased]
+
+暂无未发布变更。
+
+## [0.4.0] - 2026-09-27
 
 ### Added
 
