@@ -50,6 +50,16 @@ services:
       # /docs, /redoc and /openapi.json are opt-in: they map every route,
       # including the admin-only ones, for an unauthenticated caller.
       SHADOW_AGENT_DOCS_ENABLED: ${SHADOW_AGENT_DOCS_ENABLED:-false}
+      # Upstream resilience: retries only cover connect-phase failures and 429s
+      # (a chat completion is not idempotent), bounded by attempt count and a
+      # wall-clock budget; the breaker fails fast instead of queueing.
+      SHADOW_AGENT_UPSTREAM_RETRY_MAX: ${SHADOW_AGENT_UPSTREAM_RETRY_MAX:-2}
+      SHADOW_AGENT_UPSTREAM_RETRY_BUDGET_SECONDS: ${SHADOW_AGENT_UPSTREAM_RETRY_BUDGET_SECONDS:-90}
+      SHADOW_AGENT_UPSTREAM_CIRCUIT_THRESHOLD: ${SHADOW_AGENT_UPSTREAM_CIRCUIT_THRESHOLD:-5}
+      SHADOW_AGENT_UPSTREAM_CIRCUIT_COOLDOWN_SECONDS: ${SHADOW_AGENT_UPSTREAM_CIRCUIT_COOLDOWN_SECONDS:-30}
+      # Off by default: upstream traffic (prompts/completions) must not silently
+      # ride an HTTP(S)_PROXY inherited from the environment.
+      SHADOW_AGENT_UPSTREAM_TRUST_ENV: ${SHADOW_AGENT_UPSTREAM_TRUST_ENV:-false}
       SHADOW_AGENT_REDIS_URL: ${SHADOW_AGENT_REDIS_URL:-}
       SHADOW_AGENT_LOG_RETENTION_DAYS: ${SHADOW_AGENT_LOG_RETENTION_DAYS:-180}
       SHADOW_AGENT_AUDIT_LOG_RETENTION_DAYS: ${SHADOW_AGENT_AUDIT_LOG_RETENTION_DAYS:-365}

@@ -48,7 +48,14 @@
       若某次排查确需原文，临时切 `full`（更严）而不是 `off`
 - [ ] 已确认 `SHADOW_AGENT_MAX_BODY_BYTES`（默认 2 MiB）不会截断真实业务的最大上下文；
       该值与前置反代/网关的上限**取更小者生效**，压测时的超大用例需相应调整
-- [ ] 启动日志中的 `ShadowAgent posture:` 一行与预期一致（`log_redact` / `docs` / `max_body_bytes` / `upstream`）
+- [ ] 启动日志中的 `ShadowAgent posture:` 一行与预期一致（`log_redact` / `docs` / `max_body_bytes` / `upstream` /
+      `upstream_retries` / `upstream_proxy_env`）
+- [ ] 已按上游 SLA 决定重试与熔断参数：`SHADOW_AGENT_UPSTREAM_RETRY_MAX`（默认 2）、
+      `_RETRY_BUDGET_SECONDS`（默认 90s，**整次调用的墙钟上限**）、`_CIRCUIT_THRESHOLD`（默认 5）、
+      `_CIRCUIT_COOLDOWN_SECONDS`（默认 30s）。默认只重试连接期错误与 429；
+      `_RETRY_UNSAFE=true` 会重试读超时/5xx，**可能重复计费与重复执行工具调用**，上线前需书面确认
+- [ ] `SHADOW_AGENT_UPSTREAM_TRUST_ENV` 保持 `false`（默认）—— 上游流量含 prompt 与模型输出，
+      不应静默走环境里的 `HTTP(S)_PROXY`；确需代理出网时显式置 `true` 并记录原因
 - [ ] **依赖漏洞已清零（两侧均已实测满足）**：后端 `pip-audit -r backend/requirements.txt --strict`
       退出码为 0（2026-09-26 实测通过）；前端 2026-09-27 刷新后 OSV 复核全量锁文件
       （437 包）与生产树（58 包）均零公告，CI `npm audit --audit-level=high` 已转阻断。

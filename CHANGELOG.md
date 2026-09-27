@@ -39,7 +39,19 @@
   `backend/tests/test_ci_gates.py` 守护两者不被静默删除或悄悄改变阻断性。
 - 新增 `frontend/tools/osv_npm_audit.py`：当 registry 的审计接口不可达时，
   用 OSV 批量接口直接对 `package-lock.json` 复核，并区分**生产树 / 仅开发**。
-- 启动时打印一次**安全姿态**（`log_redact` / `docs` / `max_body_bytes` / `upstream`）。
+- 启动时打印一次**安全姿态**（`log_redact` / `docs` / `max_body_bytes` / `upstream` /
+  `upstream_retries` / `upstream_proxy_env`）。
+- **上游重试 / 退避 / 熔断**（`app/upstream_resilience.py`）。默认只重试**可证明从未到达模型**的失败：
+  连接期错误（DNS/TCP/TLS/代理/连接池耗尽）与 **HTTP 429**（并遵守 `Retry-After`）。
+  读超时、写超时、协议错误与 **5xx 一律不重试** —— chat completion 不幂等，重试可能重复计费、
+  重复执行工具调用；需要时用 `SHADOW_AGENT_UPSTREAM_RETRY_UNSAFE=true` 显式开启（启动时告警）。
+  新增旋钮：`_RETRY_MAX`（默认 2）、`_RETRY_BASE_DELAY_SECONDS`（默认 0.25，指数退避 + 全抖动，
+  上限 2s）、`_RETRY_BUDGET_SECONDS`（默认 90s，**整次逻辑调用的墙钟上限**，避免 60s 超时 ×3 次重试）、
+  `_CIRCUIT_THRESHOLD`（默认 5 次连续失败，0 关闭）、`_CIRCUIT_COOLDOWN_SECONDS`（默认 30s，失败探测后翻倍封顶）。
+  熔断打开时快速失败 **503 + `Retry-After` + `{"error":"upstream_circuit_open"}`**；
+  半开只放一个探测请求，其余直接卸掉而不是排队。指标：
+  `shadow_agent_upstream_retries_total{reason=…}`、`shadow_agent_upstream_circuit_state{state=…}`、
+  `shadow_agent_upstream_circuit_opened_total`。
 
 ### Changed
 
@@ -58,6 +70,11 @@
 - **凭据曾以明文落库**：脱敏此前只覆盖 `key=value` 与 `Bearer <token>`，
   一句"我的 key 是 `sk-proj-…`"会原样写进 `intercept_logs.original_prompt`。
   该路径已修复，并有测试固定"旧函数确实漏、新函数确实拦"这一前提。
+- **上游抖动 = 硬失败**（0.3.0 登记的可靠性缺口已关闭）：`app/upstream.py` 此前只有超时，
+  一次连接被拒、一次 429 都会直接变成对调用方的错误。
+- **上游客户端曾静默继承 `HTTP(S)_PROXY`**：与 `app/remote_fallback.py`「一律绕过代理」的自家纪律
+  自相矛盾，而这里流动的是用户 prompt 与模型输出，比灰带样本更敏感。
+  现已 `trust_env=False`（`SHADOW_AGENT_UPSTREAM_TRUST_ENV=true` 可显式恢复）。
 - 请求体**此前完全无上限**：单个超大 POST 的内存开销只受宿主内存约束。
 - **后端运行时依赖存在已知漏洞**：`pip-audit --strict` 从"跑不出来的怀疑"变成"实测通过"，
   入口是 `cryptography` 的那 4 条（详见 Changed）。
@@ -73,6 +90,10 @@
 
 ### Security
 
+- 上游转发的**失败语义按幂等性分级**：只有可证明未触达模型的失败才重试，避免把「网关的网络抖动」
+  变成「同一个工具被真实执行两次」。熔断器只在**上游自身故障**（连接失败、超时、5xx）时计数，
+  我方请求形状导致的 4xx 与上游限流 429 都不会打开断路 —— 否则一个坏客户端就能把整个网关打瘫。
+- 上游链路不再继承环境代理（见 Fixed）。
 - 已核对 `cryptography` 4 条公告在本项目的可达性：本项目只经 PyJWT 用它做
   **RS256/RS384/ES256/ES384 签名校验**（`app/sso.py`，密钥来自已配置的 IdP JWKS），
   不涉及 X.509 路径构建、PKCS#7 EnvelopedData 或证书 name-constraint 校验。

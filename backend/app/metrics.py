@@ -129,6 +129,27 @@ def record_semantic_score(*, layer: str, score: float) -> None:
 
 _BODY_REJECT_REASONS = frozenset({"declared", "actual"})
 
+#: Retry reasons emitted by app/upstream_resilience.py. Bounded on purpose: the
+#: label is a code-produced constant, not free text.
+_UPSTREAM_RETRY_REASONS = frozenset(
+    {"connect", "rate_limit", "timeout", "server_error"}
+)
+
+_upstream_retries: dict[str, int] = defaultdict(int)
+
+
+def record_upstream_retry(*, reason: str) -> None:
+    """Count one scheduled retry against the upstream provider.
+
+    A rising ``connect`` count means the network path to the provider is
+    flapping; ``rate_limit`` means the provider is throttling us; ``timeout`` and
+    ``server_error`` only appear when unsafe retries were explicitly enabled.
+    """
+    with _lock:
+        _upstream_retries[
+            reason if reason in _UPSTREAM_RETRY_REASONS else OTHER_LABEL
+        ] += 1
+
 
 def record_body_rejected(*, reason: str) -> None:
     """Count a request refused by the body-size guard (app/request_guards.py).
@@ -346,6 +367,37 @@ def _render_remote_fallback_metrics(lines: list[str]) -> None:
     )
 
 
+def _render_upstream_circuit_metrics(lines: list[str]) -> None:
+    """Expose the upstream breaker state.
+
+    ``state="open"`` at 1 means the gateway is shedding traffic on purpose
+    because the provider kept failing: callers get a fast 503 instead of a
+    queued timeout. ``half_open`` means a single probe is in flight, so a run of
+    them that never returns to ``closed`` says the provider is still down.
+    """
+    try:
+        from app.upstream_resilience import upstream_circuit_breaker
+    except ImportError:  # pragma: no cover - only when the module is absent
+        return
+
+    breaker = upstream_circuit_breaker()
+    current = breaker.state_name()
+
+    lines.append("# HELP shadow_agent_upstream_circuit_state Current upstream circuit-breaker state (1 = active).")
+    lines.append("# TYPE shadow_agent_upstream_circuit_state gauge")
+    for state in ("closed", "half_open", "open"):
+        lines.append(
+            'shadow_agent_upstream_circuit_state{state="%s"} %d'
+            % (state, 1 if current == state else 0)
+        )
+
+    lines.append("# HELP shadow_agent_upstream_circuit_opened_total Times the upstream breaker opened or re-opened.")
+    lines.append("# TYPE shadow_agent_upstream_circuit_opened_total counter")
+    lines.append(
+        "shadow_agent_upstream_circuit_opened_total %d" % breaker.open_total()
+    )
+
+
 def render_metrics() -> str:
     """Render counters/histograms in Prometheus text exposition format."""
     lines: list[str] = []
@@ -363,6 +415,7 @@ def render_metrics() -> str:
         semantic_sum_snapshot = dict(_semantic_sums)
         semantic_count_snapshot = dict(_semantic_counts)
         body_rejected_snapshot = dict(_body_rejected)
+        upstream_retry_snapshot = dict(_upstream_retries)
 
     lines.append("# HELP shadow_agent_http_requests_total Total HTTP requests handled.")
     lines.append("# TYPE shadow_agent_http_requests_total counter")
@@ -467,6 +520,15 @@ def render_metrics() -> str:
             % (_escape_label(table), count)
         )
 
+    lines.append("# HELP shadow_agent_upstream_retries_total Upstream delivery attempts that were retried, by reason.")
+    lines.append("# TYPE shadow_agent_upstream_retries_total counter")
+    for reason in sorted(_UPSTREAM_RETRY_REASONS | {OTHER_LABEL}):
+        lines.append(
+            'shadow_agent_upstream_retries_total{reason="%s"} %d'
+            % (_escape_label(reason), upstream_retry_snapshot.get(reason, 0))
+        )
+
+    _render_upstream_circuit_metrics(lines)
     _render_pool_metrics(lines)
     _render_log_metrics(lines)
     _render_remote_fallback_metrics(lines)
@@ -515,6 +577,7 @@ def metrics_snapshot() -> dict[str, Any]:
             },
             "dlp_matches": dict(_dlp_matches),
             "body_rejected": dict(_body_rejected),
+            "upstream_retries": dict(_upstream_retries),
             "db_pool": _pool_snapshot(),
             "logging": log_stats(),
             "remote_fallback": _remote_fallback_snapshot(),

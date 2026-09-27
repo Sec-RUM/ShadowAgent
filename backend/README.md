@@ -79,6 +79,10 @@ SHADOW_AGENT_LOG_REDACT=secrets
 SHADOW_AGENT_MAX_BODY_BYTES=2097152
 # /docs, /redoc and /openapi.json are opt-in.
 SHADOW_AGENT_DOCS_ENABLED=false
+# Retries stay narrow: connect errors and 429 only (see "Upstream resilience").
+SHADOW_AGENT_UPSTREAM_RETRY_MAX=2
+SHADOW_AGENT_UPSTREAM_CIRCUIT_THRESHOLD=5
+SHADOW_AGENT_UPSTREAM_CIRCUIT_COOLDOWN_SECONDS=30
 ```
 
 Protected endpoints accept either:
@@ -469,8 +473,48 @@ client and the SDK ships its own models. Turn this on only on a trusted
 interface.
 
 At startup the gateway logs one line stating the resolved posture
-(`log_redact=… docs=… max_body_bytes=… upstream=…`), so "we thought that was on"
-is answerable from the logs.
+(`log_redact=… docs=… max_body_bytes=… upstream=… upstream_retries=… upstream_proxy_env=…`),
+so "we thought that was on" is answerable from the logs.
+
+### Upstream resilience (retries, backoff, circuit breaker)
+
+A chat completion is **not idempotent**: a retry that follows a request the
+provider already executed bills the same tokens twice and can run a tool call
+twice. The default policy therefore retries only the failures that provably
+never reached the model:
+
+| Failure | Retried by default | Why |
+| --- | --- | --- |
+| Connect error / connect timeout / pool timeout / proxy error | yes | no request byte was delivered |
+| HTTP 429 | yes | the provider refused before generating; `Retry-After` is honoured |
+| Read timeout, write timeout, protocol error | no | the request was delivered; the completion may exist |
+| 5xx | no | same as above — the provider may have finished the work |
+| 4xx (other than 429) | no | our own request shape is at fault; retrying only repeats it |
+
+`SHADOW_AGENT_UPSTREAM_RETRY_UNSAFE=true` opts into retrying the middle two for
+deployments that accept the duplicate-work risk; the startup log warns when it
+is on. Retries are bounded three ways: `SHADOW_AGENT_UPSTREAM_RETRY_MAX`
+(extra attempts, default 2), `SHADOW_AGENT_UPSTREAM_RETRY_BUDGET_SECONDS`
+(wall-clock ceiling for the whole logical call, default 90 s) and a hard cap on
+the backoff (2 s, exponential with full jitter). The streaming path retries only
+the handshake: once the response object exists, bytes may already be flowing and
+replaying the request would duplicate generation.
+
+`SHADOW_AGENT_UPSTREAM_CIRCUIT_THRESHOLD` (default 5 consecutive failures)
+opens a breaker that fails fast with 503 + `Retry-After` and
+`{"error": "upstream_circuit_open"}` instead of queueing request after request
+behind a dead provider. Opening during a call stops that call's retry chain
+immediately. After `SHADOW_AGENT_UPSTREAM_CIRCUIT_COOLDOWN_SECONDS` (default 30)
+exactly one half-open probe is allowed through; success closes the breaker,
+failure re-opens it with a doubled (capped) cooldown. `0` disables the breaker.
+State is visible in `/metrics` as `shadow_agent_upstream_circuit_state{state=…}`
+and `shadow_agent_upstream_retries_total{reason=…}`.
+
+`SHADOW_AGENT_UPSTREAM_TRUST_ENV` (default `false`) keeps the upstream client
+from inheriting `HTTP(S)_PROXY` from the environment — the same discipline
+`app/remote_fallback.py` follows, and more important here because this traffic
+carries prompts and completions. Set it to `true` only when egress really
+requires the proxy.
 
 ## Multi-Tenancy (Organizations)
 

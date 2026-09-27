@@ -27,7 +27,14 @@ from env_loader import load_local_env
 load_local_env()
 
 from app.audit import audit_log_executor
-from app.config import _allowed_origins, _upstream_proxy_enabled, docs_urls
+from app.config import (
+    _allowed_origins,
+    _upstream_proxy_enabled,
+    _upstream_retry_max,
+    _upstream_retry_unsafe,
+    _upstream_trust_env,
+    docs_urls,
+)
 from app.dlp import log_redact_mode
 from app.logging_setup import configure_logging
 from app.metrics import MetricsMiddleware, router as metrics_router
@@ -86,17 +93,27 @@ def _log_startup_posture() -> None:
     """
     log_redact = log_redact_mode()
     logger.info(
-        "ShadowAgent posture: log_redact=%s docs=%s max_body_bytes=%s upstream=%s",
+        "ShadowAgent posture: log_redact=%s docs=%s max_body_bytes=%s upstream=%s "
+        "upstream_retries=%s upstream_proxy_env=%s",
         log_redact,
         "enabled" if _docs_url else "disabled",
         max_body_bytes() or "unlimited",
         "proxy" if _upstream_proxy_enabled() else "simulated",
+        _upstream_retry_max(),
+        "inherited" if _upstream_trust_env() else "ignored",
     )
     if log_redact == "off":
         logger.warning(
             "SHADOW_AGENT_LOG_REDACT=off: intercept/audit rows are stored as "
             "received. A prompt carrying a credential is persisted in clear and "
             "readable by anyone with database access."
+        )
+    if _upstream_retry_unsafe():
+        logger.warning(
+            "SHADOW_AGENT_UPSTREAM_RETRY_UNSAFE=1: timeouts and 5xx responses are "
+            "retried even though the provider may have already generated a "
+            "completion. Expect duplicate billing and possibly duplicate tool "
+            "execution on those paths."
         )
 
 

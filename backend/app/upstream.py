@@ -15,10 +15,12 @@ from app.config import (
     UPSTREAM_CONTEXT_GUARDRAIL,
     _env_text,
     _upstream_timeout_seconds,
+    _upstream_trust_env,
 )
 from app.custom_rules import enabled_rules
 from app.dlp import StreamingDlpScanner, response_dlp_mode
 from app.schemas import ChatCompletionRequest, ChatMessage
+from app.upstream_resilience import reset_upstream_resilience, send_with_resilience
 
 logger = logging.getLogger("shadow_agent.upstream")
 
@@ -26,11 +28,18 @@ _upstream_client: httpx.AsyncClient | None = None
 
 
 def _get_upstream_client() -> httpx.AsyncClient:
-    """Shared connection-pooled client for upstream LLM forwarding."""
+    """Shared connection-pooled client for upstream LLM forwarding.
+
+    ``trust_env`` is off unless explicitly enabled: the environment of a
+    gateway often defines ``HTTP(S)_PROXY`` for unrelated reasons, and silently
+    routing prompts and completions through it would contradict the discipline
+    ``app/remote_fallback.py`` already follows.
+    """
     global _upstream_client
     if _upstream_client is None or _upstream_client.is_closed:
         _upstream_client = httpx.AsyncClient(
             timeout=_upstream_timeout_seconds(),
+            trust_env=_upstream_trust_env(),
             limits=httpx.Limits(
                 max_connections=20,
                 max_keepalive_connections=10,
@@ -45,6 +54,7 @@ async def _close_upstream_client() -> None:
     if _upstream_client is not None and not _upstream_client.is_closed:
         await _upstream_client.aclose()
     _upstream_client = None
+    reset_upstream_resilience()
 
 
 def _resolved_upstream_model(requested_model: str) -> str:
@@ -182,12 +192,18 @@ async def _forward_to_upstream(
         "stream": False,
     }
 
+    headers = _upstream_headers(request_id)
+    timeout = _upstream_timeout_seconds()
+
     try:
-        response = await _get_upstream_client().post(
-            upstream_url,
-            headers=_upstream_headers(request_id),
-            json=upstream_payload,
-            timeout=_upstream_timeout_seconds(),
+        response = await send_with_resilience(
+            request_id=request_id,
+            deliver=lambda: _get_upstream_client().post(
+                upstream_url,
+                headers=headers,
+                json=upstream_payload,
+                timeout=timeout,
+            ),
         )
     except httpx.TimeoutException as exc:
         raise HTTPException(
@@ -273,7 +289,13 @@ async def _stream_upstream_response(
         json=upstream_payload,
     )
     try:
-        response = await client.send(request, stream=True)
+        # Only the handshake is retried. Once the response object exists, bytes
+        # may already be flowing to the client; replaying the request there
+        # would duplicate generation rather than recover from a transport fault.
+        response = await send_with_resilience(
+            request_id=request_id,
+            deliver=lambda: client.send(request, stream=True),
+        )
     except httpx.TimeoutException as exc:
         raise HTTPException(
             status_code=504,
