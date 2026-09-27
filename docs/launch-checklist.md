@@ -185,9 +185,22 @@ stdout 消费与限流/上游三条要求，否则测得的数字无效）。
 已验证：旧配置（`SHADOW_AGENT_DB_POOL_SIZE=5 SHADOW_AGENT_DB_MAX_OVERFLOW=10`，即缺陷当时的 15 条）
 下门禁**失败**，默认配置下**通过**。
 
+该门禁已接进 CI 的 `perf-gate` job，但**只在手动触发（`workflow_dispatch`）时运行** ——
+判据是相对的、硬件无关，但共享 runner 仍然是测延迟比值的噪声环境，而**第一天就红掉的门禁
+只会训练人忽略它**。改动请求路径 / 连接池 / `app/middleware` 之后，从 Actions 页手动跑一次。
+（`backend/tests/test_ci_gates.py` 守着「它仍在 CI 里」与「仍是手动触发」两条。）
+
 
 ## 7. 发布后迭代
 
 - 跟踪 `requirements*.txt` 安全更新（建议每月一次依赖审计）
+- **依赖自动更新已配置**：`.github/dependabot.yml` —— pip（`/backend`）与 npm（`/frontend`）
+  每周一 09:00 Asia/Shanghai、github-actions 每月；minor/patch 按生态分组成单个 PR，major 不进组；
+  `next` / `eslint-config-next` / `react` / `react-dom` 被显式忽略，因为它们是**成组精确锁定**的，
+  必须一起动并人工验证。⚠️ **安全更新（security updates）还需在仓库 Settings 里单独开启** ——
+  配置文件管不到那一项。
+- **前端判定逻辑有单元测试守护**：`frontend` 的 `vitest` 套件在 CI 的 Lint 与 Build 之间跑
+  `npm test`（邮箱形状、注册状态文案等分支逻辑）。新增此类判定必须抽成纯函数并补用例，
+  否则形成无人守的空白 —— `next build` + `tsc` 不会因为「把网络故障写成策略结论」而变红。
 - 拦截规则误报/漏报反馈渠道已建立
 - 版本发布走 CI 全绿后发布

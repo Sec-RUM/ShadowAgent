@@ -61,3 +61,27 @@ def test_frontend_audit_is_blocking(workflow: str) -> None:
 def test_test_suite_and_frontend_build_are_still_gated(workflow: str) -> None:
     assert "python -m pytest tests -v" in workflow
     assert "npm run build" in workflow
+
+
+def test_frontend_unit_tests_run_in_ci(workflow: str) -> None:
+    assert "npm test" in workflow, (
+        "前端单元测试步骤丢失 —— 它守的是构建/类型检查都抓不到的判定逻辑"
+        "（邮箱形状、注册文案谎报），删掉等于把回归重新放回人工把关"
+    )
+
+
+def test_perf_gate_is_wired_as_a_manual_job(workflow: str) -> None:
+    """The gate exists, and is manual on purpose.
+
+    Its criteria are relative (no 5xx, blocked path not dramatically slower than
+    the allowed path, no pool starvation), which is what makes them portable —
+    but a shared CI runner is still a noisy place to judge latency ratios, and a
+    gate that fails for hardware reasons teaches people to ignore it. So: wired
+    in, dispatchable by hand, and *not* attached to push.
+    """
+    assert "tools/perf_gate.py" in workflow, "性能门禁从 CI 里消失了"
+    gate_job = workflow.split("perf-gate:")[1]
+    assert "github.event_name == 'workflow_dispatch'" in gate_job.split("- name:")[0], (
+        "性能门禁不再是手动触发 —— 若改成每推必跑，需要一个说明「共享 runner 噪声已处理」"
+        "的理由，而不是顺手删掉这个条件"
+    )

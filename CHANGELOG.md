@@ -23,7 +23,35 @@
 
 ## [Unreleased]
 
-暂无未发布变更。
+### Added
+
+- **前端单元测试，并接进 CI**（`vitest`，`npm test`）。**刻意不装 jsdom / testing-library**：
+  组件能否渲染已由 CDP 截图覆盖，真正无人守的是**判定逻辑** —— 邮箱形状规则，以及那段
+  把「后端连不上」说成「注册已关闭」的文案（`eb8efcc`）。逻辑因此被抽成纯模块
+  （`src/app/auth-logic.ts`、`src/app/time-utils.ts`），测试跑在裸 Node 环境、没有 DOM。
+  当前 **42 条**（`auth-logic` 34 / `time-utils` 8），单次运行 < 1s，因此没有理由不进 CI。
+  ⚠️ 版本锁在 **`vitest@^4`**：`vitest@5` 的 peer 要求 `@types/node ^22 || >=24`，本项目是 `^20`，
+  升 5 意味着顺带升 `@types/node` —— 与 `next`/`react` 的锁定组合无关，是一次没必要的改动。
+- **Dependabot 配置**（`.github/dependabot.yml`）：pip（`/backend`）与 npm（`/frontend`）
+  每周一 09:00 Asia/Shanghai，github-actions 每月。minor/patch **按生态分组成单个 PR**，
+  major 不进组；`next` / `eslint-config-next` / `react` / `react-dom` 显式 `ignore` ——
+  它们是**成组精确锁定**的，必须一起动并人工验证，不能被自动 PR 拆散。
+  ⚠️ 这只管版本 PR；**安全更新还需在仓库 Settings 中单独开启**，配置文件无法代替。
+- **性能门禁接进 CI，但按手动触发**（`workflow_dispatch` 上的 `perf-gate` job，配
+  `backend/tests/test_ci_gates.py` 护栏）。`tools/perf_gate.py` 的判据是**相对的**
+  （无 5xx、无 599、阻断路径不比放行路径慢 4 倍以上、`/health` 仍活、连接池饥饿计数为 0），
+  相对判据才可移植；但共享 runner 仍是测延迟比值的噪声环境，而**第一天就红掉的门禁只会
+  训练人忽略它**。改动请求路径 / 连接池 / `app/middleware` 后，从 Actions 页手动跑一次。
+
+### Changed
+
+- 表单判定逻辑从 `frontend/src/app/page.tsx` 抽到 `src/app/auth-logic.ts`，行为不变：
+  原文的**嵌套三元**（正是「谎报注册已关闭」的载体）换成一个返回 `{tone, message}` 的纯函数，
+  组件只负责渲染。同一份邮箱规则在后端 `app/utils.py::is_valid_email` 与
+  `auth-logic.ts::isValidEmailInput` 两处保留（互相在注释里指向），前后端断言同一张用例表。
+- `backend/tests/test_ci_gates.py` 从 5 条扩到 **7 条**，新增两条护栏：前端 `npm test` 步骤
+  与「性能门禁仍是手动触发」。三者均已用**定向变异**验红（去掉 `workflow_dispatch` 条件 /
+  删掉 `npm test` 步骤 / 给前端审计加回 `continue-on-error`，对应测试各自失败）。
 
 ## [0.4.0] - 2026-09-27
 

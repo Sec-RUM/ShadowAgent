@@ -56,6 +56,9 @@ import { AnimatedInterceptLogList, GlassInterceptLogCard, LogListSkeleton } from
 import { GlassSelect, type GlassSelectOption } from "./components/glass-select";
 import SecurityDashboard from "./components/security-dashboard";
 import { buildTimeTooltip, formatBeijingTime, formatRelativeTime, parseDateValue } from "./time-utils";
+// Registration copy and the email-shape guard are plain modules so they can be
+// unit tested — both have produced real defects no build-time check could catch.
+import { isValidEmailInput, registrationHint, type BootstrapStatus } from "./auth-logic";
 
 type IconComponent = React.ComponentType<{
   className?: string;
@@ -77,16 +80,6 @@ type AuthSession = {
   expiresAt: number;
   tokenType: "bearer";
   user: SessionUser;
-};
-
-type BootstrapStatus = {
-  initialized: boolean;
-  bootstrap_required: boolean;
-  bootstrap_token_configured: boolean;
-  demo_override_enabled: boolean;
-  open_registration_enabled: boolean;
-  invite_token_configured: boolean;
-  recommended_role: string;
 };
 
 type OrgInfo = {
@@ -1087,26 +1080,8 @@ function severityChipClass(severity: PolicyRule["severity"]) {
 }
 
 /* 邮箱格式校验：与后端 app/utils.py 的 is_valid_email 保持同一套规则。
-   注册时账号邮箱即身份，格式必须在**发出请求前**就拦住 —— 否则用户只会看到
-   一个来自后端的 400/422，而表单本身毫无反馈。
-   ⚠️ 只用于注册；登录不做形状拦截，以免把历史上已存在的非标准账号锁在门外。 */
-const EMAIL_LOCAL_PATTERN = /^[A-Za-z0-9._%+\-]+$/;
-const EMAIL_LABEL_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?$/;
-const EMAIL_TLD_PATTERN = /^[A-Za-z]{2,63}$/;
-
-function isValidEmailInput(value: string): boolean {
-  const candidate = value.trim();
-  if (candidate.length < 3 || candidate.length > 255) return false;
-  if (candidate.split("@").length !== 2) return false;
-  const [local, domain] = candidate.split("@");
-  if (local.length < 1 || local.length > 64) return false;
-  if (!EMAIL_LOCAL_PATTERN.test(local)) return false;
-  if (local.startsWith(".") || local.endsWith(".") || local.includes("..")) return false;
-  const labels = domain.split(".");
-  if (labels.length < 2) return false;
-  if (!EMAIL_TLD_PATTERN.test(labels[labels.length - 1])) return false;
-  return labels.slice(0, -1).every((label) => EMAIL_LABEL_PATTERN.test(label));
-}
+   实现已移到 ./auth-logic（同名函数、逐行等价），以便单元测试覆盖
+   「注册严 / 登录宽」这条产品约定。 */
 
 /* 风险档位竖条：与拦截日志行同一套语义色，跨视图保持一致的「颜色=风险」心智。 */
 function severityTick(severity: PolicyRule["severity"]) {
@@ -1891,6 +1866,16 @@ export default function Home() {
   const securityConfigKey = `${apiBaseUrl}|${settings.adminApiKey}|${authSession?.accessToken ?? ""}|${user?.id ?? ""}`;
   const hasConsoleToken = isAuthSessionValid(authSession);
   const hasConsoleAdmin = Boolean(hasConsoleToken && isAdminRole(user?.role));
+
+  // Copy rendered under the auth form. Computed here rather than inline so the
+  // "an unreachable backend is never described as a policy decision" rule lives
+  // in one testable place (see auth-logic.ts). While the status is merely still
+  // loading the panel stays empty on purpose: the old nested ternary announced
+  // 「注册已关闭」 for a backend it had not heard from yet.
+  const registrationNotice =
+    bootstrapUnreachable || authMode === "register"
+      ? registrationHint(bootstrapStatus, bootstrapUnreachable, apiBaseUrl)
+      : null;
 
   // Admin panels require EITHER a console admin session OR an Admin API Key
   // that has been verified against the backend. A non-empty key alone must
@@ -4655,27 +4640,15 @@ export default function Home() {
               </button>
             </div>
 
-            {bootstrapUnreachable || authMode === "register" ? (
+            {registrationNotice ? (
               <div
                 className={
-                  bootstrapUnreachable
+                  registrationNotice.tone === "danger"
                     ? "mt-4 rounded-[var(--radius-xs)] border border-[color-mix(in_oklab,var(--tone-danger)_30%,transparent)] bg-[var(--tone-danger-surface)] px-3 py-3 text-[length:var(--text-micro)] leading-6 text-[var(--tone-danger-text)]"
                     : `${glassPanelSoftClass} mt-4 px-3 py-3 text-[length:var(--text-micro)] leading-6 text-[var(--text-secondary)]`
                 }
               >
-                {bootstrapUnreachable
-                  ? `无法连接后端服务（${apiBaseUrl}）。页面能打开不代表后端在线——请先确认后端已启动，否则登录与注册都会以「Failed to fetch」失败。`
-                  : bootstrapStatus?.bootstrap_required
-                    ? bootstrapStatus.bootstrap_token_configured
-                      ? "当前后端还没有管理员账号。请在注册时填写 bootstrap token，完成首个管理员初始化。"
-                      : bootstrapStatus.demo_override_enabled
-                        ? "当前后端还没有管理员账号，但已开启本地 demo 直通模式，可直接完成首个管理员注册。"
-                        : "当前后端还没有管理员账号，且尚未配置 bootstrap token。请先在后端环境变量中设置 SHADOW_AGENT_CONSOLE_BOOTSTRAP_TOKEN。"
-                    : bootstrapStatus?.open_registration_enabled
-                      ? "注册已开放，新账号将默认获得 client 角色。"
-                      : bootstrapStatus?.invite_token_configured
-                        ? "注册为邀请制，请在下方填写管理员提供的邀请码。"
-                        : "注册已关闭。请联系管理员获取邀请码，或由管理员签发托管 API Key。"}
+                {registrationNotice.message}
               </div>
             ) : null}
 
