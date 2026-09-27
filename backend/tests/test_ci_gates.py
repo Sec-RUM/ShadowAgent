@@ -41,21 +41,20 @@ def test_frontend_dependencies_are_audited(workflow: str) -> None:
     assert "npm audit --audit-level=high" in workflow, "前端依赖审计丢失"
 
 
-def test_frontend_audit_is_marked_non_blocking_until_refreshed(workflow: str) -> None:
-    """The frontend audit reports instead of gating, and says so.
+def test_frontend_audit_is_blocking(workflow: str) -> None:
+    """The frontend audit gates, same as the backend one.
 
-    Locks the current, deliberate state: the step exists and is explicitly
-    ``continue-on-error`` with the follow-up written next to it. If someone
-    removes the exemption, that is a real change and should be a visible edit --
-    not a silent one.
-
-    When the frontend dependencies are refreshed, delete this test together with
-    the ``continue-on-error`` line.
+    The tree carried real production advisories until the 2026-09-27 refresh
+    cleared them (next 16.2.4 -> 16.3.6 and friends), so the step ran
+    report-only with ``continue-on-error: true`` to avoid training people to
+    ignore a permanently red gate. With the tree clean there is no reason for
+    the exemption: if it ever comes back it should be a visible, justified
+    edit -- never a silent one.
     """
     block = workflow.split("Audit frontend dependencies")[1]
-    assert "continue-on-error: true" in block.split("- name:")[0], (
-        "前端审计的非阻断豁免不见了 —— 要么依赖已刷新（那就把这条测试和 "
-        "continue-on-error 一起删掉），要么这步会悄悄变成必挂"
+    assert "continue-on-error" not in block.split("- name:")[0], (
+        "前端审计又变回非阻断了 —— 依赖树自 2026-09-27 刷新后是干净的，"
+        "豁免需要单独说明理由"
     )
 
 

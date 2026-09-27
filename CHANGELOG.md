@@ -34,8 +34,8 @@
   `/docs`、`/redoc`、`/openapi.json` 是否注册 —— 关闭时这些路由**根本不存在**（404），
   而不是"注册了再拦"。
 - **CI 依赖漏洞门禁**：新增 `dependency-audit` job，后端
-  `pip-audit -r requirements.txt --strict`（**阻断**，实测已清零），
-  前端 `npm audit --audit-level=high`（**当前 report-only**，原因见下方已知缺口）；
+  `pip-audit -r requirements.txt --strict`、前端 `npm audit --audit-level=high`，
+  **两侧均为阻断**（前端在 2026-09-27 依赖刷新清零后摘掉 report-only 豁免）；
   `backend/tests/test_ci_gates.py` 守护两者不被静默删除或悄悄改变阻断性。
 - 新增 `frontend/tools/osv_npm_audit.py`：当 registry 的审计接口不可达时，
   用 OSV 批量接口直接对 `package-lock.json` 复核，并区分**生产树 / 仅开发**。
@@ -61,6 +61,15 @@
 - 请求体**此前完全无上限**：单个超大 POST 的内存开销只受宿主内存约束。
 - **后端运行时依赖存在已知漏洞**：`pip-audit --strict` 从"跑不出来的怀疑"变成"实测通过"，
   入口是 `cryptography` 的那 4 条（详见 Changed）。
+- **前端依赖的全部已知公告已清零**（2026-09-27 刷新）：`next` 16.2.4 → **16.3.6**
+  （连同 `eslint-config-next`；清掉 24 条公告，含 **2 条未认证 RCE 的 CRITICAL**）、
+  `react` / `react-dom` 19.2.4 → 19.3.0、`sharp` → 0.35.4、`postcss` → 8.5.28（≥8.5.23）、
+  `nanoid` → 3.3.19（≥3.3.18）、`baseline-browser-mapping` → 2.11.26，
+  开发树侧 `js-yaml` 4.3.2 / `browserslist` 4.29.1 / `brace-expansion` 1.1.18+5.0.9 /
+  `@babel/core` 7.29.7 一并落位。未引入 `overrides`，未跨任何主版本
+  （`typescript` 保持 `^5`、`eslint` 保持 `^9`、`framer-motion` 保持 `^12`）。
+  刷新后 OSV 对全量锁文件（437 包）与生产树（58 包）复核均为**零公告**，
+  CI 前端审计同步由 report-only 改为阻断。
 
 ### Security
 
@@ -76,25 +85,6 @@
   相对旧的 `redact_text`（p50 0.196 ms / p95 0.297 ms）增加约 0.54 ms。**放行路径不受影响** ——
   它只在拦截写入、monitor 留痕与后台审计线程（`audit_log_executor`）三条非热路径上调用。
 - 请求体护栏的头部解析实测 p50 **0.4 µs**/请求（纯内存操作，无正则）；超限才走计数分支。
-
-### Known limitations
-
-- 🔴 **前端依赖存在未修复的真实公告（待决策）**。以 OSV 复核 `frontend/package-lock.json`
-  （428 个包）：**生产树 56 个包中有 5 个命中**，另有 6 个仅开发（构建期）包：
-
-  | 包 | 版本 | 命中 | 严重度 | 修复版本 |
-  | --- | --- | --- | --- | --- |
-  | `next` | 16.2.4 | 24 条 | **2 CRITICAL + 12 HIGH** + 其余 | **16.3.6**（最新稳定版） |
-  | `sharp` | 0.34.5 | 2 条 | 2 HIGH | 0.35.4 |
-  | `postcss` | 8.4.31 | 4 条 | 1 HIGH | 8.5.23 |
-  | `nanoid` | 3.3.12 | 2 条 | 2 HIGH | 3.3.18 |
-  | `baseline-browser-mapping` | 2.10.27 | 1 条 | MODERATE | 2.11.0 |
-
-  两条 CRITICAL 均为**未认证 RCE**（Image Optimization API / Windows 主机上的 server）。
-  修复方式是一次同主版本的小版本升级（`next` 16.2.4 → 16.3.6 需连 `eslint-config-next` 一起升），
-  但**本次未能完成**：本机 `npm install` 经可用代理 28 分钟仍未拉完（退出码 124），
-  因此没有把半成品的锁文件写进仓库，也没把前端这一步设成阻断（那会让 CI 从第一天起常红）。
-  在刷新依赖的那个 PR 里删掉 `continue-on-error` 与本条。
 
 ## [0.3.0] - 2026-09-26
 

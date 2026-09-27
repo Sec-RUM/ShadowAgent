@@ -131,28 +131,15 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      # Report-only FOR NOW, deliberately: the frontend tree currently carries
-      # real production advisories, so a blocking step would be red on every run
-      # and train people to ignore it. As of 2026-09-26 the production tree
-      # (56 packages) has 5 flagged:
-      #   next@16.2.4    24 advisories incl. 2 CRITICAL unauthenticated RCE
-      #                  -> 16.3.6 clears them all
-      #   sharp@0.34.5   2 HIGH  -> 0.35.4
-      #   postcss@8.4.31 1 HIGH  -> 8.5.23
-      #   nanoid@3.3.12  2 HIGH  -> 3.3.18
-      #   baseline-browser-mapping@2.10.27 (moderate) -> 2.11.0
-      # plus 6 dev-only packages (brace-expansion, browserslist, js-yaml,
-      # @babel/core, postcss) that are build-time only.
-      # The refresh could not be completed on the development machine (registry
-      # throughput through the available proxy), so it is tracked as a follow-up
-      # rather than smuggled in. Remove `continue-on-error` in the PR that
-      # refreshes these versions -- a failed step is still shown in the run UI,
-      # so the finding stays visible without blocking unrelated work.
-      # `frontend/tools/osv_npm_audit.py --prod-only` reproduces this list from
-      # the lockfile through OSV when the registry audit endpoint is unreachable.
-      - name: Audit frontend dependencies (report-only, see comment)
+      # Blocking, same as the backend step. Verified clean on 2026-09-27 after
+      # the dependency refresh: the lockfile (437 packages, 58 in the
+      # production tree) has zero advisories in OSV, which covers the same
+      # GitHub Security Advisories npm audit reports.
+      # `frontend/tools/osv_npm_audit.py --prod-only` reproduces the result
+      # from the lockfile through OSV when the registry audit endpoint is
+      # unreachable.
+      - name: Audit frontend dependencies
         working-directory: frontend
-        continue-on-error: true
         run: npm audit --audit-level=high
 
   docker-build:

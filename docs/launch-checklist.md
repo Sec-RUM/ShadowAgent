@@ -49,10 +49,10 @@
 - [ ] 已确认 `SHADOW_AGENT_MAX_BODY_BYTES`（默认 2 MiB）不会截断真实业务的最大上下文；
       该值与前置反代/网关的上限**取更小者生效**，压测时的超大用例需相应调整
 - [ ] 启动日志中的 `ShadowAgent posture:` 一行与预期一致（`log_redact` / `docs` / `max_body_bytes` / `upstream`）
-- [ ] **依赖漏洞已清零（前端当前不满足）**：后端 `pip-audit -r backend/requirements.txt --strict`
-      退出码为 0（2026-09-26 实测通过）；前端生产树仍有 `next` 等 5 个包的公告
-      （含 2 条未认证 RCE），需先做一次依赖刷新 —— 详见 CHANGELOG「Known limitations」。
-      刷新后再把 CI 里的 `continue-on-error` 去掉，该步即转为阻断
+- [ ] **依赖漏洞已清零（两侧均已实测满足）**：后端 `pip-audit -r backend/requirements.txt --strict`
+      退出码为 0（2026-09-26 实测通过）；前端 2026-09-27 刷新后 OSV 复核全量锁文件
+      （437 包）与生产树（58 包）均零公告，CI `npm audit --audit-level=high` 已转阻断。
+      复跑方式：`python frontend/tools/osv_npm_audit.py --prod-only`
 
 ## 4. 可观测性与运维
 
