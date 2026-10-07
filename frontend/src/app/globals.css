@@ -531,24 +531,59 @@ html:not([data-theme]) .grid-texture::before {
    交互状态覆盖（interaction-design 八大状态）：
    Default / Hover / Focus-visible / Active / Disabled 在基础类里给全；
    Loading / Error / Success 由业务侧按需叠加。
-   按压反馈用 transform 上层位移，GPU 友好，不触发重排。 */
+
+   统一 hover 语言（page.tsx 的 buttonClass() 也指向这里，双轨已合并）：
+   · hover：上浮 1px + 阴影抬升 —— 物理隐喻「可以拿起来」
+   · active：落回原位并轻微收缩 —— 「按下去」的触感
+   · disabled 用 :not(:disabled) 挡住全部位移态，不再有悬停反馈
+   transform 走合成层，不触发重排；reduced-motion 下由文末全局规则削平。 */
 .btn-primary {
+  position: relative;
+  overflow: hidden;
   background: var(--accent-solid);
   color: var(--accent-on-solid);
   border: 1px solid transparent;
   box-shadow: 0 1px 2px 0 oklch(0% 0 0 / 0.12);
+  /* 磁吸：--mag-x/y 由 page.tsx 的指针监听写入（±5px 封顶，仅鼠标、且
+     reduced-motion 关闭）。translate 是独立变换属性，与 :hover 的 transform
+     抬升、:active 的按压缩放自由叠加，互不覆盖。 */
+  translate: var(--mag-x, 0px) var(--mag-y, 0px);
   transition: background var(--dur-fast) var(--ease-out-quart),
               box-shadow var(--dur-fast) var(--ease-out-quart),
-              transform var(--dur-instant) var(--ease-out-quart);
+              transform var(--dur-fast) var(--ease-out-quart),
+              translate 200ms var(--ease-out-quart);
 }
 
-.btn-primary:hover {
+/* 主按钮「光泽扫过」：一道高光斜条在 hover 进入时单次扫过。
+   静止态 translateX(-130%) 离屏、且不加 transition —— 离场瞬时归位，
+   高光在屏外，归位不可见，因此只呈现单方向的一次扫过，不往返。 */
+.btn-primary::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    105deg,
+    transparent 38%,
+    oklch(100% 0 0 / 0.24) 50%,
+    transparent 62%
+  );
+  transform: translateX(-130%);
+}
+
+.btn-primary:hover:not(:disabled) {
   background: var(--accent-solid-hover);
-  box-shadow: 0 4px 14px -2px oklch(45% 0.09 178 / 0.32);
+  box-shadow: 0 10px 26px -6px oklch(45% 0.09 178 / 0.48);
+  transform: translateY(-2px);
 }
 
-.btn-primary:active {
-  transform: translateY(1px) scale(0.985);
+.btn-primary:hover:not(:disabled)::after {
+  transform: translateX(130%);
+  transition: transform 520ms var(--ease-out-expo);
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(0) scale(0.96);
 }
 
 /* 次按钮：描边，无填充 —— 解决「每个卡片底部都是满宽绿按钮」的噪音问题 */
@@ -558,16 +593,19 @@ html:not([data-theme]) .grid-texture::before {
   border: 1px solid var(--panel-border);
   transition: background var(--dur-fast) var(--ease-out-quart),
               border-color var(--dur-fast) var(--ease-out-quart),
-              transform var(--dur-instant) var(--ease-out-quart);
+              box-shadow var(--dur-fast) var(--ease-out-quart),
+              transform var(--dur-fast) var(--ease-out-quart);
 }
 
-.btn-secondary:hover {
+.btn-secondary:hover:not(:disabled) {
   background: var(--panel-hover-bg);
   border-color: var(--panel-border-strong);
+  box-shadow: 0 8px 20px -5px oklch(0% 0 0 / 0.34);
+  transform: translateY(-2px);
 }
 
-.btn-secondary:active {
-  transform: translateY(1px) scale(0.985);
+.btn-secondary:active:not(:disabled) {
+  transform: translateY(0) scale(0.96);
 }
 
 .btn-ghost {
@@ -575,12 +613,133 @@ html:not([data-theme]) .grid-texture::before {
   color: var(--text-secondary);
   border: 1px solid transparent;
   transition: background var(--dur-fast) var(--ease-out-quart),
-              color var(--dur-fast) var(--ease-out-quart);
+              color var(--dur-fast) var(--ease-out-quart),
+              transform var(--dur-fast) var(--ease-out-quart);
 }
 
-.btn-ghost:hover {
-  background: var(--panel-bg-soft);
+/* ghost 与 Tailwind 侧历史行为对齐：hover 用 surface-sunken（不是 panel-bg-soft） */
+.btn-ghost:hover:not(:disabled) {
+  background: var(--surface-sunken);
   color: var(--text-primary);
+}
+
+.btn-ghost:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+/* 危险按钮：与 buttonClass() 的 danger 变体同源，仅描边加浓 + 轻微抬升 */
+.btn-danger {
+  background: var(--tone-danger-surface);
+  color: var(--tone-danger-text);
+  border: 1px solid color-mix(in oklab, var(--tone-danger) 35%, transparent);
+  transition: background var(--dur-fast) var(--ease-out-quart),
+              border-color var(--dur-fast) var(--ease-out-quart),
+              transform var(--dur-fast) var(--ease-out-quart);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--tone-danger) 14%, var(--tone-danger-surface));
+  border-color: color-mix(in oklab, var(--tone-danger) 60%, transparent);
+  box-shadow: 0 8px 20px -5px oklch(40% 0.12 18 / 0.4);
+  transform: translateY(-2px);
+}
+
+.btn-danger:active:not(:disabled) {
+  transform: translateY(0) scale(0.96);
+}
+
+/* ---- 鼠标跟随光斑（spotlight） --------------------------------------------
+   .spot 元素内有一枚 120px 径向光斑跟着指针走（--spot-x/y 由 page.tsx 的
+   全局 pointermove 监听写入，纯 CSS 变量，不走 React 状态）。
+   与按钮/导航/下拉触发器叠加，hover 时浮现 —— 「仪器面板被手电照到」的隐喻。
+   reduced-motion 下 opacity 仍生效（是状态不是动画），光斑位置即时跟随。 */
+.spot {
+  position: relative;
+  overflow: hidden;
+}
+
+.spot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    130px circle at var(--spot-x, 50%) var(--spot-y, 50%),
+    color-mix(in oklab, var(--tone-accent) 26%, transparent),
+    transparent 68%
+  );
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out-quart);
+}
+
+.spot:hover::before,
+.spot:focus-visible::before {
+  opacity: 1;
+}
+
+/* ---- 告警呼吸脉冲（SOC 大屏专用） ------------------------------------------
+   设计规范允许发光只用于「活动/告警」这类有意义的信号：实时拦截 KPI 有
+   数据时图标以 2s 周期呼吸。只用 opacity + scale，无 filter 重绘开销；
+   reduced-motion 由文末全局规则削平。 */
+@keyframes alert-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.92);
+  }
+}
+
+.pulse-alert {
+  animation: alert-pulse 2s var(--ease-out-quart) infinite;
+}
+
+/* ---- 聊天「正在请求」指示点 ------------------------------------------------
+   替换 animate-bounce（弹性回弹违反 motion 规范）：交替缩放脉冲，错峰延迟。 */
+@keyframes dot-pulse {
+  0%,
+  100% {
+    transform: scale(0.7);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.chat-dot {
+  animation: dot-pulse 1s var(--ease-out-quart) infinite;
+}
+
+/* 负延迟 = 首帧即处于相位中段，三枚点从第一秒起就是错峰的 */
+.chat-dot:nth-child(2) {
+  animation-delay: -0.66s;
+}
+
+.chat-dot:nth-child(3) {
+  animation-delay: -0.33s;
+}
+
+/* ---- 背景光斑视差 ----------------------------------------------------------
+   两枚页面级光斑随指针轻微漂移（--glow-mx/my ∈ [-1,1]，由同一个
+   pointermove 监听写入 html）。幅度刻意小（14px 内），是「页面活着」的
+   环境反馈，不是装饰动画；reduced-motion 下整体禁用（避免指针每帧跳变）。 */
+.page-glow {
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .page-glow {
+    transform: translate(
+      calc(var(--glow-mx, 0) * 14px),
+      calc(var(--glow-my, 0) * 10px)
+    );
+    transition: transform 700ms var(--ease-out-quart);
+  }
 }
 
 /* ---- 语义标签 ------------------------------------------------------------ */

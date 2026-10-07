@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { AnimatedNumber } from "./animated-number";
 import {
   Activity,
   AlertTriangle,
@@ -381,28 +382,28 @@ export default function SecurityDashboard({ apiBase, buildAuthHeaders, onExit }:
               <div className="soc-card relative overflow-hidden rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--surface-raised)] p-4.5 backdrop-blur-md">
                 <div className="text-[length:var(--text-micro)] text-[var(--text-muted)]">实时拦截</div>
                 <motion.div key={`events-${events.length}`} initial={{ opacity: 0.4, y: 5 }} animate={{ opacity: 1, y: 0 }} className="mt-1 font-mono text-3xl font-bold tabular-nums text-[var(--tone-danger-text)]">
-                  {events.length}
+                  <AnimatedNumber value={events.length} durationMs={600} />
                 </motion.div>
-                <ShieldAlert className="absolute right-3.5 top-3.5 h-4 w-4 text-[var(--tone-danger-text)]/60" aria-hidden />
+                <ShieldAlert className={`absolute right-3.5 top-3.5 h-4 w-4 text-[var(--tone-danger-text)]/60 ${events.length > 0 ? "pulse-alert" : ""}`} aria-hidden />
               </div>
               <div className="soc-card relative overflow-hidden rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--surface-raised)] p-4.5 backdrop-blur-md">
                 <div className="text-[length:var(--text-micro)] text-[var(--text-muted)]">网关请求</div>
                 <div className="mt-1 font-mono text-3xl font-bold tabular-nums text-[var(--tone-accent-text)]">
-                  {metrics ? metrics.totalRequests.toLocaleString("zh-CN") : "—"}
+                  {metrics ? <AnimatedNumber value={metrics.totalRequests} format={(n) => n.toLocaleString("zh-CN")} /> : "—"}
                 </div>
                 <Activity className="absolute right-3.5 top-3.5 h-4 w-4 text-[var(--tone-accent-text)]/60" aria-hidden />
               </div>
               <div className="soc-card relative overflow-hidden rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--surface-raised)] p-4.5 backdrop-blur-md">
                 <div className="text-[length:var(--text-micro)] text-[var(--text-muted)]">累计阻断 403</div>
                 <div className="mt-1 font-mono text-3xl font-bold tabular-nums text-[var(--tone-warning-text)]">
-                  {metrics ? metrics.blocked.toLocaleString("zh-CN") : "—"}
+                  {metrics ? <AnimatedNumber value={metrics.blocked} format={(n) => n.toLocaleString("zh-CN")} /> : "—"}
                 </div>
                 <Zap className="absolute right-3.5 top-3.5 h-4 w-4 text-[var(--tone-warning-text)]/60" aria-hidden />
               </div>
               <div className="soc-card relative overflow-hidden rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--surface-raised)] p-4.5 backdrop-blur-md">
                 <div className="text-[length:var(--text-micro)] text-[var(--text-muted)]">平均延迟</div>
                 <div className="mt-1 font-mono text-3xl font-bold tabular-nums text-[var(--tone-info-text)]">
-                  {avgLatencyMs !== null ? `${avgLatencyMs.toFixed(0)}ms` : "—"}
+                  {avgLatencyMs !== null ? <AnimatedNumber value={avgLatencyMs} format={(n) => `${Math.round(n)}ms`} /> : "—"}
                 </div>
                 <Timer className="absolute right-3.5 top-3.5 h-4 w-4 text-[var(--tone-info-text)]/60" aria-hidden />
               </div>

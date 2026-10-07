@@ -38,7 +38,7 @@ type DropdownPosition = {
 };
 
 const triggerClassName =
-  "group flex min-h-10 w-full items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--field-border)] bg-[var(--field-bg)] px-3.5 py-2 text-left text-[length:var(--text-body)] text-[var(--text-primary)] shadow-[var(--panel-shadow-soft)] backdrop-blur-[var(--blur-glass)] transition-[color,background-color,border-color,transform] duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] hover:border-[var(--panel-border-strong)] hover:bg-[var(--field-focus-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--tone-accent)] active:scale-[0.99]";
+  "group spot flex min-h-10 w-full items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--field-border)] bg-[var(--field-bg)] px-3.5 py-2 text-left text-[length:var(--text-body)] text-[var(--text-primary)] shadow-[var(--panel-shadow-soft)] backdrop-blur-[var(--blur-glass)] transition-[color,background-color,border-color,transform] duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] hover:border-[var(--panel-border-strong)] hover:bg-[var(--field-focus-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--tone-accent)] active:scale-[0.99]";
 
 const panelClassNameBase =
   "overflow-hidden rounded-[var(--radius-md)] border border-[color:var(--tooltip-border)] bg-[color:var(--tooltip-bg)] p-1.5 shadow-[var(--tooltip-shadow)] ring-1 ring-[var(--panel-border)] backdrop-blur-[var(--blur-glass-strong)]";

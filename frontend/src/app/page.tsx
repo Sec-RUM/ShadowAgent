@@ -49,11 +49,13 @@ import {
   Send,
   ShieldAlert,
 } from "lucide-react";
-import { AnimatePresence, motion, type Variants } from "framer-motion";
+import { AnimatePresence, MotionConfig, motion, type Variants } from "framer-motion";
 import type { FormEvent, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatedInterceptLogList, GlassInterceptLogCard, LogListSkeleton } from "./components/intercept-log-card";
+import { AnimatedNumber } from "./components/animated-number";
 import { GlassSelect, type GlassSelectOption } from "./components/glass-select";
+import { InteractiveBackground } from "./components/interactive-background";
 import SecurityDashboard from "./components/security-dashboard";
 import { buildTimeTooltip, formatBeijingTime, formatRelativeTime, parseDateValue } from "./time-utils";
 // Registration copy and the email-shape guard are plain modules so they can be
@@ -760,7 +762,12 @@ const VIEW_ITEMS: Array<{
 ];
 
 const buttonBase =
-  "inline-flex min-h-9 max-w-full shrink-0 items-center justify-center gap-2 rounded-[var(--radius-sm)] px-3.5 py-1.5 text-[length:var(--text-caption)] font-medium whitespace-nowrap transition-colors duration-[var(--dur-fast)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tone-accent)] disabled:cursor-not-allowed disabled:opacity-50";
+  /* 结构层：颜色 / 悬停 / 按压 / 阴影全部由 globals.css 的 .btn-* 语义类承担，
+     两套按钮体系已合并 —— 这里的变体只决定用哪个语义类。
+     group 供图标微动效使用；spot 挂鼠标跟随光斑（globals.css .spot::before）。
+     焦点态不在此声明：CSS 类的 box-shadow 会压掉 Tailwind ring，
+     统一走 globals.css 的全局 :focus-visible outline（unlayered，优先级可靠）。 */
+  "group spot inline-flex min-h-9 max-w-full shrink-0 items-center justify-center gap-2 rounded-[var(--radius-sm)] px-3.5 py-1.5 text-[length:var(--text-caption)] font-medium whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50";
 
 const inputBase =
   "min-h-9 w-full min-w-0 rounded-[var(--radius-sm)] border border-[var(--field-border)] bg-[var(--field-bg)] px-3 py-1.5 text-[length:var(--text-caption)] text-[var(--text-primary)] outline-none transition-colors duration-[var(--dur-fast)] placeholder:text-[var(--text-muted)] hover:border-[var(--field-border-strong)] focus:border-[var(--tone-accent)] focus:ring-2 focus:ring-[var(--tone-accent-surface)]";
@@ -772,19 +779,20 @@ const glassPanelSoftClass =
   "rounded-[var(--radius-md)] border border-[var(--panel-border-soft)] bg-[var(--panel-bg-soft)] shadow-[var(--panel-shadow-soft)]";
 
 const glassPanelMotionClass =
-  "group relative overflow-hidden transition-[border-color,background-color,box-shadow] duration-[240ms] ease-[var(--ease-out-quart)] hover:border-[var(--panel-border-strong)] hover:bg-[var(--panel-hover-bg)] hover:shadow-[var(--panel-shadow-hover)]";
+  "group relative overflow-hidden transition-[border-color,background-color,box-shadow,transform] duration-[240ms] ease-[var(--ease-out-quart)] hover:-translate-y-0.5 hover:border-[var(--panel-border-strong)] hover:bg-[var(--panel-hover-bg)] hover:shadow-[var(--panel-shadow-hover)]";
 
 const floatingGlassMenuClass =
   "overflow-hidden rounded-[var(--radius-md)] border border-[var(--panel-border-strong)] bg-[var(--tooltip-bg)] p-1.5 shadow-[var(--tooltip-shadow)] backdrop-blur-[var(--blur-glass-lg)]";
 
 const viewVariants: Variants = {
-  hidden: { opacity: 0, y: 6 },
+  hidden: { opacity: 0, y: 14, scale: 0.988 },
   show: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.24, ease: [0.16, 1, 0.3, 1] },
+    scale: 1,
+    transition: { duration: 0.3, ease: [0.16, 1, 0.3, 1] },
   },
-  exit: { opacity: 0, y: -4, transition: { duration: 0.16, ease: [0.4, 0, 1, 1] } },
+  exit: { opacity: 0, y: -10, scale: 0.992, transition: { duration: 0.18, ease: [0.4, 0, 1, 1] } },
 };
 
 const THEME_OPTIONS = [
@@ -907,17 +915,9 @@ function activeViewFromHash() {
 }
 
 function buttonClass(variant: "primary" | "secondary" | "ghost" | "danger" = "secondary") {
-  const variants = {
-    primary:
-      "bg-[var(--accent-solid)] text-[var(--accent-on-solid)] shadow-[var(--panel-shadow-soft)] hover:bg-[var(--accent-solid-hover)]",
-    secondary:
-      "border border-[var(--panel-border)] bg-[var(--field-bg)] text-[var(--text-primary)] hover:border-[var(--panel-border-strong)] hover:bg-[var(--panel-hover-bg)]",
-    ghost: "text-[var(--text-secondary)] hover:bg-[var(--surface-sunken)] hover:text-[var(--text-primary)]",
-    danger:
-      "border border-[color-mix(in_oklab,var(--tone-danger)_35%,transparent)] bg-[var(--tone-danger-surface)] text-[var(--tone-danger-text)] hover:border-[color-mix(in_oklab,var(--tone-danger)_55%,transparent)]",
-  };
-
-  return `${buttonBase} ${variants[variant]}`;
+  // 交互态（hover 抬升 / 按压 / 主按钮光泽扫过）统一收敛在 globals.css 的 .btn-*，
+  // 此处不再用 Tailwind 重复定义颜色 —— 双轨合并后行为全站一致。
+  return `${buttonBase} btn-${variant}`;
 }
 
 function formatTime(value: string) {
@@ -1905,6 +1905,69 @@ export default function Home() {
   // Verify the configured Admin API Key against the backend before trusting
   // it for admin UI. 401/403 => invalid (panels stay locked + user is told);
   // network errors => unverifiable (also locked, distinct message).
+  /* 指针追踪（纯展示层，不碰任何 state/API）：
+     · .spot 元素写入 --spot-x/y —— globals.css 据此绘制鼠标跟随光斑
+     · .btn-primary 写入 --mag-x/y —— 磁吸微移（±5px 封顶，仅鼠标 + 非 reduced-motion）
+     · html 写入 --glow-mx/my ∈ [-1,1] —— 页面级光斑视差（globals.css .page-glow）
+     rAF 合帧避免 pointermove 高频写样式；事件目标可能不是元素，需判空。 */
+  useEffect(() => {
+    let frame = 0;
+    let lastEvent: PointerEvent | null = null;
+    let lastMagnetic: HTMLElement | null = null;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+    const apply = () => {
+      frame = 0;
+      const event = lastEvent;
+      if (!event) return;
+      const target = event.target instanceof Element ? event.target.closest<HTMLElement>(".spot") : null;
+      if (target) {
+        const rect = target.getBoundingClientRect();
+        target.style.setProperty("--spot-x", `${event.clientX - rect.left}px`);
+        target.style.setProperty("--spot-y", `${event.clientY - rect.top}px`);
+      }
+
+      const magnetic =
+        !reducedMotion.matches && event.pointerType === "mouse" && event.target instanceof Element
+          ? event.target.closest<HTMLElement>(".btn-primary:not(:disabled)")
+          : null;
+      if (magnetic !== lastMagnetic) {
+        lastMagnetic?.style.setProperty("--mag-x", "0px");
+        lastMagnetic?.style.setProperty("--mag-y", "0px");
+        lastMagnetic = magnetic;
+      }
+      if (magnetic) {
+        const rect = magnetic.getBoundingClientRect();
+        const clamp = (v: number) => Math.max(-5, Math.min(5, v));
+        magnetic.style.setProperty("--mag-x", `${clamp((event.clientX - rect.left - rect.width / 2) * 0.16)}px`);
+        magnetic.style.setProperty("--mag-y", `${clamp((event.clientY - rect.top - rect.height / 2) * 0.16)}px`);
+      }
+
+      const root = document.documentElement;
+      root.style.setProperty("--glow-mx", ((event.clientX / window.innerWidth) * 2 - 1).toFixed(3));
+      root.style.setProperty("--glow-my", ((event.clientY / window.innerHeight) * 2 - 1).toFixed(3));
+    };
+
+    const resetMagnetic = () => {
+      lastMagnetic?.style.setProperty("--mag-x", "0px");
+      lastMagnetic?.style.setProperty("--mag-y", "0px");
+      lastMagnetic = null;
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      lastEvent = event;
+      if (!frame) frame = requestAnimationFrame(apply);
+    };
+
+    document.addEventListener("pointermove", onPointerMove, { passive: true });
+    document.documentElement.addEventListener("pointerleave", resetMagnetic);
+    return () => {
+      document.removeEventListener("pointermove", onPointerMove);
+      document.documentElement.removeEventListener("pointerleave", resetMagnetic);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, []);
+
   useEffect(() => {
     const adminKey = settings.adminApiKey.trim();
 
@@ -4556,9 +4619,13 @@ export default function Home() {
   );
 
   const renderAuthScreen = () => (
+    /* MotionConfig：全部 framer-motion 动画尊重系统「减少动态」偏好 ——
+       transform/layout 动画转为即时，opacity 保留（全局 CSS 规则管不到 JS 动画） */
+    <MotionConfig reducedMotion="user">
     <main className="relative min-h-[100dvh] overflow-hidden bg-background text-foreground">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,var(--page-glow-a),transparent_32rem),radial-gradient(circle_at_86%_16%,var(--page-glow-b),transparent_32rem)]" aria-hidden />
+      <div className="page-glow pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,var(--page-glow-a),transparent_32rem),radial-gradient(circle_at_86%_16%,var(--page-glow-b),transparent_32rem)]" aria-hidden />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(var(--page-grid)_1px,transparent_1px),linear-gradient(90deg,var(--page-grid)_1px,transparent_1px)] bg-[size:64px_64px] opacity-60 [mask-image:radial-gradient(ellipse_at_30%_10%,black,transparent_75%)]" aria-hidden />
+      <InteractiveBackground />
       <div className="relative mx-auto grid min-h-[100dvh] w-full max-w-6xl items-center gap-10 px-5 py-12 lg:gap-14 xl:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
         <section className="max-w-2xl">
           <div className="inline-flex items-center gap-2 rounded-full border border-[color-mix(in_oklab,var(--tone-accent)_26%,transparent)] bg-[var(--tone-accent-surface)] px-3 py-1 text-[length:var(--text-micro)] font-semibold uppercase tracking-[0.14em] text-[var(--tone-accent-text)]">
@@ -4616,12 +4683,22 @@ export default function Home() {
                   setAuthMode("login");
                   setAuthError("");
                 }}
-                className={`min-h-9 flex-1 rounded-[var(--radius-xs)] text-[length:var(--text-caption)] font-semibold transition-colors duration-[var(--dur-fast)] ${
+                className={`relative isolate min-h-9 flex-1 rounded-[var(--radius-xs)] text-[length:var(--text-caption)] font-semibold transition-colors duration-[var(--dur-fast)] ${
                   authMode === "login"
-                    ? "border border-[var(--panel-border)] bg-[var(--panel-bg-solid)] text-[var(--text-primary)] shadow-[var(--panel-shadow-soft)]"
-                    : "border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                    ? "text-[var(--text-primary)]"
+                    : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
                 }`}
               >
+                {/* 选中态滑块：与侧栏导航同款 layoutId 胶囊，在「登录/注册」间滑动。
+                    isolate + -z-10 让胶囊垫在文字下、容器底色上。 */}
+                {authMode === "login" ? (
+                  <motion.span
+                    layoutId="auth-tab-pill"
+                    aria-hidden
+                    transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+                    className="absolute inset-0 -z-10 rounded-[var(--radius-xs)] border border-[var(--panel-border)] bg-[var(--panel-bg-solid)] shadow-[var(--panel-shadow-soft)]"
+                  />
+                ) : null}
                 登录
               </button>
               <button
@@ -4630,12 +4707,20 @@ export default function Home() {
                   setAuthMode("register");
                   setAuthError("");
                 }}
-                className={`min-h-9 flex-1 rounded-[var(--radius-xs)] text-[length:var(--text-caption)] font-semibold transition-colors duration-[var(--dur-fast)] ${
+                className={`relative isolate min-h-9 flex-1 rounded-[var(--radius-xs)] text-[length:var(--text-caption)] font-semibold transition-colors duration-[var(--dur-fast)] ${
                   authMode === "register"
-                    ? "border border-[var(--panel-border)] bg-[var(--panel-bg-solid)] text-[var(--text-primary)] shadow-[var(--panel-shadow-soft)]"
-                    : "border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                    ? "text-[var(--text-primary)]"
+                    : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
                 }`}
               >
+                {authMode === "register" ? (
+                  <motion.span
+                    layoutId="auth-tab-pill"
+                    aria-hidden
+                    transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+                    className="absolute inset-0 -z-10 rounded-[var(--radius-xs)] border border-[var(--panel-border)] bg-[var(--panel-bg-solid)] shadow-[var(--panel-shadow-soft)]"
+                  />
+                ) : null}
                 注册
               </button>
             </div>
@@ -4823,6 +4908,7 @@ export default function Home() {
       </div>
       {renderToasts()}
     </main>
+    </MotionConfig>
   );
 
   const renderMetrics = () => {
@@ -5204,7 +5290,7 @@ export default function Home() {
                       <span className="mt-0.5 block text-[length:var(--text-micro)] text-[var(--text-muted)]">{item.detail}</span>
                     </dt>
                     <dd className="tnum shrink-0 font-mono text-[length:var(--text-caption)] font-semibold text-[var(--text-secondary)]">
-                      {item.count}
+                      <AnimatedNumber value={item.count} />
                     </dd>
                   </div>
                 ))}
@@ -5231,7 +5317,9 @@ export default function Home() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="text-[length:var(--text-micro)] font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">验证准备度</div>
-                    <div className="tnum mt-2 text-[length:var(--text-display)] font-bold leading-none tracking-[-0.03em] text-[var(--text-primary)]">{validationReadiness.score}%</div>
+                    <div className="tnum mt-2 text-[length:var(--text-display)] font-bold leading-none tracking-[-0.03em] text-[var(--text-primary)]">
+                      <AnimatedNumber value={validationReadiness.score} />%
+                    </div>
                   </div>
                   <span className="chip chip-accent">
                     {validationReadiness.label}
@@ -5244,7 +5332,9 @@ export default function Home() {
                   {attackCoverage.map((item) => (
                     <div key={item.label} className="flex items-center justify-between rounded-[var(--radius-sm)] border border-[var(--panel-border-soft)] bg-[var(--surface-sunken)] px-3.5 py-2">
                       <span className="text-[length:var(--text-body)] text-[var(--text-secondary)]">{item.label}</span>
-                      <span className={`tnum text-[length:var(--text-body)] font-semibold ${item.tone}`}>{item.count}</span>
+                      <span className={`tnum text-[length:var(--text-body)] font-semibold ${item.tone}`}>
+                        <AnimatedNumber value={item.count} />
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -5280,7 +5370,9 @@ export default function Home() {
                 <span className="text-[length:var(--text-micro)] font-medium uppercase tracking-[0.1em] text-[var(--text-muted)]">{metric.label}</span>
                 <metric.icon className={`h-4 w-4 ${metric.tone}`} aria-hidden />
               </div>
-              <div className="tnum mt-3 font-mono text-[length:var(--text-title)] font-semibold leading-none tracking-[-0.03em] text-[var(--text-primary)]">{metric.value}</div>
+              <div className="tnum mt-3 font-mono text-[length:var(--text-title)] font-semibold leading-none tracking-[-0.03em] text-[var(--text-primary)]">
+                {typeof metric.value === "number" ? <AnimatedNumber value={metric.value} /> : metric.value}
+              </div>
             </div>
           ))}
         </section>
@@ -5715,7 +5807,7 @@ export default function Home() {
         <div className="relative mt-3 flex flex-wrap items-center justify-between gap-2 text-[length:var(--text-body)]">
           <div className="flex items-center gap-2 text-[var(--text-secondary)]">
             <Filter className="h-4 w-4" aria-hidden />
-            当前显示 {filteredLogs.length} / {logs.length} 条
+            当前显示 <AnimatedNumber value={filteredLogs.length} /> / <AnimatedNumber value={logs.length} /> 条
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={seedLogs} className={buttonClass("secondary")}>
@@ -6372,7 +6464,13 @@ export default function Home() {
             ) : (
               <div className="space-y-5">
                 {chatMessages.map((message) => (
-                  <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <motion.div
+                    key={message.id}
+                    initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+                    className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                  >
                     <div className={`max-w-[min(760px,90%)] ${message.role === "user" ? "items-end" : "items-start"}`}>
                       <div className="mb-1.5 px-1.5 text-[length:var(--text-micro)] text-[var(--text-muted)]">{message.role === "user" ? "你" : "Shadow Agent"}</div>
                       <div
@@ -6385,15 +6483,15 @@ export default function Home() {
                         {message.content}
                       </div>
                     </div>
-                  </div>
+                  </motion.div>
                 ))}
                 {chatLoading ? (
                   <div className="flex justify-start">
                     <div className="flex items-center gap-2.5 rounded-[var(--radius-lg)] rounded-tl-xs border border-[var(--panel-border-soft)] bg-[var(--surface-elevated)] px-4.5 py-3 text-[length:var(--text-body)] text-[var(--text-secondary)] shadow-[var(--panel-shadow-soft)]">
                       <span className="flex gap-1">
-                        <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--tone-accent-surface)] [animation-delay:-0.3s]" />
-                        <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--tone-accent-surface)] [animation-delay:-0.15s]" />
-                        <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--tone-accent-surface)]" />
+                        <span className="chat-dot h-2 w-2 rounded-full bg-[var(--tone-accent-surface)]" />
+                        <span className="chat-dot h-2 w-2 rounded-full bg-[var(--tone-accent-surface)]" />
+                        <span className="chat-dot h-2 w-2 rounded-full bg-[var(--tone-accent-surface)]" />
                       </span>
                       <span>正在请求模型...</span>
                     </div>
@@ -6421,7 +6519,7 @@ export default function Home() {
               />
             </label>
             <button type="submit" disabled={chatLoading || !chatInput.trim()} className={`${buttonClass("primary")} min-h-24 shrink-0 sm:w-28`}>
-              <Send className="h-4 w-4" aria-hidden />
+              <Send className="h-4 w-4 transition-transform duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] group-hover:translate-x-0.5" aria-hidden />
               {chatLoading ? "处理中" : "发送"}
             </button>
           </form>
@@ -8091,9 +8189,12 @@ export default function Home() {
   }
 
   return (
+    <MotionConfig reducedMotion="user">
     <main className="relative min-h-[100dvh] overflow-hidden bg-background text-foreground">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,var(--page-glow-a),transparent_32rem),radial-gradient(circle_at_82%_14%,var(--page-glow-b),transparent_30rem),linear-gradient(135deg,rgba(255,255,255,0.035),transparent_40%)]" />
+      <div className="page-glow pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,var(--page-glow-a),transparent_32rem),radial-gradient(circle_at_82%_14%,var(--page-glow-b),transparent_30rem),linear-gradient(135deg,rgba(255,255,255,0.035),transparent_40%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(var(--page-grid)_1px,transparent_1px),linear-gradient(90deg,var(--page-grid)_1px,transparent_1px)] bg-[size:56px_56px] opacity-25" />
+      {/* 粒子网络场：垫在网格底纹之上、内容之下 —— 指针推开节点、点亮连线、点击泛涟漪 */}
+      <InteractiveBackground />
       <div className="relative grid min-h-[100dvh] grid-cols-1 lg:grid-cols-[268px_minmax(0,1fr)]">
         <aside className="flex flex-col gap-5 border-b border-[var(--panel-border-soft)] bg-[var(--panel-bg-soft)] px-4 py-5 shadow-[var(--sidebar-shadow)] backdrop-blur-[var(--blur-glass)] lg:sticky lg:top-0 lg:h-[100dvh] lg:border-b-0 lg:border-r">
           {/* 品牌 */}
@@ -8125,21 +8226,29 @@ export default function Home() {
                   type="button"
                   onClick={() => navigateTo(item.id)}
                   aria-current={active ? "page" : undefined}
-                  className={`group relative flex min-h-9 items-center gap-3 rounded-[var(--radius-sm)] px-3 text-left text-[length:var(--text-caption)] font-medium transition-colors duration-[var(--dur-fast)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tone-accent)] ${
+                  className={`group spot relative flex min-h-9 items-center gap-3 rounded-[var(--radius-sm)] px-3 text-left text-[length:var(--text-caption)] font-medium transition-colors duration-[var(--dur-fast)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tone-accent)] ${
                     active
-                      ? "bg-[var(--tone-accent-surface)] text-[var(--tone-accent-text)]"
+                      ? "text-[var(--tone-accent-text)]"
                       : "text-[var(--text-secondary)] hover:bg-[var(--surface-sunken)] hover:text-[var(--text-primary)]"
                   }`}
                 >
-                  {/* 选中态：左侧竖条而非整块高亮 —— 更克制、不抢视线 */}
-                  <span
+                  {/* 选中态滑块：layoutId 让「底色胶囊 + 左侧 2px 竖条」在菜单项之间
+                      连续滑动，而不是各自硬切。竖条由 before 伪元素承担，随胶囊同动。
+                      tween + expo 缓动与 viewVariants 同族；MotionConfig 已统一尊重
+                      prefers-reduced-motion。 */}
+                  {active ? (
+                    <motion.span
+                      layoutId="nav-active-pill"
+                      aria-hidden
+                      transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+                      className="absolute inset-0 rounded-[var(--radius-sm)] bg-[var(--tone-accent-surface)] before:absolute before:left-0 before:top-1/2 before:h-4 before:w-[2px] before:-translate-y-1/2 before:rounded-full before:bg-[var(--tone-accent)] before:content-['']"
+                    />
+                  ) : null}
+                  <item.icon
+                    className="relative h-4 w-4 shrink-0 transition-transform duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] group-hover:translate-x-0.5"
                     aria-hidden
-                    className={`absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-[var(--tone-accent)] transition-opacity duration-[var(--dur-fast)] ${
-                      active ? "opacity-100" : "opacity-0"
-                    }`}
                   />
-                  <item.icon className="h-4 w-4 shrink-0" aria-hidden />
-                  <span className="truncate">{item.label}</span>
+                  <span className="relative truncate">{item.label}</span>
                 </button>
               );
             })}
@@ -8270,13 +8379,13 @@ export default function Home() {
                   刷新日志
                 </button>
               ) : null}
-              <button type="button" onClick={() => navigateTo("chat")} className="btn-primary inline-flex min-h-9 items-center gap-2 rounded-[var(--radius-sm)] px-3.5 text-[length:var(--text-caption)] font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tone-accent)]">
-                <MessageSquare className="h-3.5 w-3.5" aria-hidden />
+              <button type="button" onClick={() => navigateTo("chat")} className="btn-primary group spot inline-flex min-h-9 items-center gap-2 rounded-[var(--radius-sm)] px-3.5 text-[length:var(--text-caption)] font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tone-accent)]">
+                <MessageSquare className="h-3.5 w-3.5 transition-transform duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] group-hover:translate-x-0.5" aria-hidden />
                 开始对话
               </button>
               {hasAdminAccess ? (
-                <button type="button" onClick={() => navigateTo("gateway")} className="btn-secondary inline-flex min-h-9 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-[length:var(--text-caption)] font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tone-accent)]">
-                  <Play className="h-3.5 w-3.5" aria-hidden />
+                <button type="button" onClick={() => navigateTo("gateway")} className="btn-secondary group spot inline-flex min-h-9 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-[length:var(--text-caption)] font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tone-accent)]">
+                  <Play className="h-3.5 w-3.5 transition-transform duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] group-hover:translate-x-0.5" aria-hidden />
                   网关测试
                 </button>
               ) : null}
@@ -8381,5 +8490,6 @@ export default function Home() {
 
       {renderToasts()}
     </main>
+    </MotionConfig>
   );
 }

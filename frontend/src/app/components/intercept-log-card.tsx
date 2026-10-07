@@ -344,8 +344,11 @@ export function GlassInterceptLogCard({
          列模板由 rowGrid(dense) 统一提供，表头与行共用，不可能错位。 */
       className={`${rowGrid(dense)} group relative cursor-pointer border-b border-[var(--divider)] px-4 py-3 outline-none transition-colors duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] last:border-b-0 hover:bg-[var(--surface-sunken)] focus-visible:bg-[var(--surface-sunken)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--tone-accent)] sm:px-5`}
     >
-      {/* 风险档位竖条：唯一的颜色信号源 */}
-      <span aria-hidden className={`${cells.tick} ${meta.tick}`} />
+      {/* 风险档位竖条：唯一的颜色信号源；hover 时伸长 25%，随行反馈 */}
+      <span
+        aria-hidden
+        className={`${cells.tick} ${meta.tick} origin-center transition-transform duration-[var(--dur-fast)] ease-[var(--ease-out-quart)] group-hover:scale-y-125`}
+      />
 
       {/* 威胁类型（窄容器下与风险分同行） */}
       <span className={`${cells.threat} text-[length:var(--text-caption)] font-medium text-[var(--text-primary)]`}>
