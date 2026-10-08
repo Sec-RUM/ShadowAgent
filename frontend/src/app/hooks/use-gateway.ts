@@ -5,7 +5,7 @@
 import { useState, type FormEvent } from "react";
 import type { AnalyzeResponse, AppSettings, AuthSession, InterceptLog, LocalDecision, Toast } from "../types";
 import type { GatewayFormState, GatewayResult } from "../gateway-types";
-import { buildHeaders, detailText } from "../api-client";
+import { apiSend, buildHeaders, detailText } from "../api-client";
 import { asNumber, friendlyDecisionReason } from "../components/ui-kit";
 import { DEFAULT_GATEWAY_FORM } from "../gateway-types";
 
@@ -71,21 +71,17 @@ export function useGateway({
     const timer = window.setTimeout(() => controller.abort(), 10000);
 
     try {
-      const analyzeResponse = await fetch(`${apiBaseUrl}/api/v1/analyze`, {
-        method: "POST",
-        headers: buildHeaders(settings, "client", true, authSession),
-        signal: controller.signal,
-        body: JSON.stringify({
+      const analyzeData = await apiSend<AnalyzeResponse & { detail?: unknown }>(
+        `${apiBaseUrl}/api/v1/analyze`,
+        "POST",
+        {
           prompt: gatewayForm.prompt || "请处理外部上下文",
           external_context: gatewayForm.externalContext || null,
           tool_name: gatewayForm.toolName || null,
           parameters,
-        }),
-      });
-      const analyzeData = (await analyzeResponse.json().catch(() => ({}))) as AnalyzeResponse & { detail?: unknown };
-      if (!analyzeResponse.ok) {
-        throw new Error(detailText(analyzeData.detail) || `HTTP ${analyzeResponse.status}`);
-      }
+        },
+        { headers: buildHeaders(settings, "client", true, authSession), signal: controller.signal }
+      );
       if (analyzeData.decision === "blocked") {
         const firstBlocked = analyzeData.blocked_checks?.[0] ?? {};
         const blockedDecision: LocalDecision = {

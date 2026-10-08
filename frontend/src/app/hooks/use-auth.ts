@@ -7,7 +7,7 @@
 import { useCallback, useState } from "react";
 import type { AuthSession, InterceptLog, ManagedApiKeyIssueState, ManagedApiKeyItem, OrgInfo, SessionUser, Toast } from "../types";
 import type { GatewayResult } from "../gateway-types";
-import { detailText } from "../api-client";
+import { apiGet, detailText } from "../api-client";
 import { isValidEmailInput, type BootstrapStatus } from "../auth-logic";
 import { removeStorage, STORAGE_KEYS, writeStorage } from "../app-meta";
 import { asNumber } from "../components/ui-kit";
@@ -245,16 +245,12 @@ export function useAuth({
     setSsoBusy(true);
     setSsoHint("");
     try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/auth/sso/providers/${encodeURIComponent(slug)}`);
-      const data = (await response.json().catch(() => ({}))) as {
+      const data = await apiGet<{
         enabled?: boolean;
         provider_name?: string;
         login_url?: string;
         detail?: unknown;
-      };
-      if (!response.ok) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
+      }>(`${apiBaseUrl}/api/v1/auth/sso/providers/${encodeURIComponent(slug)}`);
       if (!data.enabled || !data.login_url) {
         throw new Error("该组织未启用 SSO 登录，请使用邮箱密码登录或联系组织管理员。");
       }

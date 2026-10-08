@@ -3,7 +3,7 @@
 
 import { useCallback, useState } from "react";
 import type { AppSettings, AuthSession, CustomRuleDraft, CustomRuleItem, DlpStatusInfo, RuleTestResult, Toast } from "../types";
-import { buildHeaders, detailText } from "../api-client";
+import { apiGet, apiSend, buildHeaders, detailText } from "../api-client";
 
 export function useRules({
   apiBaseUrl,
@@ -53,11 +53,10 @@ export function useRules({
       const timer = window.setTimeout(() => controller.abort(), 7000);
 
       try {
-        const [rulesResponse, dlpResponse] = await Promise.all([
-          fetch(`${apiBaseUrl}/api/v1/rules`, {
+        const [rulesData, dlpResponse] = await Promise.all([
+          apiGet<{ items?: CustomRuleItem[]; detail?: unknown }>(`${apiBaseUrl}/api/v1/rules`, {
             headers: buildHeaders(settings, "admin", false, authSession),
             signal: controller.signal,
-            cache: "no-store",
           }),
           fetch(`${apiBaseUrl}/api/v1/rules/dlp-status`, {
             headers: buildHeaders(settings, "admin", false, authSession),
@@ -65,13 +64,6 @@ export function useRules({
             cache: "no-store",
           }),
         ]);
-        const rulesData = (await rulesResponse.json().catch(() => ({}))) as {
-          items?: CustomRuleItem[];
-          detail?: unknown;
-        };
-        if (!rulesResponse.ok) {
-          throw new Error(detailText(rulesData.detail) || `HTTP ${rulesResponse.status}`);
-        }
         setCustomRules(rulesData.items ?? []);
         if (dlpResponse.ok) {
           const dlpData = (await dlpResponse.json().catch(() => ({}))) as DlpStatusInfo;
@@ -110,27 +102,21 @@ export function useRules({
     setRuleTestBusy(true);
     try {
       const editing = ruleEditingId !== null;
-      const response = await fetch(
+      await apiSend(
         editing ? `${apiBaseUrl}/api/v1/rules/${ruleEditingId}` : `${apiBaseUrl}/api/v1/rules`,
+        editing ? "PUT" : "POST",
         {
-          method: editing ? "PUT" : "POST",
-          headers: buildHeaders(settings, "admin", true, authSession),
-          body: JSON.stringify({
-            name,
-            description: ruleDraft.description.trim(),
-            rule_type: ruleDraft.rule_type,
-            pattern,
-            target: ruleDraft.target,
-            action: ruleDraft.action,
-            risk_score: ruleDraft.risk_score,
-            enabled: ruleDraft.enabled,
-          }),
-        }
+          name,
+          description: ruleDraft.description.trim(),
+          rule_type: ruleDraft.rule_type,
+          pattern,
+          target: ruleDraft.target,
+          action: ruleDraft.action,
+          risk_score: ruleDraft.risk_score,
+          enabled: ruleDraft.enabled,
+        },
+        { headers: buildHeaders(settings, "admin", true, authSession) }
       );
-      const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
-      if (!response.ok) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
       addToast(editing ? "规则已更新" : "规则已创建", "success");
       setRuleDraftOpen(false);
       setRuleEditingId(null);
@@ -155,14 +141,9 @@ export function useRules({
   const deleteCustomRule = async (item: CustomRuleItem) => {
     setRuleBusyId(item.id);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/rules/${item.id}`, {
-        method: "DELETE",
+      await apiSend(`${apiBaseUrl}/api/v1/rules/${item.id}`, "DELETE", undefined, {
         headers: buildHeaders(settings, "admin", true, authSession),
       });
-      const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
-      if (!response.ok) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
       addToast(`规则 ${item.name} 已删除`, "success");
       await loadCustomRules();
     } catch (error) {
@@ -176,24 +157,16 @@ export function useRules({
     setRuleBusyId(item.id);
     setCustomRules((current) => current.map((rule) => (rule.id === item.id ? { ...rule, enabled } : rule)));
     try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/rules/${item.id}`, {
-        method: "PUT",
-        headers: buildHeaders(settings, "admin", true, authSession),
-        body: JSON.stringify({
-          name: item.name,
-          description: item.description,
-          rule_type: item.rule_type,
-          pattern: item.pattern,
-          target: item.target,
-          action: item.action,
-          risk_score: item.risk_score,
-          enabled,
-        }),
-      });
-      const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
-      if (!response.ok) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
+      await apiSend(`${apiBaseUrl}/api/v1/rules/${item.id}`, "PUT", {
+        name: item.name,
+        description: item.description,
+        rule_type: item.rule_type,
+        pattern: item.pattern,
+        target: item.target,
+        action: item.action,
+        risk_score: item.risk_score,
+        enabled,
+      }, { headers: buildHeaders(settings, "admin", true, authSession) });
     } catch (error) {
       setCustomRules((current) => current.map((rule) => (rule.id === item.id ? { ...rule, enabled: !enabled } : rule)));
       addToast(error instanceof Error ? error.message : "切换规则失败", "error");
@@ -210,10 +183,10 @@ export function useRules({
     setRuleTestBusy(true);
     setRuleTestResult(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/rules/test`, {
-        method: "POST",
-        headers: buildHeaders(settings, "admin", true, authSession),
-        body: JSON.stringify({
+      const data = await apiSend<RuleTestResult & { detail?: unknown }>(
+        `${apiBaseUrl}/api/v1/rules/test`,
+        "POST",
+        {
           sample_text: ruleTestText,
           rule_id: null,
           draft: {
@@ -226,12 +199,9 @@ export function useRules({
             risk_score: ruleDraft.risk_score,
             enabled: ruleDraft.enabled,
           },
-        }),
-      });
-      const data = (await response.json().catch(() => ({}))) as RuleTestResult & { detail?: unknown };
-      if (!response.ok) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
+        },
+        { headers: buildHeaders(settings, "admin", true, authSession) }
+      );
       setRuleTestResult(data);
     } catch (error) {
       addToast(error instanceof Error ? error.message : "测试规则失败", "error");
@@ -268,18 +238,17 @@ export function useRules({
       const parsed = JSON.parse(text) as { exported_rules?: unknown };
       const rules = Array.isArray(parsed.exported_rules) ? parsed.exported_rules : null;
       if (!rules) throw new Error("文件格式不正确：缺少 exported_rules 数组");
-      const response = await fetch(`${apiBaseUrl}/api/v1/rules/import`, {
-        method: "POST",
-        headers: buildHeaders(settings, "admin", true, authSession),
-        body: JSON.stringify({ mode: "merge", rules }),
-      });
-      const data = (await response.json().catch(() => ({}))) as {
+      const data = await apiSend<{
         created?: number;
         updated?: number;
         skipped?: string[];
         detail?: unknown;
-      };
-      if (!response.ok) throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
+      }>(
+        `${apiBaseUrl}/api/v1/rules/import`,
+        "POST",
+        { mode: "merge", rules },
+        { headers: buildHeaders(settings, "admin", true, authSession) }
+      );
       const skippedCount = data.skipped?.length ?? 0;
       addToast(`导入完成：新增 ${data.created ?? 0}，更新 ${data.updated ?? 0}${skippedCount ? `，跳过 ${skippedCount}` : ""}`, "success");
       await loadCustomRules();
@@ -289,7 +258,6 @@ export function useRules({
       setRuleTestBusy(false);
     }
   };
-
   return {
     customRules,
     setCustomRules,

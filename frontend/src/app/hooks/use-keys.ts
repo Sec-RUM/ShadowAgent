@@ -4,7 +4,7 @@
 
 import { useCallback, useState } from "react";
 import type { AppSettings, AuthSession, ManagedApiKeyIssueState, ManagedApiKeyItem, ManagedApiKeyRole, Toast } from "../types";
-import { apiGet, buildHeaders, detailText } from "../api-client";
+import { apiGet, apiSend, buildHeaders, detailText } from "../api-client";
 import { isAdminRole } from "../app-meta";
 
 export function useKeys({
@@ -226,14 +226,9 @@ export function useKeys({
           action === "delete"
             ? `${apiBaseUrl}/api/v1/api-keys/${item.id}`
             : `${apiBaseUrl}/api/v1/api-keys/${item.id}/${action}`;
-        const response = await fetch(endpoint, {
-          method: action === "delete" ? "DELETE" : "POST",
+        await apiSend(endpoint, action === "delete" ? "DELETE" : "POST", undefined, {
           headers: buildHeaders(settings, "admin", false, authSession),
         });
-        const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
-        if (!response.ok) {
-          throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-        }
 
         if (action === "delete") {
           removeDeletedKeyFromSession(item);

@@ -164,17 +164,10 @@ export function useOrgs({
           setOrgMembersLoading(false);
         }
         try {
-          const ssoResponse = await fetch(`${apiBaseUrl}/api/v1/orgs/${orgId}/sso`, {
-            headers,
-            cache: "no-store",
-          });
-          const ssoData = (await ssoResponse.json().catch(() => ({}))) as {
+          const ssoData = await apiGet<{
             item?: SsoConfigItem | null;
             detail?: unknown;
-          };
-          if (!ssoResponse.ok) {
-            throw new Error(detailText(ssoData.detail) || `HTTP ${ssoResponse.status}`);
-          }
+          }>(`${apiBaseUrl}/api/v1/orgs/${orgId}/sso`, { headers });
           setOrgSsoConfig(ssoData.item ?? null);
           if (ssoData.item) {
             setOrgSsoForm({
