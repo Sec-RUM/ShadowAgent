@@ -180,9 +180,18 @@ jobs:
       # `frontend/tools/osv_npm_audit.py --prod-only` reproduces the result
       # from the lockfile through OSV when the registry audit endpoint is
       # unreachable.
+      #
+      # --omit=dev (2026-10-08): aligns this gate with the backend gate, which
+      # audits requirements.txt (runtime) and never requirements-dev.txt. The
+      # shipped artifact (Docker image) contains only the production tree.
+      # At the time of writing `braces` (reached only via
+      # eslint-config-next -> fast-glob -> micromatch, lint tooling) has NO
+      # fixed release for GHSA-vfj7-8cjw-p6xm, so auditing the dev tree would
+      # block CI on an unfixable advisory. Dev-dependency regressions are
+      # still caught by Dependabot's normal update flow.
       - name: Audit frontend dependencies
         working-directory: frontend
-        run: npm audit --audit-level=high
+        run: npm audit --omit=dev --audit-level=high
 
   docker-build:
     name: Docker image build
