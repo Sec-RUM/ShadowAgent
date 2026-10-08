@@ -48,8 +48,6 @@ import type {
   PolicyRule,
   ToolPermission,
   AppSettings,
-  Toast,
-  HealthState,
   LocalDecision,
   RoleShowcaseId,
 } from "./types";
@@ -65,7 +63,6 @@ import {
   managedKeyStatus,
   sanitizeSettingsForStorage,
   isAdminRole,
-  makeId,
   readStorage,
   removeStorage,
 } from "./app-meta";
@@ -82,6 +79,9 @@ import { useOperations } from "./hooks/use-operations";
 import { usePolicies } from "./hooks/use-policies";
 import { useValidation } from "./hooks/use-validation";
 import { useAuth } from "./hooks/use-auth";
+import { useToasts } from "./hooks/use-toasts";
+import { useSettings } from "./hooks/use-settings";
+import { useHealth } from "./hooks/use-health";
 import { MetricsView } from "./views/metrics-view";
 import { OverviewView } from "./views/overview-view";
 import { LogsView } from "./views/logs-view";
@@ -567,15 +567,22 @@ export default function Home() {
   const [search, setSearch] = useState("");
   const [riskFilter, setRiskFilter] = useState<"all" | "high" | "medium" | "low">("all");
   const [threatFilter, setThreatFilter] = useState("all");
-  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
-  const [keysVisible, setKeysVisible] = useState(false);
-  const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">("light");
-  const [themePickerOpen, setThemePickerOpen] = useState(false);
-  const [health, setHealth] = useState<HealthState>({ status: "unknown", message: "尚未检测" });
-  const [toasts, setToasts] = useState<Toast[]>([]);
   const [selectedLog, setSelectedLog] = useState<InterceptLog | null>(null);
   const [dashboardOpen, setDashboardOpen] = useState(false);
   const [roleShowcase, setRoleShowcase] = useState<RoleShowcaseId>("admin");
+
+  const { toasts, addToast } = useToasts();
+  const {
+    settings,
+    setSettings,
+    keysVisible,
+    setKeysVisible,
+    resolvedTheme,
+    themePickerOpen,
+    setThemePickerOpen,
+    saveSettings,
+    resetSettings,
+  } = useSettings({ addToast });
   const apiBaseUrl = (settings.apiBase || DEFAULT_API_BASE).replace(/\/$/, "");
   const securityConfigKey = `${apiBaseUrl}|${settings.adminApiKey}|${authSession?.accessToken ?? ""}|${user?.id ?? ""}`;
   const hasConsoleToken = isAuthSessionValid(authSession);
@@ -598,13 +605,7 @@ export default function Home() {
   const requestedViewItem = VIEW_ITEMS.find((item) => item.id === view);
   const effectiveView: ViewKey = requestedViewItem?.audience === "admin" && !hasAdminAccess ? "chat" : view;
 
-  const addToast = useCallback((message: string, type: Toast["type"] = "info") => {
-    const toast: Toast = { id: makeId("toast"), type, message };
-    setToasts((current) => [...current, toast]);
-    window.setTimeout(() => {
-      setToasts((current) => current.filter((item) => item.id !== toast.id));
-    }, 3200);
-  }, []);
+  const { health, checkHealth } = useHealth({ apiBaseUrl, addToast });
 
   // Verify the configured Admin API Key against the backend before trusting
   // it for admin UI. 401/403 => invalid (panels stay locked + user is told);
@@ -734,40 +735,6 @@ export default function Home() {
       window.clearTimeout(timer);
     };
   }, [addToast, apiBaseUrl, hasConsoleAdmin, settings.adminApiKey]);
-
-  const checkHealth = useCallback(async () => {
-    setHealth({ status: "checking", message: "检测中" });
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 5000);
-
-    try {
-      const response = await fetch(`${apiBaseUrl}/health`, {
-        signal: controller.signal,
-        cache: "no-store",
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = (await response.json()) as Record<string, unknown>;
-      const serviceLabel = detailText(data.service) || "online";
-      const proxyMode = typeof data.proxy_mode === "string" ? data.proxy_mode : "";
-      setHealth({
-        status: "online",
-        message: proxyMode ? `${serviceLabel} / ${proxyMode}` : serviceLabel,
-      });
-      addToast("网关连接正常", "success");
-    } catch (error) {
-      const message =
-        error instanceof Error && error.name === "AbortError"
-          ? "连接超时"
-          : error instanceof Error
-            ? error.message
-            : "连接失败";
-      setHealth({ status: "offline", message });
-      addToast(`网关连接失败：${message}`, "error");
-    } finally {
-      window.clearTimeout(timer);
-    }
-  }, [addToast, settings.apiBase]);
-
 
   const {
     metricsSnapshot,
@@ -1216,34 +1183,6 @@ export default function Home() {
     }, Math.max(10, settings.refreshInterval) * 1000);
     return () => window.clearInterval(interval);
   }, [loadLogs, loadManagedApiKeys, loadOperations, settings.autoRefresh, settings.refreshInterval, user]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const root = document.documentElement;
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const applyTheme = () => {
-      const nextTheme = settings.themeMode === "system" ? (media.matches ? "dark" : "light") : settings.themeMode;
-      root.dataset.theme = nextTheme;
-      setResolvedTheme(nextTheme);
-    };
-
-    applyTheme();
-    const handleChange = () => {
-      if (settings.themeMode === "system") {
-        applyTheme();
-      }
-    };
-
-    if (typeof media.addEventListener === "function") {
-      media.addEventListener("change", handleChange);
-      return () => media.removeEventListener("change", handleChange);
-    }
-
-    media.addListener(handleChange);
-    return () => media.removeListener(handleChange);
-  }, [settings.themeMode]);
-
   const activeView = VIEW_ITEMS.find((item) => item.id === effectiveView) ?? VIEW_ITEMS[0];
 
   const metrics = useMemo(() => {
@@ -1583,29 +1522,6 @@ export default function Home() {
     navigateTo("gateway");
     addToast("默认验证场景已就绪，可以直接发送检测", "success");
   }, [addToast, loadScenarioIntoGateway, navigateTo, seedLogs]);
-
-  const saveSettings = () => {
-    const normalized: AppSettings = {
-      ...settings,
-      apiBase: (settings.apiBase || "").trim().replace(/\/$/, "") || DEFAULT_API_BASE,
-      refreshInterval: Math.max(10, Number(settings.refreshInterval) || 30),
-    };
-    setSettings(normalized);
-    writeStorage(STORAGE_KEYS.settings, sanitizeSettingsForStorage(normalized));
-    addToast(
-      normalized.adminApiKey.trim() || normalized.clientApiKey.trim()
-        ? "设置已保存，敏感 Key 仅保留在当前浏览器会话"
-        : "设置已保存",
-      "success"
-    );
-  };
-
-  const resetSettings = () => {
-    setSettings(DEFAULT_SETTINGS);
-    writeStorage(STORAGE_KEYS.settings, DEFAULT_SETTINGS);
-    setThemePickerOpen(false);
-    addToast("设置已恢复默认", "info");
-  };
 
   const clearLocalLogs = () => {
     const remoteOnly = logs.filter((log) => log.id > 0);
