@@ -16,7 +16,8 @@ export function useHealth({
 }) {
   const [health, setHealth] = useState<HealthState>({ status: "unknown", message: "尚未检测" });
 
-  const checkHealth = useCallback(async () => {
+  const checkHealth = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent === true;
     setHealth({ status: "checking", message: "检测中" });
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), 5000);
@@ -34,7 +35,7 @@ export function useHealth({
         status: "online",
         message: proxyMode ? `${serviceLabel} / ${proxyMode}` : serviceLabel,
       });
-      addToast("网关连接正常", "success");
+      if (!silent) addToast("网关连接正常", "success");
     } catch (error) {
       const message =
         error instanceof Error && error.name === "AbortError"
@@ -43,7 +44,9 @@ export function useHealth({
             ? error.message
             : "连接失败";
       setHealth({ status: "offline", message });
-      addToast(`网关连接失败：${message}`, "error");
+      // silent（挂载自动探测）只更新侧栏状态点，不弹 toast —— 状态卡本身已用红点表达离线，
+      // 自动探测再弹「连接失败」就是把被动感知变成打扰。
+      if (!silent) addToast(`网关连接失败：${message}`, "error");
     } finally {
       window.clearTimeout(timer);
     }

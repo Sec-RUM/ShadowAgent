@@ -607,6 +607,13 @@ export default function Home() {
 
   const { health, checkHealth } = useHealth({ apiBaseUrl, addToast });
 
+  // 挂载后静默探测一次网关健康：侧栏状态从「未知」变真实状态（在线/离线），
+  // apiBase 变更时随 checkHealth 身份变化自动重测。silent = 不弹 toast。
+  useEffect(() => {
+    if (!mounted) return;
+    void checkHealth({ silent: true });
+  }, [checkHealth, mounted]);
+
   // Verify the configured Admin API Key against the backend before trusting
   // it for admin UI. 401/403 => invalid (panels stay locked + user is told);
   // network errors => unverifiable (also locked, distinct message).
@@ -2139,7 +2146,7 @@ export default function Home() {
       {/* 粒子网络场：垫在网格底纹之上、内容之下 —— 指针推开节点、点亮连线、点击泛涟漪 */}
       <InteractiveBackground />
       <div className="relative grid min-h-[100dvh] grid-cols-1 lg:grid-cols-[268px_minmax(0,1fr)]">
-        <aside className="flex flex-col gap-5 border-b border-[var(--panel-border-soft)] bg-[var(--panel-bg-soft)] px-4 py-5 shadow-[var(--sidebar-shadow)] backdrop-blur-[var(--blur-glass)] lg:sticky lg:top-0 lg:h-[100dvh] lg:border-b-0 lg:border-r">
+        <aside className="flex flex-col gap-5 border-b border-[var(--panel-border-soft)] bg-[var(--panel-bg-soft)] px-4 py-5 shadow-[var(--sidebar-shadow)] backdrop-blur-[var(--blur-glass)] lg:sticky lg:top-0 lg:h-[100dvh] lg:overflow-y-auto lg:border-b-0 lg:border-r">
           {/* 品牌 */}
           <button
             type="button"
