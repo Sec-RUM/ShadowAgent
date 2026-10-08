@@ -132,7 +132,6 @@ export function MetricsView({
       <div className="space-y-5">
         <section className={`${glassPanelClass} relative overflow-hidden p-6`}>
           <PanelGlow />
-          <div className="absolute inset-y-0 right-0 hidden w-[34%] bg-[radial-gradient(circle_at_top,rgba(45,212,191,0.16),transparent_52%),radial-gradient(circle_at_bottom,rgba(56,189,248,0.14),transparent_50%)] lg:block" />
           <div className="relative flex flex-wrap items-start justify-between gap-4">
             <div className="space-y-3">
               <div className="inline-flex items-center gap-2 rounded-full border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--tone-accent-surface)] px-3 py-1 text-[length:var(--text-micro)] font-medium text-[var(--tone-accent-text)]">

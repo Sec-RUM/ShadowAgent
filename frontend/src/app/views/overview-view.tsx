@@ -210,7 +210,7 @@ export function OverviewView({
           ))}
         </section>
 
-        <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,360px)]">
+        <section className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,360px)]">
           <section className={`${glassPanelClass} relative overflow-hidden p-5`}>
             <div className="relative flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
@@ -227,31 +227,28 @@ export function OverviewView({
               </button>
             </div>
 
+            {/* 链路四步是流程说明，不是状态 —— 不用语义状态色上粉彩底（那是「彩卡模板」味），
+                改成中性面板 + accent 步骤徽章，编号用数据序号而非标题里的手写数字。 */}
             <div className="relative mt-5 grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
               {[
-                {
-                  title: "1. 注入载荷",
-                  body: "攻击指令混入检索结果、插件输出或工具返回值。",
-                  cls: "border-[color-mix(in_oklab,var(--tone-warning)_28%,transparent)] bg-[var(--tone-warning-surface)] text-[var(--tone-warning-text)]",
-                },
-                {
-                  title: "2. 分层审计",
-                  body: "Shadow Agent 将可信用户意图与不可信上下文拆分处理。",
-                  cls: "border-[color-mix(in_oklab,var(--tone-info)_28%,transparent)] bg-[var(--tone-info-surface)] text-[var(--tone-info-text)]",
-                },
-                {
-                  title: "3. 风险阻断",
-                  body: "策略、权限与危险行为检查在真正调用模型前完成拦截。",
-                  cls: "border-[color-mix(in_oklab,var(--tone-danger)_28%,transparent)] bg-[var(--tone-danger-surface)] text-[var(--tone-danger-text)]",
-                },
-                {
-                  title: "4. 证据留痕",
-                  body: "日志、告警、审批、回放把每次拦截都变成可复盘的证据链。",
-                  cls: "border-[color-mix(in_oklab,var(--tone-success)_28%,transparent)] bg-[var(--tone-success-surface)] text-[var(--tone-success-text)]",
-                },
-              ].map((item) => (
-                <div key={item.title} className={`rounded-[var(--radius-md)] border p-4 transition-colors duration-[var(--dur-fast)] ${item.cls}`}>
-                  <div className="text-[length:var(--text-caption)] font-semibold">{item.title}</div>
+                { title: "注入载荷", body: "攻击指令混入检索结果、插件输出或工具返回值。" },
+                { title: "分层审计", body: "Shadow Agent 将可信用户意图与不可信上下文拆分处理。" },
+                { title: "风险阻断", body: "策略、权限与危险行为检查在真正调用模型前完成拦截。" },
+                { title: "证据留痕", body: "日志、告警、审批、回放把每次拦截都变成可复盘的证据链。" },
+              ].map((item, index) => (
+                <div
+                  key={item.title}
+                  className="rounded-[var(--radius-md)] border border-[var(--panel-border)] bg-[var(--surface-raised)] p-4 transition-colors duration-[var(--dur-fast)]"
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      aria-hidden
+                      className="tnum inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--accent-solid)] text-[length:var(--text-micro)] font-semibold text-[var(--accent-on-solid)]"
+                    >
+                      {index + 1}
+                    </span>
+                    <div className="text-[length:var(--text-caption)] font-semibold text-[var(--text-primary)]">{item.title}</div>
+                  </div>
                   <p className="mt-2 text-[length:var(--text-micro)] leading-6 text-[var(--text-secondary)]">{item.body}</p>
                 </div>
               ))}
