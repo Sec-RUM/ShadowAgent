@@ -102,3 +102,32 @@ export function categoryLabel(category: string | undefined) {
       return "";
   }
 }
+
+export function reasonLabel(reason: string | undefined, category?: string) {
+  switch (reason) {
+    case "dangerous_behavior_detected":
+      return categoryLabel(category) || "检测到高风险危险行为。";
+    case "prompt_injection_detected":
+      return "检测到提示词注入迹象。";
+    case "blacklisted_prompt_pattern_detected":
+      return "命中了黑名单提示词规则。";
+    case "tool_not_permitted":
+      return "当前工具不在允许名单中。";
+    case "admin_permission_required":
+      return "该操作需要管理员权限。";
+    case "admin_approval_required":
+      return "该操作需要管理员审批。";
+    default:
+      return reason || "";
+  }
+}
+
+export function friendlyDecisionReason(reason: string | undefined, category?: string) {
+  const normalized = reasonLabel(reason, category);
+  if (!normalized) return "系统判定该请求存在安全风险，已阻断。";
+  if (normalized === categoryLabel(category) && normalized) {
+    return `${normalized}，请求已被阻断。`;
+  }
+  return normalized;
+}
+

@@ -37,23 +37,19 @@ import { buildTimeTooltip } from "./time-utils";
 import { isValidEmailInput, registrationHint, type BootstrapStatus } from "./auth-logic";
 import { GatewayView } from "./views/gateway-view";
 import { DEMO_SCENARIOS, DEFAULT_VALIDATION_SCENARIO_ID, type DemoScenario, type DemoScenarioId, type ValidationRunRecord, type ValidationSuiteItem } from "./demo-scenarios";
-import { DEFAULT_GATEWAY_FORM, type GatewayFormState, type GatewayResult } from "./gateway-types";
-import { asNumber, buttonClass, categoryLabel, formatTime, glassPanelClass, glassPanelSoftClass, inputBase, type IconComponent } from "./components/ui-kit";
+import { DEFAULT_GATEWAY_FORM } from "./gateway-types";
+import { asNumber, buttonClass, categoryLabel, formatTime, glassPanelClass, glassPanelSoftClass, inputBase, type IconComponent, friendlyDecisionReason } from "./components/ui-kit";
 import type {
   ViewKey,
   SessionUser,
   AuthSession,
   OrgInfo,
-  OrgListItem,
-  OrgMemberItem,
-  SsoConfigItem,
   SsoHandoff,
   InterceptLog,
   PolicyRule,
   ToolPermission,
   AppSettings,
   Toast,
-  ChatMessage,
   HealthState,
   LocalDecision,
   BackendPolicy,
@@ -62,17 +58,7 @@ import type {
   ApprovalItem,
   AlertItem,
   ReplayItem,
-  ManagedApiKeyRole,
-  ManagedApiKeyItem,
-  ManagedApiKeyIssueState,
-  CustomRuleItem,
-  CustomRuleDraft,
-  RuleTestResult,
-  DlpStatusInfo,
   RoleShowcaseId,
-  MetricsRouteRow,
-  ParsedMetrics,
-  MetricsHistoryPoint,
 } from "./types";
 import {
   STORAGE_KEYS,
@@ -85,8 +71,18 @@ import {
   managedKeyStatus,
   sanitizeSettingsForStorage,
   isAdminRole,
+  makeId,
+  readStorage,
 } from "./app-meta";
 import { PanelGlow } from "./components/page-widgets";
+import { buildHeaders, detailText, isAuthSessionValid } from "./api-client";
+import { useMetrics } from "./hooks/use-metrics";
+import { useChat } from "./hooks/use-chat";
+import { useKeys } from "./hooks/use-keys";
+import { useRules } from "./hooks/use-rules";
+import { useOrgs } from "./hooks/use-orgs";
+import { useLogs } from "./hooks/use-logs";
+import { useGateway } from "./hooks/use-gateway";
 import { MetricsView } from "./views/metrics-view";
 import { OverviewView } from "./views/overview-view";
 import { LogsView } from "./views/logs-view";
@@ -178,14 +174,6 @@ import { OrgsView } from "./views/orgs-view";
 
 
 
-
-const DEFAULT_CHAT_MODEL = process.env.NEXT_PUBLIC_SHADOW_AGENT_DEFAULT_MODEL ?? "deepseek-chat";
-
-const CHAT_MODEL_OPTIONS: GlassSelectOption[] = [
-  { value: "deepseek-chat", label: "DeepSeek Chat" },
-  { value: "deepseek-reasoner", label: "DeepSeek Reasoner" },
-  { value: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },
-];
 
 const MAX_VALIDATION_RUNS = 6;
 
@@ -441,26 +429,6 @@ const viewVariants: Variants = {
 
 
 
-function makeId(prefix: string) {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-
-  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function readStorage<T>(key: string, fallback: T): T {
-  if (!canUseStorage()) return fallback;
-  const raw = window.localStorage.getItem(key);
-  if (!raw) return fallback;
-
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
 
 
 function removeStorage(key: string) {
@@ -518,44 +486,6 @@ function severityText(severity: PolicyRule["severity"]) {
 /* 风险档位竖条：与拦截日志行同一套语义色，跨视图保持一致的「颜色=风险」心智。 */
 
 
-function detailText(value: unknown) {
-  if (typeof value === "string") return value;
-  if (value === null || value === undefined) return "-";
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    if (typeof record.message === "string" && record.message.trim()) {
-      return record.message;
-    }
-    if (typeof record.error === "string" && record.error.trim()) {
-      return record.error;
-    }
-  }
-  return JSON.stringify(value);
-}
-
-function extractChatContent(value: unknown) {
-  if (!value || typeof value !== "object") return "";
-  const choices = (value as Record<string, unknown>).choices;
-  if (!Array.isArray(choices) || !choices[0] || typeof choices[0] !== "object") return "";
-
-  const message = (choices[0] as Record<string, unknown>).message;
-  if (!message || typeof message !== "object") return "";
-  const content = (message as Record<string, unknown>).content;
-  if (typeof content === "string") return content.trim();
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") return part;
-        if (part && typeof part === "object") return detailText((part as Record<string, unknown>).text);
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-  }
-  return "";
-}
 
 
 
@@ -572,33 +502,7 @@ function roleAccessSourceLabel(hasToken: boolean, hasApiKey: boolean) {
 }
 
 
-function reasonLabel(reason: string | undefined, category?: string) {
-  switch (reason) {
-    case "dangerous_behavior_detected":
-      return categoryLabel(category) || "检测到高风险危险行为。";
-    case "prompt_injection_detected":
-      return "检测到提示词注入迹象。";
-    case "blacklisted_prompt_pattern_detected":
-      return "命中了黑名单提示词规则。";
-    case "tool_not_permitted":
-      return "当前工具不在允许名单中。";
-    case "admin_permission_required":
-      return "该操作需要管理员权限。";
-    case "admin_approval_required":
-      return "该操作需要管理员审批。";
-    default:
-      return reason || "";
-  }
-}
 
-function friendlyDecisionReason(reason: string | undefined, category?: string) {
-  const normalized = reasonLabel(reason, category);
-  if (!normalized) return "系统判定该请求存在安全风险，已阻断。";
-  if (normalized === categoryLabel(category) && normalized) {
-    return `${normalized}，请求已被阻断。`;
-  }
-  return normalized;
-}
 
 function logReasonText(details: Record<string, unknown>) {
   return friendlyDecisionReason(detailText(details.reason), detailText(details.category));
@@ -610,84 +514,6 @@ function logReasonText(details: Record<string, unknown>) {
 
 
 
-const METRICS_HISTORY_LIMIT = 60;
-
-function parseMetricLabels(raw: string): Record<string, string> {
-  const labels: Record<string, string> = {};
-  const labelPattern = /(\w+)="((?:[^"\\]|\\.)*)"/g;
-  let match = labelPattern.exec(raw);
-  while (match !== null) {
-    labels[match[1]] = match[2].replace(/\\(.)/g, "$1");
-    match = labelPattern.exec(raw);
-  }
-  return labels;
-}
-
-function parsePrometheusText(body: string): ParsedMetrics {
-  const routes = new Map<string, MetricsRouteRow>();
-  const retentionPurged: Record<string, number> = {};
-  let totalRequests = 0;
-  let blockedRequests = 0;
-  let serverErrors = 0;
-  let clientErrors = 0;
-  let latencySum = 0;
-  let latencyCount = 0;
-
-  for (const rawLine of body.split("\n")) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-
-    const spaceIndex = line.lastIndexOf(" ");
-    if (spaceIndex === -1) continue;
-
-    const series = line.slice(0, spaceIndex);
-    const value = Number.parseFloat(line.slice(spaceIndex + 1));
-    if (!Number.isFinite(value)) continue;
-
-    const braceIndex = series.indexOf("{");
-    const metricName = braceIndex === -1 ? series : series.slice(0, braceIndex);
-    const labels = braceIndex === -1 ? {} : parseMetricLabels(series.slice(braceIndex));
-
-    if (metricName === "shadow_agent_http_requests_total") {
-      const route = labels.route ?? "unknown";
-      const status = labels.status ?? "";
-      const row = routes.get(route) ?? { route, requests: 0, statusCodes: {}, latencySum: 0, latencyCount: 0 };
-      row.requests += value;
-      row.statusCodes[status] = (row.statusCodes[status] ?? 0) + value;
-      routes.set(route, row);
-
-      totalRequests += value;
-      if (status === "403") blockedRequests += value;
-      if (status.startsWith("5")) serverErrors += value;
-      if (status.startsWith("4")) clientErrors += value;
-    } else if (metricName === "shadow_agent_http_request_duration_seconds_sum") {
-      const route = labels.route ?? "unknown";
-      const row = routes.get(route) ?? { route, requests: 0, statusCodes: {}, latencySum: 0, latencyCount: 0 };
-      row.latencySum += value;
-      routes.set(route, row);
-      latencySum += value;
-    } else if (metricName === "shadow_agent_http_request_duration_seconds_count") {
-      const route = labels.route ?? "unknown";
-      const row = routes.get(route) ?? { route, requests: 0, statusCodes: {}, latencySum: 0, latencyCount: 0 };
-      row.latencyCount += value;
-      routes.set(route, row);
-      latencyCount += value;
-    } else if (metricName === "shadow_agent_retention_purged_rows_total") {
-      retentionPurged[labels.table ?? "unknown"] = value;
-    }
-  }
-
-  return {
-    totalRequests,
-    blockedRequests,
-    serverErrors,
-    clientErrors,
-    latencySum,
-    latencyCount,
-    routes: Array.from(routes.values()).sort((a, b) => b.requests - a.requests),
-    retentionPurged,
-  };
-}
 
 
 
@@ -695,33 +521,8 @@ function parsePrometheusText(body: string): ParsedMetrics {
 
 
 
-function buildHeaders(
-  settings: AppSettings,
-  intent: "admin" | "client",
-  json = false,
-  authSession: AuthSession | null = null
-) {
-  const headers: Record<string, string> = {};
-  const apiKey =
-    intent === "admin"
-      ? settings.adminApiKey.trim()
-      : settings.clientApiKey.trim();
-  const bearerToken = isAuthSessionValid(authSession) ? authSession?.accessToken ?? "" : "";
-
-  if (json) headers["Content-Type"] = "application/json";
-  if (bearerToken) {
-    headers.Authorization = `Bearer ${bearerToken}`;
-  } else if (apiKey) {
-    headers["X-API-Key"] = apiKey;
-  }
-
-  return headers;
-}
-
-function isAuthSessionValid(session: AuthSession | null) {
-  return Boolean(session?.accessToken && session.expiresAt * 1000 > Date.now());
-}
-
+// 数据层（阶段 3）：buildHeaders / isAuthSessionValid / detailText 已迁至 ./api-client，
+// 请求统一走 apiGet/apiSend（ApiError 携带 status + 后端 detail）。
 // Keep in sync with the writer in src/app/sso/callback/page.tsx.
 const SSO_HANDOFF_KEY = "shadow-agent-sso-handoff";
 
@@ -974,71 +775,9 @@ export default function Home() {
     activeOrgId: number | null;
     activeOrgRole: string | null;
   }>({ orgs: [], activeOrgId: null, activeOrgRole: null });
-  const [orgList, setOrgList] = useState<OrgListItem[]>([]);
-  const [orgListLoading, setOrgListLoading] = useState(false);
-  const [orgListError, setOrgListError] = useState("");
-  const [orgCreateOpen, setOrgCreateOpen] = useState(false);
-  const [orgCreateBusy, setOrgCreateBusy] = useState(false);
-  const [orgCreateForm, setOrgCreateForm] = useState({ slug: "", name: "" });
-  const [orgSelectedId, setOrgSelectedId] = useState<number | null>(null);
-  const [orgMembers, setOrgMembers] = useState<OrgMemberItem[]>([]);
-  const [orgMembersLoading, setOrgMembersLoading] = useState(false);
-  const [memberAddForm, setMemberAddForm] = useState({ email: "", role: "member" });
-  const [memberAddBusy, setMemberAddBusy] = useState(false);
-  const [memberBusyId, setMemberBusyId] = useState<number | null>(null);
-  const [orgSsoConfig, setOrgSsoConfig] = useState<SsoConfigItem | null>(null);
-  const [orgSsoForm, setOrgSsoForm] = useState({
-    provider_name: "",
-    client_id: "",
-    client_secret: "",
-    issuer_url: "",
-    scopes: "openid email profile",
-    default_role: "client",
-    jit_enabled: true,
-    enabled: true,
-  });
-  const [orgSsoLoading, setOrgSsoLoading] = useState(false);
-  const [orgSsoBusy, setOrgSsoBusy] = useState(false);
-  const [orgSwitchBusy, setOrgSwitchBusy] = useState(false);
-  const [logs, setLogs] = useState<InterceptLog[]>([]);
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [replays, setReplays] = useState<ReplayItem[]>([]);
-  const [managedKeys, setManagedKeys] = useState<ManagedApiKeyItem[]>([]);
-  const [managedKeysLoading, setManagedKeysLoading] = useState(false);
-  const [managedKeysError, setManagedKeysError] = useState("");
-  const [managedKeyDraftOpen, setManagedKeyDraftOpen] = useState(false);
-  const [managedKeyDraft, setManagedKeyDraft] = useState({
-    name: "",
-    role: "client" as ManagedApiKeyRole,
-    description: "",
-    expiresInDays: "30",
-  });
-  const [managedKeyIssueState, setManagedKeyIssueState] = useState<ManagedApiKeyIssueState | null>(null);
-  const [managedKeyBusyId, setManagedKeyBusyId] = useState<number | null>(null);
-  const [includeInactiveKeys, setIncludeInactiveKeys] = useState(true);
-  const [customRules, setCustomRules] = useState<CustomRuleItem[]>([]);
-  const [customRulesLoading, setCustomRulesLoading] = useState(false);
-  const [customRulesError, setCustomRulesError] = useState("");
-  const [ruleDraftOpen, setRuleDraftOpen] = useState(false);
-  const [ruleEditingId, setRuleEditingId] = useState<number | null>(null);
-  const [ruleDraft, setRuleDraft] = useState<CustomRuleDraft>({
-    name: "",
-    description: "",
-    rule_type: "regex",
-    pattern: "",
-    target: "prompt",
-    action: "block",
-    risk_score: 0.8,
-    enabled: true,
-  });
-  const [ruleTestText, setRuleTestText] = useState("");
-  const [ruleTestResult, setRuleTestResult] = useState<RuleTestResult | null>(null);
-  const [ruleTestBusy, setRuleTestBusy] = useState(false);
-  const [ruleBusyId, setRuleBusyId] = useState<number | null>(null);
-  const [dlpStatus, setDlpStatus] = useState<DlpStatusInfo | null>(null);
-  const [logsLoading, setLogsLoading] = useState(false);
-  const [logsError, setLogsError] = useState("");
   const [search, setSearch] = useState("");
   const [riskFilter, setRiskFilter] = useState<"all" | "high" | "medium" | "low">("all");
   const [threatFilter, setThreatFilter] = useState("all");
@@ -1060,14 +799,6 @@ export default function Home() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [selectedLog, setSelectedLog] = useState<InterceptLog | null>(null);
   const [dashboardOpen, setDashboardOpen] = useState(false);
-  const [gatewayLoading, setGatewayLoading] = useState(false);
-  const [gatewayResult, setGatewayResult] = useState<GatewayResult | null>(null);
-  const [gatewayForm, setGatewayForm] = useState<GatewayFormState>(DEFAULT_GATEWAY_FORM);
-  const [chatModel, setChatModel] = useState(DEFAULT_CHAT_MODEL);
-  const [chatInput, setChatInput] = useState("");
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [chatLoading, setChatLoading] = useState(false);
-  const [chatError, setChatError] = useState("");
   const [selectedScenarioId, setSelectedScenarioId] = useState<DemoScenarioId>(DEFAULT_VALIDATION_SCENARIO_ID);
   const [validationRunning, setValidationRunning] = useState(false);
   const [validationResults, setValidationResults] = useState<ValidationSuiteItem[]>(createInitialValidationResults);
@@ -1267,22 +998,6 @@ export default function Home() {
     [apiBaseUrl]
   );
 
-  const persistLocalLogs = useCallback((next: InterceptLog[]) => {
-    const localOnly = next.filter((log) => log.id < 0).slice(0, 80);
-    writeStorage(STORAGE_KEYS.localLogs, localOnly);
-  }, []);
-
-  const mergeLogs = useCallback((remote: InterceptLog[], local: InterceptLog[]) => {
-    const seen = new Set<string>();
-    return [...local, ...remote]
-      .filter((log) => {
-        const key = detailText(log.details.request_id) || `${log.id}-${log.timestamp}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
-      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-  }, []);
 
   const syncLocalSecurityConfig = useCallback((nextPolicies: PolicyRule[], nextTools: ToolPermission[]) => {
     writeStorage(STORAGE_KEYS.policies, nextPolicies);
@@ -1405,115 +1120,205 @@ export default function Home() {
     }
   }, [addToast, settings.apiBase]);
 
-  const loadLogs = useCallback(async () => {
-    const localLogs = readStorage<InterceptLog[]>(STORAGE_KEYS.localLogs, []);
 
-    if (!hasAdminAccess) {
-      setLogs(localLogs);
-      setLogsError("未登录管理员账号且未配置 Admin API Key，当前仅显示本地验证日志。");
-      addToast("当前显示本地日志，未请求后端", "info");
-      return;
-    }
-
-    setLogsLoading(true);
-    setLogsError("");
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 7000);
-
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/logs?limit=80`, {
-        headers: buildHeaders(settings, "admin", false, authSession),
-        signal: controller.signal,
-        cache: "no-store",
-      });
-      const data = (await response.json().catch(() => ({}))) as { items?: InterceptLog[]; detail?: unknown };
-      if (!response.ok) throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      setLogs(mergeLogs(data.items ?? [], localLogs));
-      addToast("日志已刷新", "success");
-    } catch (error) {
-      const message =
-        error instanceof Error && error.name === "AbortError"
-          ? "请求超时"
-          : error instanceof Error
-            ? error.message
-            : "无法连接日志接口";
-      setLogsError(message);
-      setLogs(localLogs);
-      addToast(`日志刷新失败：${message}`, "error");
-    } finally {
-      window.clearTimeout(timer);
-      setLogsLoading(false);
-    }
-  }, [addToast, authSession, hasAdminAccess, mergeLogs, settings]);
-
-  const [metricsSnapshot, setMetricsSnapshot] = useState<ParsedMetrics | null>(null);
-  const [metricsHistory, setMetricsHistory] = useState<MetricsHistoryPoint[]>([]);
-  const [metricsError, setMetricsError] = useState("");
-  const [metricsLoading, setMetricsLoading] = useState(false);
-  const [metricsAutoRefresh, setMetricsAutoRefresh] = useState(true);
-
-  const loadMetrics = useCallback(
-    async (options?: { silent?: boolean }) => {
-      const silent = options?.silent ?? true;
-      if (!silent) setMetricsLoading(true);
-
-      const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), 7000);
-
-      try {
-        const response = await fetch(`${apiBaseUrl}/metrics`, {
-          headers: buildHeaders(settings, "admin", false, authSession),
-          signal: controller.signal,
-          cache: "no-store",
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-        const parsed = parsePrometheusText(await response.text());
-        setMetricsSnapshot(parsed);
-        setMetricsError("");
-        setMetricsHistory((prev) => [
-          ...prev.slice(-(METRICS_HISTORY_LIMIT - 1)),
-          {
-            ts: Date.now(),
-            totalRequests: parsed.totalRequests,
-            blockedRequests: parsed.blockedRequests,
-            serverErrors: parsed.serverErrors,
-            latencySum: parsed.latencySum,
-            latencyCount: parsed.latencyCount,
-          },
-        ]);
-        if (!silent) addToast("运行状态已刷新", "success");
-      } catch (error) {
-        const message =
-          error instanceof Error && error.name === "AbortError"
-            ? "请求超时"
-            : error instanceof Error
-              ? error.message
-              : "无法连接指标接口";
-        setMetricsError(message);
-        if (!silent) addToast(`运行状态刷新失败：${message}`, "error");
-      } finally {
-        window.clearTimeout(timer);
-        if (!silent) setMetricsLoading(false);
-      }
-    },
-    [addToast, authSession, settings]
-  );
-
-  useEffect(() => {
-    if (effectiveView !== "metrics" || !hasAdminAccess || !metricsAutoRefresh) return;
-
-    const tick = () => {
-      void loadMetrics({ silent: true });
+  const {
+    metricsSnapshot,
+    metricsHistory,
+    metricsError,
+    metricsLoading,
+    metricsAutoRefresh,
+    setMetricsAutoRefresh,
+    loadMetrics,
+  } = useMetrics({
+    apiBaseUrl,
+    settings,
+    authSession,
+    addToast,
+    effectiveView,
+    hasAdminAccess,
+  });
+  const {
+    chatModel,
+    setChatModel,
+    chatInput,
+    setChatInput,
+    chatMessages,
+    setChatMessages,
+    chatLoading,
+    chatError,
+    setChatError,
+    submitChat,
+    chatModelOptions,
+  } = useChat({
+    apiBaseUrl,
+    settings,
+    authSession,
+    addToast,
+    hasGatewayAccess,
+  });
+  const {
+    managedKeys,
+    setManagedKeys,
+    managedKeysLoading,
+    managedKeysError,
+    managedKeyDraftOpen,
+    setManagedKeyDraftOpen,
+    managedKeyDraft,
+    setManagedKeyDraft,
+    managedKeyIssueState,
+    setManagedKeyIssueState,
+    managedKeyBusyId,
+    includeInactiveKeys,
+    setIncludeInactiveKeys,
+    loadManagedApiKeys,
+    applyIssuedKeyToSettings,
+    createManagedKey,
+    rotateManagedKey,
+    updateManagedKeyLifecycle,
+  } = useKeys({
+    apiBaseUrl,
+    settings,
+    setSettings,
+    authSession,
+    hasAdminAccess,
+    addToast,
+  });
+  const {
+    customRules,
+    customRulesLoading,
+    customRulesError,
+    ruleDraftOpen,
+    setRuleDraftOpen,
+    ruleEditingId,
+    setRuleEditingId,
+    ruleDraft,
+    setRuleDraft,
+    ruleTestText,
+    setRuleTestText,
+    ruleTestResult,
+    setRuleTestResult,
+    ruleTestBusy,
+    ruleBusyId,
+    dlpStatus,
+    loadCustomRules,
+    submitCustomRule,
+    deleteCustomRule,
+    toggleCustomRule,
+    testCustomRule,
+    exportCustomRules,
+    importCustomRules,
+  } = useRules({
+    apiBaseUrl,
+    settings,
+    authSession,
+    hasAdminAccess,
+    addToast,
+  });
+  const {
+    orgList,
+    orgListLoading,
+    orgListError,
+    orgCreateOpen,
+    setOrgCreateOpen,
+    orgCreateBusy,
+    orgCreateForm,
+    setOrgCreateForm,
+    orgSelectedId,
+    orgMembers,
+    orgMembersLoading,
+    memberAddForm,
+    setMemberAddForm,
+    memberAddBusy,
+    memberBusyId,
+    orgSsoConfig,
+    orgSsoForm,
+    setOrgSsoForm,
+    orgSsoLoading,
+    orgSsoBusy,
+    orgSwitchBusy,
+    switchActiveOrg,
+    loadOrgList,
+    selectOrg,
+    createOrg,
+    addOrgMember,
+    updateOrgMemberRole,
+    removeOrgMember,
+    saveOrgSso,
+    deleteOrgSso,
+  } = useOrgs({
+    apiBaseUrl,
+    settings,
+    authSession,
+    setAuthSession,
+    setUser,
+    orgContext,
+    setOrgContext,
+    hasAdminAccess,
+    addToast,
+    mounted,
+    user,
+    effectiveView,
+  });
+  const {
+    logs,
+    setLogs,
+    logsLoading,
+    logsError,
+    loadLogs,
+    mergeLogs,
+    persistLocalLogs,
+  } = useLogs({
+    apiBaseUrl,
+    settings,
+    authSession,
+    hasAdminAccess,
+    addToast,
+  });
+  const appendLocalDecisionLog = (decision: LocalDecision, prompt: string, extra: Record<string, unknown> = {}) => {
+    const requestId = `local-${Date.now().toString(36)}`;
+    const log: InterceptLog = {
+      id: -Date.now(),
+      timestamp: new Date().toISOString(),
+      threat_type: threatTypeFromDecision(decision),
+      action_taken: decision.allowed ? "Allowed" : "Blocked",
+      original_prompt: prompt || "Local preflight",
+      details: {
+        request_id: requestId,
+        layer: decision.layer,
+        reason: decision.reason,
+        risk_score: decision.riskScore,
+        matched_rules: decision.matchedRules,
+        category: decision.category,
+        recommended_action: decision.recommendedAction,
+        ...extra,
+      },
     };
-    // Defer the first sample out of the effect body to avoid cascading renders.
-    const initialTimer = window.setTimeout(tick, 0);
-    const timer = window.setInterval(tick, 5000);
-    return () => {
-      window.clearTimeout(initialTimer);
-      window.clearInterval(timer);
-    };
-  }, [effectiveView, hasAdminAccess, loadMetrics, metricsAutoRefresh]);
+
+    setLogs((current) => {
+      const next = [log, ...current].slice(0, 100);
+      persistLocalLogs(next);
+      return next;
+    });
+    return log;
+  };
+
+  const {
+    gatewayLoading,
+    gatewayResult,
+    gatewayForm,
+    setGatewayForm,
+    setGatewayResult,
+    submitGatewayTest,
+  } = useGateway({
+    apiBaseUrl,
+    settings,
+    authSession,
+    hasGatewayAccess,
+    addToast,
+    localInspect,
+    appendLocalDecisionLog,
+  });
+
 
   const loadOperations = useCallback(async () => {
     if (!hasAdminAccess) {
@@ -1553,302 +1358,13 @@ export default function Home() {
     }
   }, [authSession, hasAdminAccess, settings]);
 
-  const loadManagedApiKeys = useCallback(
-    async (showFeedback = false) => {
-      if (!hasAdminAccess) {
-        setManagedKeys([]);
-        setManagedKeysError("");
-        return;
-      }
 
-      setManagedKeysLoading(true);
-      setManagedKeysError("");
-      const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), 7000);
 
-      try {
-        const response = await fetch(
-          `${apiBaseUrl}/api/v1/api-keys?include_inactive=${includeInactiveKeys ? "true" : "false"}`,
-          {
-            headers: buildHeaders(settings, "admin", false, authSession),
-            signal: controller.signal,
-            cache: "no-store",
-          }
-        );
-        const data = (await response.json().catch(() => ({}))) as {
-          items?: ManagedApiKeyItem[];
-          detail?: unknown;
-        };
-        if (!response.ok) throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-        setManagedKeys(data.items ?? []);
-        if (showFeedback) addToast("托管密钥列表已刷新", "success");
-      } catch (error) {
-        const message =
-          error instanceof Error && error.name === "AbortError"
-            ? "请求超时"
-            : error instanceof Error
-              ? error.message
-              : "无法获取托管密钥列表";
-        setManagedKeysError(message);
-        if (showFeedback) addToast(`密钥列表刷新失败：${message}`, "error");
-      } finally {
-        window.clearTimeout(timer);
-        setManagedKeysLoading(false);
-      }
-    },
-    [addToast, apiBaseUrl, authSession, hasAdminAccess, includeInactiveKeys, settings]
-  );
 
-  const loadCustomRules = useCallback(
-    async (showFeedback = false) => {
-      if (!hasAdminAccess) {
-        setCustomRules([]);
-        setCustomRulesError("");
-        return;
-      }
 
-      setCustomRulesLoading(true);
-      setCustomRulesError("");
-      const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), 7000);
 
-      try {
-        const [rulesResponse, dlpResponse] = await Promise.all([
-          fetch(`${apiBaseUrl}/api/v1/rules`, {
-            headers: buildHeaders(settings, "admin", false, authSession),
-            signal: controller.signal,
-            cache: "no-store",
-          }),
-          fetch(`${apiBaseUrl}/api/v1/rules/dlp-status`, {
-            headers: buildHeaders(settings, "admin", false, authSession),
-            signal: controller.signal,
-            cache: "no-store",
-          }),
-        ]);
-        const rulesData = (await rulesResponse.json().catch(() => ({}))) as {
-          items?: CustomRuleItem[];
-          detail?: unknown;
-        };
-        if (!rulesResponse.ok) {
-          throw new Error(detailText(rulesData.detail) || `HTTP ${rulesResponse.status}`);
-        }
-        setCustomRules(rulesData.items ?? []);
-        if (dlpResponse.ok) {
-          const dlpData = (await dlpResponse.json().catch(() => ({}))) as DlpStatusInfo;
-          setDlpStatus(dlpData);
-        }
-        if (showFeedback) addToast("自定义规则已刷新", "success");
-      } catch (error) {
-        const message =
-          error instanceof Error && error.name === "AbortError"
-            ? "请求超时"
-            : error instanceof Error
-              ? error.message
-              : "无法获取自定义规则";
-        setCustomRulesError(message);
-        if (showFeedback) addToast(`规则列表刷新失败：${message}`, "error");
-      } finally {
-        window.clearTimeout(timer);
-        setCustomRulesLoading(false);
-      }
-    },
-    [addToast, apiBaseUrl, authSession, hasAdminAccess, settings]
-  );
 
-  const submitCustomRule = async () => {
-    if (!hasAdminAccess) {
-      addToast("请先登录管理员账号或配置 Admin API Key", "error");
-      return;
-    }
-    const name = ruleDraft.name.trim();
-    const pattern = ruleDraft.pattern.trim();
-    if (!name || !pattern) {
-      addToast("规则名称与匹配模式不能为空", "error");
-      return;
-    }
 
-    setRuleTestBusy(true);
-    try {
-      const editing = ruleEditingId !== null;
-      const response = await fetch(
-        editing ? `${apiBaseUrl}/api/v1/rules/${ruleEditingId}` : `${apiBaseUrl}/api/v1/rules`,
-        {
-          method: editing ? "PUT" : "POST",
-          headers: buildHeaders(settings, "admin", true, authSession),
-          body: JSON.stringify({
-            name,
-            description: ruleDraft.description.trim(),
-            rule_type: ruleDraft.rule_type,
-            pattern,
-            target: ruleDraft.target,
-            action: ruleDraft.action,
-            risk_score: ruleDraft.risk_score,
-            enabled: ruleDraft.enabled,
-          }),
-        }
-      );
-      const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
-      if (!response.ok) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
-      addToast(editing ? "规则已更新" : "规则已创建", "success");
-      setRuleDraftOpen(false);
-      setRuleEditingId(null);
-      setRuleDraft({
-        name: "",
-        description: "",
-        rule_type: "regex",
-        pattern: "",
-        target: "prompt",
-        action: "block",
-        risk_score: 0.8,
-        enabled: true,
-      });
-      await loadCustomRules();
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : "保存规则失败", "error");
-    } finally {
-      setRuleTestBusy(false);
-    }
-  };
-
-  const deleteCustomRule = async (item: CustomRuleItem) => {
-    setRuleBusyId(item.id);
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/rules/${item.id}`, {
-        method: "DELETE",
-        headers: buildHeaders(settings, "admin", true, authSession),
-      });
-      const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
-      if (!response.ok) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
-      addToast(`规则 ${item.name} 已删除`, "success");
-      await loadCustomRules();
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : "删除规则失败", "error");
-    } finally {
-      setRuleBusyId(null);
-    }
-  };
-
-  const toggleCustomRule = async (item: CustomRuleItem, enabled: boolean) => {
-    setRuleBusyId(item.id);
-    setCustomRules((current) => current.map((rule) => (rule.id === item.id ? { ...rule, enabled } : rule)));
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/rules/${item.id}`, {
-        method: "PUT",
-        headers: buildHeaders(settings, "admin", true, authSession),
-        body: JSON.stringify({
-          name: item.name,
-          description: item.description,
-          rule_type: item.rule_type,
-          pattern: item.pattern,
-          target: item.target,
-          action: item.action,
-          risk_score: item.risk_score,
-          enabled,
-        }),
-      });
-      const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
-      if (!response.ok) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
-    } catch (error) {
-      setCustomRules((current) => current.map((rule) => (rule.id === item.id ? { ...rule, enabled: !enabled } : rule)));
-      addToast(error instanceof Error ? error.message : "切换规则失败", "error");
-    } finally {
-      setRuleBusyId(null);
-    }
-  };
-
-  const testCustomRule = async () => {
-    if (!ruleDraft.pattern.trim()) {
-      addToast("请先填写匹配模式", "error");
-      return;
-    }
-    setRuleTestBusy(true);
-    setRuleTestResult(null);
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/rules/test`, {
-        method: "POST",
-        headers: buildHeaders(settings, "admin", true, authSession),
-        body: JSON.stringify({
-          sample_text: ruleTestText,
-          rule_id: null,
-          draft: {
-            name: ruleDraft.name.trim() || "draft",
-            description: ruleDraft.description.trim(),
-            rule_type: ruleDraft.rule_type,
-            pattern: ruleDraft.pattern.trim(),
-            target: ruleDraft.target,
-            action: ruleDraft.action,
-            risk_score: ruleDraft.risk_score,
-            enabled: ruleDraft.enabled,
-          },
-        }),
-      });
-      const data = (await response.json().catch(() => ({}))) as RuleTestResult & { detail?: unknown };
-      if (!response.ok) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
-      setRuleTestResult(data);
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : "测试规则失败", "error");
-    } finally {
-      setRuleTestBusy(false);
-    }
-  };
-
-  const exportCustomRules = async () => {
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/rules/export`, {
-        headers: buildHeaders(settings, "admin", false, authSession),
-        cache: "no-store",
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const anchor = window.document.createElement("a");
-      anchor.href = url;
-      anchor.download = "shadow-agent-rules.json";
-      anchor.click();
-      URL.revokeObjectURL(url);
-      addToast("规则已导出", "success");
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : "导出失败", "error");
-    }
-  };
-
-  const importCustomRules = async (file: File) => {
-    setRuleTestBusy(true);
-    try {
-      const text = await file.text();
-      const parsed = JSON.parse(text) as { exported_rules?: unknown };
-      const rules = Array.isArray(parsed.exported_rules) ? parsed.exported_rules : null;
-      if (!rules) throw new Error("文件格式不正确：缺少 exported_rules 数组");
-      const response = await fetch(`${apiBaseUrl}/api/v1/rules/import`, {
-        method: "POST",
-        headers: buildHeaders(settings, "admin", true, authSession),
-        body: JSON.stringify({ mode: "merge", rules }),
-      });
-      const data = (await response.json().catch(() => ({}))) as {
-        created?: number;
-        updated?: number;
-        skipped?: string[];
-        detail?: unknown;
-      };
-      if (!response.ok) throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      const skippedCount = data.skipped?.length ?? 0;
-      addToast(`导入完成：新增 ${data.created ?? 0}，更新 ${data.updated ?? 0}${skippedCount ? `，跳过 ${skippedCount}` : ""}`, "success");
-      await loadCustomRules();
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : "导入失败", "error");
-    } finally {
-      setRuleTestBusy(false);
-    }
-  };
 
   const loadSecurityConfiguration = useCallback(async () => {
     const localPolicies = readStorage<PolicyRule[]>(STORAGE_KEYS.policies, DEFAULT_POLICIES);
@@ -2339,13 +1855,6 @@ export default function Home() {
     [tools],
   );
 
-  const chatModelOptions = useMemo<GlassSelectOption[]>(
-    () =>
-      CHAT_MODEL_OPTIONS.some((option) => option.value === chatModel)
-        ? CHAT_MODEL_OPTIONS
-        : [{ value: chatModel, label: chatModel }, ...CHAT_MODEL_OPTIONS],
-    [chatModel],
-  );
 
   const filteredLogs = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -2395,7 +1904,7 @@ export default function Home() {
       return next;
     });
     addToast("已生成验证样例日志", "success");
-  }, [addToast, mergeLogs, persistLocalLogs]);
+  }, [addToast, mergeLogs, persistLocalLogs, setLogs]);
 
   const loadScenarioIntoGateway = useCallback(
     (scenarioId: DemoScenarioId) => {
@@ -2413,7 +1922,7 @@ export default function Home() {
       setGatewayResult(null);
       addToast(`已载入验证场景：${scenario.label}`, "info");
     },
-    [addToast]
+    [addToast, setGatewayForm, setGatewayResult]
   );
 
   const launchValidationPreset = useCallback(() => {
@@ -2610,355 +2119,6 @@ export default function Home() {
     }
   };
 
-  const switchActiveOrg = async (orgId: number) => {
-    if (!authSession || orgId === orgContext.activeOrgId || orgSwitchBusy) return;
-    setOrgSwitchBusy(true);
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/auth/switch-org`, {
-        method: "POST",
-        headers: {
-          ...(buildHeaders(settings, "client", true, authSession)),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ org_id: orgId }),
-      });
-      const data = (await response.json().catch(() => ({}))) as {
-        access_token?: string;
-        token_type?: string;
-        expires_at?: number;
-        user?: { id: string; name: string; email: string; role: string; created_at: string };
-        org?: { id: number; slug: string; name: string; is_default: boolean; role: string } | null;
-        detail?: unknown;
-      };
-      if (!response.ok || !data.access_token || !data.user) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
-      const sessionUser: SessionUser = {
-        id: data.user.id,
-        name: data.user.name,
-        email: data.user.email,
-        role: data.user.role,
-        createdAt: data.user.created_at,
-      };
-      setAuthSession({
-        accessToken: data.access_token,
-        tokenType: "bearer",
-        expiresAt: asNumber(data.expires_at),
-        user: sessionUser,
-      });
-      setUser(sessionUser);
-      const nextOrg = data.org ?? null;
-      if (nextOrg) {
-        setOrgContext((current) => ({
-          orgs: current.orgs.some((org) => org.id === nextOrg.id)
-            ? current.orgs.map((org) => (org.id === nextOrg.id ? { ...org, role: nextOrg.role } : org))
-            : [...current.orgs, { ...nextOrg, role: nextOrg.role }],
-          activeOrgId: nextOrg.id,
-          activeOrgRole: nextOrg.role,
-        }));
-      }
-      addToast(`已切换到组织「${nextOrg?.name ?? orgId}」`, "success");
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : "组织切换失败", "error");
-    } finally {
-      setOrgSwitchBusy(false);
-    }
-  };
-
-  const loadOrgList = useCallback(async () => {
-    if (!hasAdminAccess) return;
-    setOrgListLoading(true);
-    setOrgListError("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/orgs`, {
-        headers: buildHeaders(settings, "admin", false, authSession),
-        cache: "no-store",
-      });
-      const data = (await response.json().catch(() => ({}))) as {
-        items?: Array<OrgListItem>;
-        detail?: unknown;
-      };
-      if (!response.ok || !Array.isArray(data.items)) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
-      setOrgList(data.items);
-    } catch (error) {
-      setOrgListError(error instanceof Error ? error.message : "组织列表加载失败");
-    } finally {
-      setOrgListLoading(false);
-    }
-  }, [apiBaseUrl, authSession, hasAdminAccess, settings]);
-
-  const selectOrg = useCallback(
-    (orgId: number | null) => {
-      setOrgSelectedId(orgId);
-      setOrgMembers([]);
-      setOrgSsoConfig(null);
-      if (orgId === null) return;
-      const load = async () => {
-        setOrgMembersLoading(true);
-        setOrgSsoLoading(true);
-        const headers = buildHeaders(settings, "admin", false, authSession);
-        try {
-          const membersResponse = await fetch(`${apiBaseUrl}/api/v1/orgs/${orgId}/members`, {
-            headers,
-            cache: "no-store",
-          });
-          const membersData = (await membersResponse.json().catch(() => ({}))) as {
-            items?: Array<OrgMemberItem>;
-            detail?: unknown;
-          };
-          if (!membersResponse.ok || !Array.isArray(membersData.items)) {
-            throw new Error(detailText(membersData.detail) || `HTTP ${membersResponse.status}`);
-          }
-          setOrgMembers(membersData.items);
-        } catch (error) {
-          addToast(error instanceof Error ? error.message : "成员列表加载失败", "error");
-        } finally {
-          setOrgMembersLoading(false);
-        }
-        try {
-          const ssoResponse = await fetch(`${apiBaseUrl}/api/v1/orgs/${orgId}/sso`, {
-            headers,
-            cache: "no-store",
-          });
-          const ssoData = (await ssoResponse.json().catch(() => ({}))) as {
-            item?: SsoConfigItem | null;
-            detail?: unknown;
-          };
-          if (!ssoResponse.ok) {
-            throw new Error(detailText(ssoData.detail) || `HTTP ${ssoResponse.status}`);
-          }
-          setOrgSsoConfig(ssoData.item ?? null);
-          if (ssoData.item) {
-            setOrgSsoForm({
-              provider_name: ssoData.item.provider_name,
-              client_id: ssoData.item.client_id,
-              client_secret: "",
-              issuer_url: ssoData.item.issuer_url,
-              scopes: ssoData.item.scopes,
-              default_role: ssoData.item.default_role,
-              jit_enabled: ssoData.item.jit_enabled,
-              enabled: ssoData.item.enabled,
-            });
-          } else {
-            setOrgSsoForm({
-              provider_name: "",
-              client_id: "",
-              client_secret: "",
-              issuer_url: "",
-              scopes: "openid email profile",
-              default_role: "client",
-              jit_enabled: true,
-              enabled: true,
-            });
-          }
-        } catch (error) {
-          addToast(error instanceof Error ? error.message : "SSO 配置加载失败", "error");
-        } finally {
-          setOrgSsoLoading(false);
-        }
-      };
-      void load();
-    },
-    [addToast, apiBaseUrl, authSession, settings]
-  );
-
-  const createOrg = async () => {
-    const slug = orgCreateForm.slug.trim().toLowerCase();
-    const name = orgCreateForm.name.trim();
-    if (!slug || !name) {
-      addToast("请填写组织标识与名称", "error");
-      return;
-    }
-    setOrgCreateBusy(true);
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/orgs`, {
-        method: "POST",
-        headers: {
-          ...buildHeaders(settings, "admin", true, authSession),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ slug, name }),
-      });
-      const data = (await response.json().catch(() => ({}))) as { item?: OrgListItem; detail?: unknown };
-      if (!response.ok || !data.item) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
-      addToast(`组织「${data.item.name}」已创建`, "success");
-      setOrgCreateForm({ slug: "", name: "" });
-      setOrgCreateOpen(false);
-      await loadOrgList();
-      await selectOrg(data.item.id);
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : "组织创建失败", "error");
-    } finally {
-      setOrgCreateBusy(false);
-    }
-  };
-
-  const addOrgMember = async () => {
-    if (orgSelectedId === null) return;
-    const email = memberAddForm.email.trim().toLowerCase();
-    if (!email) {
-      addToast("请输入成员邮箱", "error");
-      return;
-    }
-    setMemberAddBusy(true);
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/orgs/${orgSelectedId}/members`, {
-        method: "POST",
-        headers: {
-          ...buildHeaders(settings, "admin", true, authSession),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ email, role: memberAddForm.role }),
-      });
-      const data = (await response.json().catch(() => ({}))) as { item?: OrgMemberItem; detail?: unknown };
-      if (!response.ok || !data.item) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
-      setOrgMembers((current) => [...current, data.item!]);
-      setMemberAddForm({ email: "", role: "member" });
-      addToast(`已添加成员 ${data.item.email}`, "success");
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : "成员添加失败", "error");
-    } finally {
-      setMemberAddBusy(false);
-    }
-  };
-
-  const updateOrgMemberRole = async (userId: number, role: string) => {
-    if (orgSelectedId === null) return;
-    setMemberBusyId(userId);
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/orgs/${orgSelectedId}/members/${userId}`, {
-        method: "PATCH",
-        headers: {
-          ...buildHeaders(settings, "admin", true, authSession),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ role }),
-      });
-      const data = (await response.json().catch(() => ({}))) as { item?: OrgMemberItem; detail?: unknown };
-      if (!response.ok || !data.item) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
-      setOrgMembers((current) => current.map((item) => (item.user_id === userId ? data.item! : item)));
-      addToast(`已更新 ${data.item.email} 的组织角色`, "success");
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : "角色更新失败", "error");
-    } finally {
-      setMemberBusyId(null);
-    }
-  };
-
-  const removeOrgMember = async (userId: number, email: string) => {
-    if (orgSelectedId === null) return;
-    setMemberBusyId(userId);
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/orgs/${orgSelectedId}/members/${userId}`, {
-        method: "DELETE",
-        headers: buildHeaders(settings, "admin", false, authSession),
-      });
-      const data = (await response.json().catch(() => ({}))) as { deleted?: boolean; detail?: unknown };
-      if (!response.ok || !data.deleted) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
-      setOrgMembers((current) => current.filter((item) => item.user_id !== userId));
-      addToast(`已移除成员 ${email}`, "success");
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : "成员移除失败", "error");
-    } finally {
-      setMemberBusyId(null);
-    }
-  };
-
-  const saveOrgSso = async () => {
-    if (orgSelectedId === null) return;
-    const providerName = orgSsoForm.provider_name.trim();
-    const clientId = orgSsoForm.client_id.trim();
-    const issuerUrl = orgSsoForm.issuer_url.trim().replace(/\/$/, "");
-    // A secret is only required when the connection does not exist yet.
-    const hasExistingSecret = Boolean(orgSsoConfig?.client_secret_masked);
-    const clientSecret = orgSsoForm.client_secret.trim();
-    if (!providerName || !clientId || !issuerUrl || (!clientSecret && !hasExistingSecret)) {
-      addToast("请填写 provider 名称、client_id、issuer 与 client_secret", "error");
-      return;
-    }
-    setOrgSsoBusy(true);
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/orgs/${orgSelectedId}/sso`, {
-        method: "PUT",
-        headers: {
-          ...buildHeaders(settings, "admin", true, authSession),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          provider_name: providerName,
-          client_id: clientId,
-          // Empty secret keeps the stored one (backend treats "" as no-rotation).
-          client_secret: clientSecret,
-          issuer_url: issuerUrl,
-          scopes: orgSsoForm.scopes.trim() || "openid email profile",
-          default_role: orgSsoForm.default_role,
-          jit_enabled: orgSsoForm.jit_enabled,
-          enabled: orgSsoForm.enabled,
-        }),
-      });
-      const data = (await response.json().catch(() => ({}))) as { item?: SsoConfigItem; detail?: unknown };
-      if (!response.ok || !data.item) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
-      setOrgSsoConfig(data.item);
-      setOrgSsoForm((current) => ({ ...current, client_secret: "" }));
-      addToast("SSO 配置已保存", "success");
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : "SSO 配置保存失败", "error");
-    } finally {
-      setOrgSsoBusy(false);
-    }
-  };
-
-  const deleteOrgSso = async () => {
-    if (orgSelectedId === null || !orgSsoConfig) return;
-    setOrgSsoBusy(true);
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/orgs/${orgSelectedId}/sso`, {
-        method: "DELETE",
-        headers: buildHeaders(settings, "admin", false, authSession),
-      });
-      const data = (await response.json().catch(() => ({}))) as { deleted?: boolean; detail?: unknown };
-      if (!response.ok || !data.deleted) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
-      setOrgSsoConfig(null);
-      setOrgSsoForm({
-        provider_name: "",
-        client_id: "",
-        client_secret: "",
-        issuer_url: "",
-        scopes: "openid email profile",
-        default_role: "client",
-        jit_enabled: true,
-        enabled: true,
-      });
-      addToast("SSO 连接已删除", "success");
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : "SSO 配置删除失败", "error");
-    } finally {
-      setOrgSsoBusy(false);
-    }
-  };
-
-  // Load the org list whenever the organizations view becomes active.
-  useEffect(() => {
-    if (!mounted || !user || effectiveView !== "orgs" || !hasAdminAccess) return;
-    const timer = window.setTimeout(() => {
-      void loadOrgList();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [effectiveView, hasAdminAccess, loadOrgList, mounted, user]);
 
   const savePolicies = () => {
     writeStorage(STORAGE_KEYS.policies, policies);
@@ -3124,194 +2284,10 @@ export default function Home() {
     addToast("本地会话和验证数据已清除", "info");
   };
 
-  const applyIssuedKeyToSettings = (item: ManagedApiKeyItem, apiKey: string) => {
-    const nextSettings: AppSettings = isAdminRole(item.role)
-      ? { ...settings, adminApiKey: apiKey }
-      : { ...settings, clientApiKey: apiKey };
-    setSettings(nextSettings);
-    addToast(
-      isAdminRole(item.role)
-        ? "已写入当前会话的 Admin API Key，不会持久化到本地存储"
-        : "已写入当前会话的 Client API Key，不会持久化到本地存储",
-      "success"
-    );
-  };
 
-  const createManagedKey = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!hasAdminAccess) {
-      addToast("请先登录管理员账号或配置 Admin API Key", "error");
-      return;
-    }
-    if (!managedKeyDraft.name.trim()) {
-      addToast("请填写密钥名称", "error");
-      return;
-    }
 
-    const expiresValue = managedKeyDraft.expiresInDays.trim();
-    const expiresInDays = expiresValue ? Number(expiresValue) : undefined;
-    if (expiresValue && (expiresInDays === undefined || !Number.isFinite(expiresInDays) || expiresInDays < 1)) {
-      addToast("过期天数必须是大于 0 的数字", "error");
-      return;
-    }
 
-    setManagedKeyBusyId(0);
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/api-keys`, {
-        method: "POST",
-        headers: buildHeaders(settings, "admin", true, authSession),
-        body: JSON.stringify({
-          name: managedKeyDraft.name.trim(),
-          role: managedKeyDraft.role,
-          description: managedKeyDraft.description.trim(),
-          expires_in_days: expiresInDays ? Math.round(expiresInDays) : undefined,
-        }),
-      });
-      const data = (await response.json().catch(() => ({}))) as {
-        item?: ManagedApiKeyItem;
-        api_key?: string;
-        detail?: unknown;
-      };
-      if (!response.ok || !data.item || !data.api_key) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
 
-      setManagedKeyIssueState({
-        action: "created",
-        apiKey: data.api_key,
-        item: data.item,
-      });
-      setManagedKeyDraft({
-        name: "",
-        role: "client",
-        description: "",
-        expiresInDays: managedKeyDraft.expiresInDays || "30",
-      });
-      setManagedKeyDraftOpen(false);
-      await loadManagedApiKeys();
-      addToast("托管密钥已创建", "success");
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : "创建托管密钥失败", "error");
-    } finally {
-      setManagedKeyBusyId(null);
-    }
-  };
-
-  const rotateManagedKey = async (item: ManagedApiKeyItem) => {
-    if (!hasAdminAccess) {
-      addToast("请先登录管理员账号或配置 Admin API Key", "error");
-      return;
-    }
-
-    setManagedKeyBusyId(item.id);
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/api-keys/${item.id}/rotate`, {
-        method: "POST",
-        headers: buildHeaders(settings, "admin", true, authSession),
-        body: JSON.stringify({}),
-      });
-      const data = (await response.json().catch(() => ({}))) as {
-        item?: ManagedApiKeyItem;
-        api_key?: string;
-        detail?: unknown;
-      };
-      if (!response.ok || !data.item || !data.api_key) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
-
-      setManagedKeyIssueState({
-        action: "rotated",
-        apiKey: data.api_key,
-        item: data.item,
-      });
-      await loadManagedApiKeys();
-      addToast("托管密钥已轮换，旧密钥立即失效", "success");
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : "轮换托管密钥失败", "error");
-    } finally {
-      setManagedKeyBusyId(null);
-    }
-  };
-
-  const removeDeletedKeyFromSession = useCallback(
-    (item: ManagedApiKeyItem) => {
-      const keyPrefixWithSeparator = `${item.key_prefix}.`;
-      setSettings((current) => ({
-        ...current,
-        adminApiKey:
-          isAdminRole(item.role) && current.adminApiKey.startsWith(keyPrefixWithSeparator)
-            ? ""
-            : current.adminApiKey,
-        clientApiKey:
-          !isAdminRole(item.role) && current.clientApiKey.startsWith(keyPrefixWithSeparator)
-            ? ""
-            : current.clientApiKey,
-      }));
-      if (managedKeyIssueState?.item.id === item.id) {
-        setManagedKeyIssueState(null);
-      }
-    },
-    [managedKeyIssueState]
-  );
-
-  const updateManagedKeyLifecycle = useCallback(
-    async (item: ManagedApiKeyItem, action: "revoke" | "activate" | "delete") => {
-      if (!hasAdminAccess) {
-        addToast("请先登录管理员账号或配置 Admin API Key", "error");
-        return;
-      }
-
-      if (action === "delete") {
-        const confirmed = window.confirm(`确定删除密钥“${item.name}”吗？删除后该密钥会立即失效，且不会再出现在列表中。`);
-        if (!confirmed) {
-          return;
-        }
-      }
-
-      setManagedKeyBusyId(item.id);
-      try {
-        const endpoint =
-          action === "delete"
-            ? `${apiBaseUrl}/api/v1/api-keys/${item.id}`
-            : `${apiBaseUrl}/api/v1/api-keys/${item.id}/${action}`;
-        const response = await fetch(endpoint, {
-          method: action === "delete" ? "DELETE" : "POST",
-          headers: buildHeaders(settings, "admin", false, authSession),
-        });
-        const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
-        if (!response.ok) {
-          throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-        }
-
-        if (action === "delete") {
-          removeDeletedKeyFromSession(item);
-        }
-        await loadManagedApiKeys();
-        addToast(
-          action === "revoke"
-            ? "托管密钥已停用"
-            : action === "activate"
-              ? "托管密钥已恢复"
-              : "托管密钥已删除并立即失效",
-          "success"
-        );
-      } catch (error) {
-        addToast(
-          error instanceof Error
-            ? error.message
-            : action === "revoke"
-              ? "停用密钥失败"
-              : action === "activate"
-                ? "恢复密钥失败"
-                : "删除密钥失败",
-          "error"
-        );
-      } finally {
-        setManagedKeyBusyId(null);
-      }
-    },
-    [addToast, apiBaseUrl, authSession, hasAdminAccess, loadManagedApiKeys, removeDeletedKeyFromSession, settings]
-  );
 
   const reviewApproval = async (approvalId: number, status: "approved" | "rejected") => {
     if (!hasAdminAccess) {
@@ -3405,7 +2381,7 @@ export default function Home() {
       setGatewayResult(null);
       addToast(`已恢复 ${formatTime(run.createdAt)} 的验证结果`, "info");
     },
-    [addToast]
+    [addToast, setGatewayResult]
   );
 
   const downloadValidationResults = useCallback(() => {
@@ -3455,33 +2431,7 @@ export default function Home() {
     addToast("网关测试表单已清空", "info");
   };
 
-  const appendLocalDecisionLog = (decision: LocalDecision, prompt: string, extra: Record<string, unknown> = {}) => {
-    const requestId = `local-${Date.now().toString(36)}`;
-    const log: InterceptLog = {
-      id: -Date.now(),
-      timestamp: new Date().toISOString(),
-      threat_type: threatTypeFromDecision(decision),
-      action_taken: decision.allowed ? "Allowed" : "Blocked",
-      original_prompt: prompt || gatewayForm.externalContext || "Local preflight",
-      details: {
-        request_id: requestId,
-        layer: decision.layer,
-        reason: decision.reason,
-        risk_score: decision.riskScore,
-        matched_rules: decision.matchedRules,
-        category: decision.category,
-        recommended_action: decision.recommendedAction,
-        ...extra,
-      },
-    };
 
-    setLogs((current) => {
-      const next = [log, ...current].slice(0, 100);
-      persistLocalLogs(next);
-      return next;
-    });
-    return log;
-  };
 
   const evaluateScenario = useCallback(
     async (scenario: DemoScenario): Promise<ValidationSuiteItem> => {
@@ -3605,189 +2555,7 @@ export default function Home() {
     );
   }, [addToast, evaluateScenario, hasGatewayAccess, selectedScenario.label, selectedScenarioId]);
 
-  const submitGatewayTest = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!gatewayForm.prompt.trim() && !gatewayForm.externalContext.trim()) {
-      addToast("请输入 Prompt 或外部上下文", "error");
-      return;
-    }
 
-    let parameters: Record<string, unknown> | null = null;
-    try {
-      parameters = gatewayForm.parameters.trim() ? (JSON.parse(gatewayForm.parameters) as Record<string, unknown>) : null;
-    } catch {
-      addToast("工具参数不是有效 JSON", "error");
-      return;
-    }
-
-    const decision = localInspect(gatewayForm.prompt, gatewayForm.externalContext, gatewayForm.toolName, gatewayForm.parameters);
-
-    if (!hasGatewayAccess) {
-      const log = appendLocalDecisionLog(decision, gatewayForm.prompt, {
-        local_preflight: true,
-        external_context: gatewayForm.externalContext,
-        tool_name: gatewayForm.toolName || undefined,
-      });
-      setGatewayResult({
-        ok: decision.allowed,
-        title: decision.allowed ? "本地预检通过" : "本地预检已拦截",
-        message: decision.allowed
-          ? "当前未登录且未配置 API Key，因此仅执行本地风险预检；登录后可请求后端网关。"
-          : "当前未登录且未配置 API Key，已使用前端预检模拟 Shadow Agent 的间接提示词注入拦截。",
-        detail: log.details,
-      });
-      addToast(decision.allowed ? "本地预检通过" : "本地预检已拦截", decision.allowed ? "success" : "error");
-      return;
-    }
-
-    setGatewayLoading(true);
-    setGatewayResult(null);
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 10000);
-
-    try {
-      const analyzeResponse = await fetch(`${apiBaseUrl}/api/v1/analyze`, {
-        method: "POST",
-        headers: buildHeaders(settings, "client", true, authSession),
-        signal: controller.signal,
-        body: JSON.stringify({
-          prompt: gatewayForm.prompt || "请处理外部上下文",
-          external_context: gatewayForm.externalContext || null,
-          tool_name: gatewayForm.toolName || null,
-          parameters,
-        }),
-      });
-      const analyzeData = (await analyzeResponse.json().catch(() => ({}))) as AnalyzeResponse & { detail?: unknown };
-      if (!analyzeResponse.ok) {
-        throw new Error(detailText(analyzeData.detail) || `HTTP ${analyzeResponse.status}`);
-      }
-      if (analyzeData.decision === "blocked") {
-        const firstBlocked = analyzeData.blocked_checks?.[0] ?? {};
-        const blockedDecision: LocalDecision = {
-          allowed: false,
-          riskScore: asNumber(analyzeData.risk_score, decision.riskScore),
-          reason: friendlyDecisionReason(detailText(firstBlocked.reason), detailText(firstBlocked.category) || analyzeData.category),
-          matchedRules: Array.isArray(firstBlocked.matched_rules) ? firstBlocked.matched_rules.map(detailText) : decision.matchedRules,
-          layer: detailText(firstBlocked.name) || decision.layer,
-          category: detailText(firstBlocked.category) || analyzeData.category,
-          recommendedAction: analyzeData.recommended_action,
-        };
-        appendLocalDecisionLog(blockedDecision, gatewayForm.prompt, {
-          analyze_detail: analyzeData,
-          external_context: gatewayForm.externalContext,
-          tool_name: gatewayForm.toolName || undefined,
-        });
-        setGatewayResult({
-          ok: false,
-          title: "后端预检已拦截",
-          message: blockedDecision.reason,
-          detail: analyzeData,
-        });
-        addToast("后端预检已拦截", "error");
-        return;
-      }
-
-      const response = await fetch(`${apiBaseUrl}/api/v1/chat/completions`, {
-        method: "POST",
-        headers: buildHeaders(settings, "client", true, authSession),
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: gatewayForm.model,
-          messages: [{ role: "user", content: gatewayForm.prompt || "请处理外部上下文" }],
-          external_context: gatewayForm.externalContext || null,
-          tool_name: gatewayForm.toolName || null,
-          parameters,
-          stream: gatewayForm.stream,
-        }),
-      });
-      const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!response.ok) {
-        const detail = data.detail && typeof data.detail === "object" ? (data.detail as Record<string, unknown>) : data;
-        const blockedDecision: LocalDecision = {
-          allowed: false,
-          riskScore: asNumber(detail.risk_score, decision.riskScore),
-          reason: friendlyDecisionReason(detailText(detail.reason), detailText(detail.category)),
-          matchedRules: Array.isArray(detail.matched_rules) ? detail.matched_rules.map(detailText) : decision.matchedRules,
-          layer: detailText(detail.layer) || decision.layer,
-        };
-        appendLocalDecisionLog(blockedDecision, gatewayForm.prompt, { backend_detail: detail });
-        setGatewayResult({ ok: false, title: "后端网关已拦截", message: blockedDecision.reason, detail });
-        addToast("后端网关已拦截", "error");
-        return;
-      }
-
-      setGatewayResult({ ok: true, title: "后端网关通过", message: "请求已通过 Shadow Agent 审计并返回响应。", detail: data });
-      addToast("网关测试通过", "success");
-    } catch (error) {
-      const message =
-        error instanceof Error && error.name === "AbortError"
-          ? "请求超时"
-          : error instanceof Error
-            ? error.message
-            : "请求失败";
-      setGatewayResult({ ok: false, title: "请求失败", message, detail: { local_preflight: decision } });
-      addToast(`网关测试失败：${message}`, "error");
-    } finally {
-      window.clearTimeout(timer);
-      setGatewayLoading(false);
-    }
-  };
-
-  const submitChat = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const prompt = chatInput.trim();
-
-    if (!hasGatewayAccess) {
-      setChatError("当前账号没有模型调用权限，请先登录或配置 Client / Gateway API Key。\nDeepSeek Key 不需要填写在这里。\n");
-      return;
-    }
-    if (!prompt || chatLoading) return;
-
-    const userMessage: ChatMessage = { id: makeId("chat-user"), role: "user", content: prompt };
-    const requestMessages = [...chatMessages, userMessage].map(({ role, content }) => ({ role, content }));
-    setChatMessages((current) => [...current, userMessage]);
-    setChatInput("");
-    setChatError("");
-    setChatLoading(true);
-
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 60_000);
-
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/chat/completions`, {
-        method: "POST",
-        headers: buildHeaders(settings, "client", true, authSession),
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: chatModel,
-          messages: requestMessages,
-          stream: false,
-        }),
-      });
-      const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!response.ok) {
-        const detail = data.detail && typeof data.detail === "object" ? data.detail : data;
-        throw new Error(detailText(detail) || `HTTP ${response.status}`);
-      }
-
-      const content = extractChatContent(data);
-      if (!content) throw new Error("模型返回了空内容，请检查模型配置和上游响应。 ");
-      setChatMessages((current) => [...current, { id: makeId("chat-assistant"), role: "assistant", content }]);
-      addToast("模型已回复", "success");
-    } catch (error) {
-      const message =
-        error instanceof Error && error.name === "AbortError"
-          ? "请求超时，请检查后端和上游模型连接。"
-          : error instanceof Error
-            ? error.message
-            : "模型请求失败。";
-      setChatError(message);
-      addToast(`模型请求失败：${message}`, "error");
-    } finally {
-      window.clearTimeout(timer);
-      setChatLoading(false);
-    }
-  };
 
   const renderToasts = () => (
     <div

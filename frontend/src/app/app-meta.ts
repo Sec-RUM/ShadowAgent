@@ -272,3 +272,24 @@ export function isPrivateIpv4(value: string) {
   if (parts[0] === 192 && parts[1] === 168) return true;
   return false;
 }
+
+export function makeId(prefix: string) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+export function readStorage<T>(key: string, fallback: T): T {
+  if (!canUseStorage()) return fallback;
+  const raw = window.localStorage.getItem(key);
+  if (!raw) return fallback;
+
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
