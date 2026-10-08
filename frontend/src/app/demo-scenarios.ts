@@ -128,3 +128,30 @@ export const DEMO_SCENARIOS: DemoScenario[] = [
     severity: "high",
   },
 ];
+
+export const MAX_VALIDATION_RUNS = 6;
+
+export function createInitialValidationResults(): ValidationSuiteItem[] {
+  return DEMO_SCENARIOS.map((scenario) => ({
+    id: scenario.id,
+    label: scenario.label,
+    expectedOutcome: scenario.expectedOutcome,
+    actualOutcome: "pending",
+    category: scenario.expectedCategory ?? "allowed",
+    riskScore: null,
+    status: "idle",
+    note: "尚未执行",
+  }));
+}
+
+export function summarizeValidationResults(items: ValidationSuiteItem[]) {
+  const passed = items.filter((item) => item.status === "passed").length;
+  const failed = items.filter((item) => item.status === "failed").length;
+  const executed = items.filter((item) => item.status !== "idle").length;
+  return {
+    total: items.length,
+    executed,
+    passed,
+    failed,
+  };
+}

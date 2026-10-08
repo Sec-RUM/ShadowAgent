@@ -3,7 +3,7 @@
 
 import { KeyRound, Monitor, MoonStar, Network, Shield, ShieldCheck, SunMedium } from "lucide-react";
 import { parseDateValue } from "./time-utils";
-import type { AppSettings, ManagedApiKeyItem, PolicyRule, RoleShowcaseDefinition } from "./types";
+import type { AppSettings, ManagedApiKeyItem, PolicyRule, RoleShowcaseDefinition, ToolPermission } from "./types";
 import type { GlassSelectOption } from "./components/glass-select";
 
 export const STORAGE_KEYS = {
@@ -29,6 +29,62 @@ export const DEFAULT_SETTINGS: AppSettings = {
   compactMode: false,
   desktopNotifications: false,
 };
+
+export const DEFAULT_POLICIES: PolicyRule[] = [
+  {
+    id: "instruction-data",
+    name: "指令与数据隔离",
+    description: "把用户可信指令与检索结果、插件输出、工具返回值分层审计，重点防御间接提示词注入。",
+    enabled: true,
+    severity: "high",
+    scope: "Prompt",
+  },
+  {
+    id: "semantic-intent",
+    name: "语义意图审计",
+    description: "识别忽略系统指令、泄露隐藏提示词、越权执行和角色劫持等高风险语义。",
+    enabled: true,
+    severity: "high",
+    scope: "Prompt",
+  },
+  {
+    id: "tool-permission",
+    name: "工具权限控制",
+    description: "按工具名与参数约束 Agent 可调用的外部能力，避免被外部内容诱导执行危险动作。",
+    enabled: true,
+    severity: "medium",
+    scope: "Tool",
+  },
+  {
+    id: "log-redaction",
+    name: "敏感字段脱敏",
+    description: "在审计日志展示与导出前弱化 token、密钥、密码等敏感内容。",
+    enabled: true,
+    severity: "medium",
+    scope: "Audit",
+  },
+];
+
+export const DEFAULT_TOOLS: ToolPermission[] = [
+  {
+    id: "search_web",
+    name: "search_web",
+    description: "允许代理读取公开网页搜索结果，外部内容仍必须作为不可信数据处理。",
+    allowed: true,
+  },
+  {
+    id: "read_file",
+    name: "read_file",
+    description: "读取本地文件，默认关闭，防止被注入内容诱导泄露环境信息。",
+    allowed: false,
+  },
+  {
+    id: "execute_shell",
+    name: "execute_shell",
+    description: "执行系统命令，默认关闭，需要单独授权与参数审计。",
+    allowed: false,
+  },
+];
 
 export const THEME_OPTIONS = [
   { id: "system", label: "系统", description: "跟随设备外观", icon: Monitor },
@@ -103,6 +159,12 @@ export function canUseStorage() {
 export function writeStorage<T>(key: string, value: T) {
   if (canUseStorage()) {
     window.localStorage.setItem(key, JSON.stringify(value));
+  }
+}
+
+export function removeStorage(key: string) {
+  if (canUseStorage()) {
+    window.localStorage.removeItem(key);
   }
 }
 

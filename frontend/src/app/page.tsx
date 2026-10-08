@@ -27,18 +27,17 @@ import {
   X,
 } from "lucide-react";
 import { AnimatePresence, MotionConfig, motion, type Variants } from "framer-motion";
-import { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GlassInterceptLogCard } from "./components/intercept-log-card";
 import { GlassSelect, type GlassSelectOption } from "./components/glass-select";
 import { InteractiveBackground } from "./components/interactive-background";
 import SecurityDashboard from "./components/security-dashboard";
 import { buildTimeTooltip } from "./time-utils";
-import { isValidEmailInput, registrationHint, type BootstrapStatus } from "./auth-logic";
+import { registrationHint } from "./auth-logic";
 import { GatewayView } from "./views/gateway-view";
-import { DEMO_SCENARIOS, DEFAULT_VALIDATION_SCENARIO_ID, type DemoScenario, type DemoScenarioId, type ValidationRunRecord, type ValidationSuiteItem } from "./demo-scenarios";
+import { DEMO_SCENARIOS, DEFAULT_VALIDATION_SCENARIO_ID, MAX_VALIDATION_RUNS, createInitialValidationResults, summarizeValidationResults, type DemoScenarioId, type ValidationRunRecord } from "./demo-scenarios";
 import { DEFAULT_GATEWAY_FORM } from "./gateway-types";
-import { asNumber, buttonClass, categoryLabel, formatTime, glassPanelClass, glassPanelSoftClass, inputBase, type IconComponent, friendlyDecisionReason } from "./components/ui-kit";
+import { asNumber, buttonClass, formatTime, glassPanelClass, glassPanelSoftClass, inputBase, type IconComponent, friendlyDecisionReason } from "./components/ui-kit";
 import type {
   ViewKey,
   SessionUser,
@@ -52,27 +51,23 @@ import type {
   Toast,
   HealthState,
   LocalDecision,
-  BackendPolicy,
-  BackendToolPolicy,
-  AnalyzeResponse,
-  ApprovalItem,
-  AlertItem,
-  ReplayItem,
   RoleShowcaseId,
 } from "./types";
 import {
   STORAGE_KEYS,
   DEFAULT_API_BASE,
   DEFAULT_SETTINGS,
+  DEFAULT_POLICIES,
+  DEFAULT_TOOLS,
   ROLE_SHOWCASE_DEFINITIONS,
   ROLE_PERMISSION_MATRIX,
-  canUseStorage,
   writeStorage,
   managedKeyStatus,
   sanitizeSettingsForStorage,
   isAdminRole,
   makeId,
   readStorage,
+  removeStorage,
 } from "./app-meta";
 import { PanelGlow } from "./components/page-widgets";
 import { buildHeaders, detailText, isAuthSessionValid } from "./api-client";
@@ -83,6 +78,10 @@ import { useRules } from "./hooks/use-rules";
 import { useOrgs } from "./hooks/use-orgs";
 import { useLogs } from "./hooks/use-logs";
 import { useGateway } from "./hooks/use-gateway";
+import { useOperations } from "./hooks/use-operations";
+import { usePolicies } from "./hooks/use-policies";
+import { useValidation } from "./hooks/use-validation";
+import { useAuth } from "./hooks/use-auth";
 import { MetricsView } from "./views/metrics-view";
 import { OverviewView } from "./views/overview-view";
 import { LogsView } from "./views/logs-view";
@@ -93,171 +92,6 @@ import { SettingsView } from "./views/settings-view";
 import { HelpView } from "./views/help-view";
 import { RulesView } from "./views/rules-view";
 import { OrgsView } from "./views/orgs-view";
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-const MAX_VALIDATION_RUNS = 6;
-
-
-function createInitialValidationResults(): ValidationSuiteItem[] {
-  return DEMO_SCENARIOS.map((scenario) => ({
-    id: scenario.id,
-    label: scenario.label,
-    expectedOutcome: scenario.expectedOutcome,
-    actualOutcome: "pending",
-    category: scenario.expectedCategory ?? "allowed",
-    riskScore: null,
-    status: "idle",
-    note: "尚未执行",
-  }));
-}
-
-function summarizeValidationResults(items: ValidationSuiteItem[]) {
-  const passed = items.filter((item) => item.status === "passed").length;
-  const failed = items.filter((item) => item.status === "failed").length;
-  const executed = items.filter((item) => item.status !== "idle").length;
-  return {
-    total: items.length,
-    executed,
-    passed,
-    failed,
-  };
-}
-
-const DEFAULT_POLICIES: PolicyRule[] = [
-  {
-    id: "instruction-data",
-    name: "指令与数据隔离",
-    description: "把用户可信指令与检索结果、插件输出、工具返回值分层审计，重点防御间接提示词注入。",
-    enabled: true,
-    severity: "high",
-    scope: "Prompt",
-  },
-  {
-    id: "semantic-intent",
-    name: "语义意图审计",
-    description: "识别忽略系统指令、泄露隐藏提示词、越权执行和角色劫持等高风险语义。",
-    enabled: true,
-    severity: "high",
-    scope: "Prompt",
-  },
-  {
-    id: "tool-permission",
-    name: "工具权限控制",
-    description: "按工具名与参数约束 Agent 可调用的外部能力，避免被外部内容诱导执行危险动作。",
-    enabled: true,
-    severity: "medium",
-    scope: "Tool",
-  },
-  {
-    id: "log-redaction",
-    name: "敏感字段脱敏",
-    description: "在审计日志展示与导出前弱化 token、密钥、密码等敏感内容。",
-    enabled: true,
-    severity: "medium",
-    scope: "Audit",
-  },
-];
-
-const DEFAULT_TOOLS: ToolPermission[] = [
-  {
-    id: "search_web",
-    name: "search_web",
-    description: "允许代理读取公开网页搜索结果，外部内容仍必须作为不可信数据处理。",
-    allowed: true,
-  },
-  {
-    id: "read_file",
-    name: "read_file",
-    description: "读取本地文件，默认关闭，防止被注入内容诱导泄露环境信息。",
-    allowed: false,
-  },
-  {
-    id: "execute_shell",
-    name: "execute_shell",
-    description: "执行系统命令，默认关闭，需要单独授权与参数审计。",
-    allowed: false,
-  },
-];
 
 const SAMPLE_LOGS: InterceptLog[] = [
   {
@@ -431,11 +265,6 @@ const viewVariants: Variants = {
 
 
 
-function removeStorage(key: string) {
-  if (canUseStorage()) {
-    window.localStorage.removeItem(key);
-  }
-}
 
 function downloadJsonFile(filename: string, payload: unknown) {
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -566,11 +395,6 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
 
 
 
-function normalizeSeverity(value: unknown): PolicyRule["severity"] {
-  const text = typeof value === "string" ? value.toLowerCase() : "";
-  if (text === "high" || text === "medium" || text === "low") return text;
-  return "medium";
-}
 
 function threatTypeFromDecision(decision: Pick<LocalDecision, "layer" | "category">) {
   if (decision.category === "secret_exfiltration") return "Data Exfiltration";
@@ -588,30 +412,6 @@ function threatTypeFromDecision(decision: Pick<LocalDecision, "layer" | "categor
   return "Prompt Injection";
 }
 
-function mapBackendPolicy(policy: BackendPolicy): PolicyRule {
-  return {
-    id: String(policy.id),
-    name: policy.name,
-    description: policy.description,
-    enabled: policy.enabled,
-    severity: normalizeSeverity(policy.severity),
-    scope: policy.scope || "Prompt",
-    pattern: policy.blacklist_keyword,
-    systemManaged: policy.system_managed,
-    custom: !policy.system_managed,
-  };
-}
-
-function mapBackendToolPolicy(policy: BackendToolPolicy): ToolPermission {
-  return {
-    id: String(policy.id),
-    name: policy.tool_name,
-    description: policy.description,
-    allowed: policy.allowed,
-    requiresAdminApproval: policy.requires_admin_approval,
-    systemManaged: policy.system_managed,
-  };
-}
 
 function stampSampleLogs() {
   const now = Date.now();
@@ -759,38 +559,14 @@ export default function Home() {
   const [view, setView] = useState<ViewKey>("chat");
   const [user, setUser] = useState<SessionUser | null>(null);
   const [authSession, setAuthSession] = useState<AuthSession | null>(null);
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
-  const [authForm, setAuthForm] = useState({ name: "", email: "", password: "", confirmPassword: "", bootstrapToken: "", inviteToken: "" });
-  const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatus | null>(null);
-  // null 的 bootstrapStatus 有歧义：既可能是「还没加载完」，也可能是「后端连不上」。
-  // 这两者必须分开——否则连不上后端时，横幅会谎报成「注册已关闭」这类确定性策略结论。
-  const [bootstrapUnreachable, setBootstrapUnreachable] = useState(false);
-  const [authBusy, setAuthBusy] = useState(false);
-  const [authError, setAuthError] = useState("");
-  const [ssoSlug, setSsoSlug] = useState("");
-  const [ssoBusy, setSsoBusy] = useState(false);
-  const [ssoHint, setSsoHint] = useState("");
   const [orgContext, setOrgContext] = useState<{
     orgs: OrgInfo[];
     activeOrgId: number | null;
     activeOrgRole: string | null;
   }>({ orgs: [], activeOrgId: null, activeOrgRole: null });
-  const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
-  const [alerts, setAlerts] = useState<AlertItem[]>([]);
-  const [replays, setReplays] = useState<ReplayItem[]>([]);
   const [search, setSearch] = useState("");
   const [riskFilter, setRiskFilter] = useState<"all" | "high" | "medium" | "low">("all");
   const [threatFilter, setThreatFilter] = useState("all");
-  const [policies, setPolicies] = useState<PolicyRule[]>(DEFAULT_POLICIES);
-  const [tools, setTools] = useState<ToolPermission[]>(DEFAULT_TOOLS);
-  const [policyDraftOpen, setPolicyDraftOpen] = useState(false);
-  const [policyDraft, setPolicyDraft] = useState({
-    name: "",
-    pattern: "",
-    description: "",
-    severity: "medium" as PolicyRule["severity"],
-    scope: "Prompt",
-  });
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [keysVisible, setKeysVisible] = useState(false);
   const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">("light");
@@ -799,25 +575,11 @@ export default function Home() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [selectedLog, setSelectedLog] = useState<InterceptLog | null>(null);
   const [dashboardOpen, setDashboardOpen] = useState(false);
-  const [selectedScenarioId, setSelectedScenarioId] = useState<DemoScenarioId>(DEFAULT_VALIDATION_SCENARIO_ID);
-  const [validationRunning, setValidationRunning] = useState(false);
-  const [validationResults, setValidationResults] = useState<ValidationSuiteItem[]>(createInitialValidationResults);
-  const [validationHistory, setValidationHistory] = useState<ValidationRunRecord[]>([]);
   const [roleShowcase, setRoleShowcase] = useState<RoleShowcaseId>("admin");
   const apiBaseUrl = (settings.apiBase || DEFAULT_API_BASE).replace(/\/$/, "");
   const securityConfigKey = `${apiBaseUrl}|${settings.adminApiKey}|${authSession?.accessToken ?? ""}|${user?.id ?? ""}`;
   const hasConsoleToken = isAuthSessionValid(authSession);
   const hasConsoleAdmin = Boolean(hasConsoleToken && isAdminRole(user?.role));
-
-  // Copy rendered under the auth form. Computed here rather than inline so the
-  // "an unreachable backend is never described as a policy decision" rule lives
-  // in one testable place (see auth-logic.ts). While the status is merely still
-  // loading the panel stays empty on purpose: the old nested ternary announced
-  // 「注册已关闭」 for a backend it had not heard from yet.
-  const registrationNotice =
-    bootstrapUnreachable || authMode === "register"
-      ? registrationHint(bootstrapStatus, bootstrapUnreachable, apiBaseUrl)
-      : null;
 
   // Admin panels require EITHER a console admin session OR an Admin API Key
   // that has been verified against the backend. A non-empty key alone must
@@ -972,120 +734,6 @@ export default function Home() {
       window.clearTimeout(timer);
     };
   }, [addToast, apiBaseUrl, hasConsoleAdmin, settings.adminApiKey]);
-
-  const loadBootstrapStatus = useCallback(
-    async (signal?: AbortSignal) => {
-      try {
-        const response = await fetch(`${apiBaseUrl}/api/v1/auth/bootstrap-status`, {
-          signal,
-          cache: "no-store",
-        });
-        const data = (await response.json().catch(() => null)) as BootstrapStatus | null;
-        if (!response.ok || !data) {
-          setBootstrapStatus(null);
-          setBootstrapUnreachable(false);
-          return;
-        }
-        setBootstrapStatus(data);
-        setBootstrapUnreachable(false);
-      } catch {
-        // AbortError = 组件卸载 / 依赖变更导致的正常中止，不是「连不上后端」，别误报。
-        if (signal?.aborted) return;
-        setBootstrapStatus(null);
-        setBootstrapUnreachable(true);
-      }
-    },
-    [apiBaseUrl]
-  );
-
-
-  const syncLocalSecurityConfig = useCallback((nextPolicies: PolicyRule[], nextTools: ToolPermission[]) => {
-    writeStorage(STORAGE_KEYS.policies, nextPolicies);
-    writeStorage(STORAGE_KEYS.tools, nextTools);
-  }, []);
-
-  const persistPoliciesToBackend = useCallback(
-    async (nextPolicies: PolicyRule[]) => {
-      const currentById = new Map(policies.map((policy) => [policy.id, policy] as const));
-      const nextById = new Map(nextPolicies.map((policy) => [policy.id, policy] as const));
-      const responseErrors: string[] = [];
-
-      for (const policy of nextPolicies) {
-        const payload = {
-          name: policy.name.trim(),
-          blacklist_keyword: (policy.pattern || policy.name).trim(),
-          description: policy.description.trim(),
-          severity: policy.severity,
-          scope: policy.scope.trim() || "Prompt",
-          enabled: policy.enabled,
-        };
-
-        const isPersisted = /^\d+$/.test(policy.id);
-        const endpoint = isPersisted
-          ? `${apiBaseUrl}/api/v1/policies/${policy.id}`
-          : `${apiBaseUrl}/api/v1/policies`;
-        const method = isPersisted ? "PUT" : "POST";
-        const response = await fetch(endpoint, {
-          method,
-          headers: buildHeaders(settings, "admin", true, authSession),
-          body: JSON.stringify(payload),
-        });
-        const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
-        if (!response.ok) {
-          responseErrors.push(detailText(data.detail) || `HTTP ${response.status}`);
-        }
-      }
-
-      for (const policy of policies) {
-        const wasPersisted = /^\d+$/.test(policy.id);
-        if (!wasPersisted || nextById.has(policy.id)) continue;
-        const response = await fetch(`${apiBaseUrl}/api/v1/policies/${policy.id}`, {
-          method: "DELETE",
-          headers: buildHeaders(settings, "admin", false, authSession),
-        });
-        const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
-        if (!response.ok) {
-          responseErrors.push(detailText(data.detail) || `HTTP ${response.status}`);
-        }
-      }
-
-      if (responseErrors.length > 0) {
-        const currentSnapshot = Array.from(currentById.values());
-        syncLocalSecurityConfig(currentSnapshot, tools);
-        throw new Error(responseErrors[0]);
-      }
-    },
-    [authSession, policies, settings, syncLocalSecurityConfig, tools]
-  );
-
-  const persistToolsToBackend = useCallback(
-    async (nextTools: ToolPermission[]) => {
-      const responseErrors: string[] = [];
-
-      for (const tool of nextTools) {
-        if (!/^\d+$/.test(tool.id)) continue;
-        const response = await fetch(`${apiBaseUrl}/api/v1/tool-policies/${tool.id}`, {
-          method: "PUT",
-          headers: buildHeaders(settings, "admin", true, authSession),
-          body: JSON.stringify({
-            tool_name: tool.name,
-            description: tool.description,
-            allowed: tool.allowed,
-            requires_admin_approval: Boolean(tool.requiresAdminApproval),
-          }),
-        });
-        const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
-        if (!response.ok) {
-          responseErrors.push(detailText(data.detail) || `HTTP ${response.status}`);
-        }
-      }
-
-      if (responseErrors.length > 0) {
-        throw new Error(responseErrors[0]);
-      }
-    },
-    [authSession, settings]
-  );
 
   const checkHealth = useCallback(async () => {
     setHealth({ status: "checking", message: "检测中" });
@@ -1319,98 +967,105 @@ export default function Home() {
     appendLocalDecisionLog,
   });
 
+  const {
+    approvals,
+    alerts,
+    replays,
+    loadOperations,
+    reviewApproval,
+    replaySelectedRequest,
+  } = useOperations({
+    apiBaseUrl,
+    settings,
+    authSession,
+    hasAdminAccess,
+    addToast,
+    setGatewayResult,
+  });
+  const {
+    policies,
+    setPolicies,
+    tools,
+    setTools,
+    policyDraftOpen,
+    setPolicyDraftOpen,
+    policyDraft,
+    setPolicyDraft,
+    loadSecurityConfiguration,
+    savePolicies,
+    resetPolicies,
+    addPolicy,
+    removePolicy,
+  } = usePolicies({
+    apiBaseUrl,
+    settings,
+    authSession,
+    hasAdminAccess,
+    addToast,
+  });
+  const {
+    selectedScenarioId,
+    setSelectedScenarioId,
+    selectedScenario,
+    validationRunning,
+    setValidationRunning,
+    validationResults,
+    setValidationResults,
+    validationHistory,
+    setValidationHistory,
+    runValidationSuite,
+    restoreValidationRun,
+  } = useValidation({
+    apiBaseUrl,
+    settings,
+    authSession,
+    hasGatewayAccess,
+    addToast,
+    localInspect,
+    setGatewayResult,
+  });
+  const {
+    authMode,
+    setAuthMode,
+    authForm,
+    setAuthForm,
+    bootstrapStatus,
+    setBootstrapStatus,
+    bootstrapUnreachable,
+    authBusy,
+    authError,
+    setAuthError,
+    ssoSlug,
+    setSsoSlug,
+    ssoBusy,
+    ssoHint,
+    loadBootstrapStatus,
+    handleAuth,
+    enterDemo,
+    logout,
+    startSsoLogin,
+  } = useAuth({
+    apiBaseUrl,
+    addToast,
+    setAuthSession,
+    setUser,
+    setLogs,
+    setManagedKeys,
+    setManagedKeyIssueState,
+    setGatewayResult,
+    setOrgContext,
+    stampSampleLogs,
+  });
 
-  const loadOperations = useCallback(async () => {
-    if (!hasAdminAccess) {
-      setApprovals([]);
-      setAlerts([]);
-      setReplays([]);
-      return;
-    }
-
-    try {
-      const [approvalResponse, alertResponse, replayResponse] = await Promise.all([
-        fetch(`${apiBaseUrl}/api/v1/approvals?status=pending`, {
-          headers: buildHeaders(settings, "admin", false, authSession),
-          cache: "no-store",
-        }),
-        fetch(`${apiBaseUrl}/api/v1/alerts`, {
-          headers: buildHeaders(settings, "admin", false, authSession),
-          cache: "no-store",
-        }),
-        fetch(`${apiBaseUrl}/api/v1/replays`, {
-          headers: buildHeaders(settings, "admin", false, authSession),
-          cache: "no-store",
-        }),
-      ]);
-
-      const approvalData = (await approvalResponse.json().catch(() => ({}))) as { items?: ApprovalItem[] };
-      const alertData = (await alertResponse.json().catch(() => ({}))) as { items?: AlertItem[] };
-      const replayData = (await replayResponse.json().catch(() => ({}))) as { items?: ReplayItem[] };
-
-      if (approvalResponse.ok) setApprovals(approvalData.items ?? []);
-      if (alertResponse.ok) setAlerts(alertData.items ?? []);
-      if (replayResponse.ok) setReplays(replayData.items ?? []);
-    } catch {
-      setApprovals([]);
-      setAlerts([]);
-      setReplays([]);
-    }
-  }, [authSession, hasAdminAccess, settings]);
-
-
-
-
-
-
-
-
-
-  const loadSecurityConfiguration = useCallback(async () => {
-    const localPolicies = readStorage<PolicyRule[]>(STORAGE_KEYS.policies, DEFAULT_POLICIES);
-    const localTools = readStorage<ToolPermission[]>(STORAGE_KEYS.tools, DEFAULT_TOOLS);
-
-    if (!hasAdminAccess) {
-      setPolicies(localPolicies);
-      setTools(localTools);
-      return;
-    }
-
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 7000);
-
-    try {
-      const [policyResponse, toolResponse] = await Promise.all([
-        fetch(`${apiBaseUrl}/api/v1/policies`, {
-          headers: buildHeaders(settings, "admin", false, authSession),
-          signal: controller.signal,
-          cache: "no-store",
-        }),
-        fetch(`${apiBaseUrl}/api/v1/tool-policies`, {
-          headers: buildHeaders(settings, "admin", false, authSession),
-          signal: controller.signal,
-          cache: "no-store",
-        }),
-      ]);
-
-      const policyData = (await policyResponse.json().catch(() => ({}))) as { items?: BackendPolicy[]; detail?: unknown };
-      const toolData = (await toolResponse.json().catch(() => ({}))) as { items?: BackendToolPolicy[]; detail?: unknown };
-      if (!policyResponse.ok) throw new Error(detailText(policyData.detail) || `HTTP ${policyResponse.status}`);
-      if (!toolResponse.ok) throw new Error(detailText(toolData.detail) || `HTTP ${toolResponse.status}`);
-
-      const nextPolicies = (policyData.items ?? []).map(mapBackendPolicy);
-      const nextTools = (toolData.items ?? []).map(mapBackendToolPolicy);
-      setPolicies(nextPolicies.length > 0 ? nextPolicies : localPolicies);
-      setTools(nextTools.length > 0 ? nextTools : localTools);
-      writeStorage(STORAGE_KEYS.policies, nextPolicies.length > 0 ? nextPolicies : localPolicies);
-      writeStorage(STORAGE_KEYS.tools, nextTools.length > 0 ? nextTools : localTools);
-    } catch {
-      setPolicies(localPolicies);
-      setTools(localTools);
-    } finally {
-      window.clearTimeout(timer);
-    }
-  }, [authSession, hasAdminAccess, settings]);
+  // Copy rendered under the auth form. Computed here rather than inline so the
+  // "an unreachable backend is never described as a policy decision" rule lives
+  // in one testable place (see auth-logic.ts). While the status is merely still
+  // loading the panel stays empty on purpose: the old nested ternary announced
+  // 「注册已关闭」 for a backend it had not heard from yet.
+  const registrationNotice =
+    bootstrapUnreachable || authMode === "register"
+      ? registrationHint(bootstrapStatus, bootstrapUnreachable, apiBaseUrl)
+      : null;
 
   useEffect(() => {
     const bootTimer = window.setTimeout(() => {
@@ -1474,6 +1129,8 @@ export default function Home() {
       window.clearTimeout(bootTimer);
       window.removeEventListener("hashchange", onHashChange);
     };
+    // 各 setter 均为 useState 稳定引用（现经 hook 返回，eslint 无法识别稳定性），挂载仍只跑一次。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1602,11 +1259,6 @@ export default function Home() {
       { label: "启用策略", value: `${enabledPolicies}/${policies.length}`, icon: ShieldCheck, tone: "text-[var(--tone-success-text)]" },
     ];
   }, [logs, policies]);
-
-  const selectedScenario = useMemo(
-    () => DEMO_SCENARIOS.find((scenario) => scenario.id === selectedScenarioId) ?? DEMO_SCENARIOS[0],
-    [selectedScenarioId]
-  );
 
   const validationReadiness = useMemo(() => {
     const totalSignals = [
@@ -1922,7 +1574,7 @@ export default function Home() {
       setGatewayResult(null);
       addToast(`已载入验证场景：${scenario.label}`, "info");
     },
-    [addToast, setGatewayForm, setGatewayResult]
+    [addToast, setGatewayForm, setGatewayResult, setSelectedScenarioId]
   );
 
   const launchValidationPreset = useCallback(() => {
@@ -1931,306 +1583,6 @@ export default function Home() {
     navigateTo("gateway");
     addToast("默认验证场景已就绪，可以直接发送检测", "success");
   }, [addToast, loadScenarioIntoGateway, navigateTo, seedLogs]);
-
-  const handleAuth = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const email = authForm.email.trim().toLowerCase();
-    const password = authForm.password;
-
-    // 校验失败必须**同时**给内联错误与 toast：只弹 toast 时用户很容易认为
-    // 「点了没反应」——toast 会自动消失，且可能落在可视区之外。
-    const fail = (message: string) => {
-      setAuthError(message);
-      addToast(message, "error");
-    };
-
-    setAuthError("");
-
-    if (!email || !password) {
-      fail("请输入邮箱和密码");
-      return;
-    }
-
-    if (authMode === "register") {
-      if (!authForm.name.trim()) {
-        fail("请输入姓名");
-        return;
-      }
-      // 注册即建立身份，格式必须在发请求前拦住（后端同样会校验）。
-      // 登录不做形状拦截：历史上已存在的非标准账号不能被锁在门外。
-      if (!isValidEmailInput(email)) {
-        fail("邮箱格式不正确，请填写形如 name@example.com 的地址");
-        return;
-      }
-      if (password.length < 6) {
-        fail("密码至少需要 6 位");
-        return;
-      }
-      if (password !== authForm.confirmPassword) {
-        fail("两次输入的密码不一致");
-        return;
-      }
-    }
-
-    setAuthBusy(true);
-    try {
-      const endpoint =
-        authMode === "login"
-          ? `${apiBaseUrl}/api/v1/auth/login`
-          : `${apiBaseUrl}/api/v1/auth/register`;
-      const bootstrapToken = authForm.bootstrapToken.trim();
-      const inviteToken = authForm.inviteToken.trim();
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(authMode === "register" && bootstrapToken ? { "X-Shadow-Agent-Bootstrap-Token": bootstrapToken } : {}),
-          ...(authMode === "register" && inviteToken ? { "X-Shadow-Agent-Invite-Token": inviteToken } : {}),
-        },
-        body: JSON.stringify(
-          authMode === "login"
-            ? { email, password }
-            : { name: authForm.name.trim(), email, password }
-        ),
-      });
-      const data = (await response.json().catch(() => ({}))) as {
-        access_token?: string;
-        token_type?: string;
-        expires_at?: number;
-        user?: { id: string; name: string; email: string; role: string; created_at: string };
-        detail?: unknown;
-      };
-      if (!response.ok || !data.access_token || !data.user) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
-
-      const sessionUser: SessionUser = {
-        id: data.user.id,
-        name: data.user.name,
-        email: data.user.email,
-        role: data.user.role,
-        createdAt: data.user.created_at,
-      };
-      const nextAuthSession: AuthSession = {
-        accessToken: data.access_token,
-        tokenType: "bearer",
-        expiresAt: asNumber(data.expires_at),
-        user: sessionUser,
-      };
-      setAuthSession(nextAuthSession);
-      setUser(sessionUser);
-      removeStorage(STORAGE_KEYS.authSession);
-      removeStorage(STORAGE_KEYS.session);
-      setAuthForm({ name: "", email: "", password: "", confirmPassword: "", bootstrapToken: "", inviteToken: "" });
-      void loadBootstrapStatus();
-      setAuthError("");
-      addToast(
-        authMode === "login"
-          ? "登录成功"
-          : data.user.role === "admin" || data.user.role === "security_admin"
-            ? "注册成功，已进入管理员控制台"
-            : "注册成功，当前为普通网关账号",
-        "success"
-      );
-    } catch (error) {
-      // 网络层失败（后端没起 / 端口不通）时浏览器只给一句 "Failed to fetch"，
-      // 对用户毫无指向性 → 翻译成可执行的排查提示，并顺手点亮横幅的「后端不可达」状态。
-      const isNetworkFailure =
-        error instanceof TypeError ||
-        (error instanceof Error && /failed to fetch|network ?error|load failed/i.test(error.message));
-      if (isNetworkFailure) {
-        setBootstrapUnreachable(true);
-      }
-      const message = isNetworkFailure
-        ? `无法连接后端服务（${apiBaseUrl}），请确认后端已启动后重试`
-        : error instanceof Error
-          ? error.message
-          : authMode === "login"
-            ? "登录失败"
-            : "注册失败";
-      setAuthError(message);
-      addToast(message, "error");
-    } finally {
-      setAuthBusy(false);
-    }
-  };
-
-  const enterDemo = () => {
-    const demoUser: SessionUser = {
-      id: "demo-admin",
-      name: "安全管理员（演示）",
-      email: "demo@shadow.local",
-      role: "admin",
-      createdAt: new Date().toISOString(),
-    };
-    const stamped = stampSampleLogs();
-    writeStorage(STORAGE_KEYS.session, demoUser);
-    writeStorage(STORAGE_KEYS.localLogs, stamped);
-    removeStorage(STORAGE_KEYS.authSession);
-    setAuthSession(null);
-    setUser(demoUser);
-    setLogs(stamped);
-    setManagedKeys([]);
-    setManagedKeyIssueState(null);
-    addToast("已使用本地验证身份进入", "success");
-  };
-
-  const logout = () => {
-    removeStorage(STORAGE_KEYS.authSession);
-    removeStorage(STORAGE_KEYS.session);
-    setAuthSession(null);
-    setUser(null);
-    setGatewayResult(null);
-    setManagedKeys([]);
-    setManagedKeyIssueState(null);
-    setOrgContext({ orgs: [], activeOrgId: null, activeOrgRole: null });
-    addToast("已退出登录", "info");
-  };
-
-  const startSsoLogin = async () => {
-    const slug = ssoSlug.trim().toLowerCase();
-    if (!slug) {
-      addToast("请输入组织标识（slug）", "error");
-      return;
-    }
-    setSsoBusy(true);
-    setSsoHint("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/auth/sso/providers/${encodeURIComponent(slug)}`);
-      const data = (await response.json().catch(() => ({}))) as {
-        enabled?: boolean;
-        provider_name?: string;
-        login_url?: string;
-        detail?: unknown;
-      };
-      if (!response.ok) {
-        throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      }
-      if (!data.enabled || !data.login_url) {
-        throw new Error("该组织未启用 SSO 登录，请使用邮箱密码登录或联系组织管理员。");
-      }
-      // login_url is a backend-relative path; the gateway owns discovery/PKCE.
-      window.location.href = `${apiBaseUrl}${data.login_url}`;
-    } catch (error) {
-      setSsoHint(error instanceof Error ? error.message : "SSO 登录发起失败");
-      addToast(error instanceof Error ? error.message : "SSO 登录发起失败", "error");
-    } finally {
-      setSsoBusy(false);
-    }
-  };
-
-
-  const savePolicies = () => {
-    writeStorage(STORAGE_KEYS.policies, policies);
-    writeStorage(STORAGE_KEYS.tools, tools);
-    if (hasAdminAccess) {
-      void (async () => {
-        try {
-          await persistPoliciesToBackend(policies);
-          await persistToolsToBackend(tools);
-          await loadSecurityConfiguration();
-          addToast("策略已同步到后端", "success");
-        } catch (error) {
-          addToast(error instanceof Error ? error.message : "策略同步失败", "error");
-        }
-      })();
-      return;
-    }
-    addToast("策略配置已保存", "success");
-  };
-
-  const resetPolicies = () => {
-    if (hasAdminAccess) {
-      void (async () => {
-        try {
-          const [policyResponse, toolResponse] = await Promise.all([
-            fetch(`${apiBaseUrl}/api/v1/policies/reset`, {
-              method: "POST",
-              headers: buildHeaders(settings, "admin", false, authSession),
-            }),
-            fetch(`${apiBaseUrl}/api/v1/tool-policies/reset`, {
-              method: "POST",
-              headers: buildHeaders(settings, "admin", false, authSession),
-            }),
-          ]);
-          const policyData = (await policyResponse.json().catch(() => ({}))) as { detail?: unknown };
-          const toolData = (await toolResponse.json().catch(() => ({}))) as { detail?: unknown };
-          if (!policyResponse.ok) throw new Error(detailText(policyData.detail) || `HTTP ${policyResponse.status}`);
-          if (!toolResponse.ok) throw new Error(detailText(toolData.detail) || `HTTP ${toolResponse.status}`);
-          await loadSecurityConfiguration();
-          addToast("策略已恢复为后端默认配置", "success");
-        } catch (error) {
-          addToast(error instanceof Error ? error.message : "策略重置失败", "error");
-        }
-      })();
-      return;
-    }
-    setPolicies(DEFAULT_POLICIES);
-    setTools(DEFAULT_TOOLS);
-    writeStorage(STORAGE_KEYS.policies, DEFAULT_POLICIES);
-    writeStorage(STORAGE_KEYS.tools, DEFAULT_TOOLS);
-    addToast("策略已恢复默认", "info");
-  };
-
-  const addPolicy = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!policyDraft.name.trim() || !policyDraft.description.trim()) {
-      addToast("请填写策略名称和描述", "error");
-      return;
-    }
-
-    const nextPolicy: PolicyRule = {
-      id: makeId("policy"),
-      name: policyDraft.name.trim(),
-      description: policyDraft.description.trim(),
-      enabled: true,
-      severity: policyDraft.severity,
-      scope: policyDraft.scope.trim() || "Prompt",
-      pattern: policyDraft.pattern.trim() || policyDraft.name.trim(),
-      custom: true,
-    };
-    const nextPolicies = [nextPolicy, ...policies];
-    setPolicies(nextPolicies);
-    writeStorage(STORAGE_KEYS.policies, nextPolicies);
-    if (hasAdminAccess) {
-      void (async () => {
-        try {
-          await persistPoliciesToBackend(nextPolicies);
-          await loadSecurityConfiguration();
-          addToast("策略已添加并写入后端", "success");
-        } catch (error) {
-          addToast(error instanceof Error ? error.message : "新增策略失败", "error");
-        }
-      })();
-    }
-    setPolicyDraft({ name: "", pattern: "", description: "", severity: "medium", scope: "Prompt" });
-    setPolicyDraftOpen(false);
-    addToast("策略已添加，记得保存", "success");
-  };
-
-  const removePolicy = (policyId: string) => {
-    const next = policies.filter((policy) => policy.id !== policyId);
-    setPolicies(next);
-    writeStorage(STORAGE_KEYS.policies, next);
-    if (hasAdminAccess && /^\d+$/.test(policyId)) {
-      void (async () => {
-        try {
-          const response = await fetch(`${apiBaseUrl}/api/v1/policies/${policyId}`, {
-            method: "DELETE",
-            headers: buildHeaders(settings, "admin", false, authSession),
-          });
-          const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
-          if (!response.ok) throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-          await loadSecurityConfiguration();
-          addToast("策略已从后端删除", "success");
-        } catch (error) {
-          addToast(error instanceof Error ? error.message : "删除策略失败", "error");
-        }
-      })();
-      return;
-    }
-    addToast("策略已删除", "info");
-  };
 
   const saveSettings = () => {
     const normalized: AppSettings = {
@@ -2289,57 +1641,6 @@ export default function Home() {
 
 
 
-  const reviewApproval = async (approvalId: number, status: "approved" | "rejected") => {
-    if (!hasAdminAccess) {
-      addToast("请先登录管理员账号或配置 Admin API Key", "error");
-      return;
-    }
-
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/approvals/${approvalId}/review`, {
-        method: "POST",
-        headers: buildHeaders(settings, "admin", true, authSession),
-        body: JSON.stringify({
-          status,
-          review_comment: status === "approved" ? "Approved from console" : "Rejected from console",
-        }),
-      });
-      const data = (await response.json().catch(() => ({}))) as { detail?: unknown };
-      if (!response.ok) throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      await loadOperations();
-      addToast(status === "approved" ? "审批已通过" : "审批已拒绝", "success");
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : "审批操作失败", "error");
-    }
-  };
-
-  const replaySelectedRequest = async (requestId: string) => {
-    if (!hasAdminAccess) {
-      addToast("请先登录管理员账号或配置 Admin API Key", "error");
-      return;
-    }
-
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/replays`, {
-        method: "POST",
-        headers: buildHeaders(settings, "admin", true, authSession),
-        body: JSON.stringify({ request_id: requestId }),
-      });
-      const data = (await response.json().catch(() => ({}))) as { item?: ReplayItem; detail?: unknown };
-      if (!response.ok) throw new Error(detailText(data.detail) || `HTTP ${response.status}`);
-      await loadOperations();
-      setGatewayResult({
-        ok: data.item?.verdict === "allowed",
-        title: "请求回放已完成",
-        message: `回放结果：${data.item?.verdict === "allowed" ? "通过" : data.item?.verdict === "blocked" ? "拦截" : data.item?.verdict ?? "unknown"}`,
-        detail: data.item,
-      });
-      addToast("请求回放已完成", "success");
-    } catch (error) {
-      addToast(error instanceof Error ? error.message : "请求回放失败", "error");
-    }
-  };
-
   const copyText = async (value: string, successMessage: string) => {
     try {
       if (navigator.clipboard) {
@@ -2374,15 +1675,6 @@ export default function Home() {
     addToast("日志已导出", "success");
   };
 
-  const restoreValidationRun = useCallback(
-    (run: ValidationRunRecord) => {
-      setValidationResults(run.items);
-      setSelectedScenarioId(run.scenarioId);
-      setGatewayResult(null);
-      addToast(`已恢复 ${formatTime(run.createdAt)} 的验证结果`, "info");
-    },
-    [addToast, setGatewayResult]
-  );
 
   const downloadValidationResults = useCallback(() => {
     if (validationSummary.executed === 0 && validationHistory.length === 0) {
@@ -2431,129 +1723,6 @@ export default function Home() {
     addToast("网关测试表单已清空", "info");
   };
 
-
-
-  const evaluateScenario = useCallback(
-    async (scenario: DemoScenario): Promise<ValidationSuiteItem> => {
-      let parameters: Record<string, unknown> | null = null;
-      try {
-        parameters = scenario.parameters.trim() ? (JSON.parse(scenario.parameters) as Record<string, unknown>) : null;
-      } catch {
-        return {
-          id: scenario.id,
-          label: scenario.label,
-          expectedOutcome: scenario.expectedOutcome,
-          actualOutcome: "error",
-          category: scenario.expectedCategory ?? "invalid_parameters",
-          riskScore: null,
-          status: "failed",
-          note: "场景参数 JSON 无法解析",
-        };
-      }
-
-      const localDecision = localInspect(scenario.prompt, scenario.externalContext, scenario.toolName, scenario.parameters);
-
-      if (!hasGatewayAccess) {
-        const actualOutcome = localDecision.allowed ? "allowed" : "blocked";
-        return {
-          id: scenario.id,
-          label: scenario.label,
-          expectedOutcome: scenario.expectedOutcome,
-          actualOutcome,
-          category: localDecision.category ?? "none",
-          riskScore: localDecision.riskScore,
-          status: actualOutcome === scenario.expectedOutcome ? "passed" : "failed",
-          note: "使用前端本地预检完成验证",
-        };
-      }
-
-      try {
-        const analyzeResponse = await fetch(`${apiBaseUrl}/api/v1/analyze`, {
-          method: "POST",
-          headers: buildHeaders(settings, "client", true, authSession),
-          body: JSON.stringify({
-            prompt: scenario.prompt,
-            external_context: scenario.externalContext || null,
-            tool_name: scenario.toolName || null,
-            parameters,
-          }),
-        });
-        const analyzeData = (await analyzeResponse.json().catch(() => ({}))) as AnalyzeResponse & { detail?: unknown };
-        if (!analyzeResponse.ok) {
-          throw new Error(detailText(analyzeData.detail) || `HTTP ${analyzeResponse.status}`);
-        }
-
-        const actualOutcome = analyzeData.decision === "blocked" ? "blocked" : "allowed";
-        return {
-          id: scenario.id,
-          label: scenario.label,
-          expectedOutcome: scenario.expectedOutcome,
-          actualOutcome,
-          category: analyzeData.category || "none",
-          riskScore: asNumber(analyzeData.risk_score, 0),
-          status: actualOutcome === scenario.expectedOutcome ? "passed" : "failed",
-          note:
-            actualOutcome === "blocked"
-              ? `命中 ${categoryLabel(analyzeData.category) || analyzeData.category || "阻断规则"}`
-              : "后端预检允许该请求进入网关",
-        };
-      } catch (error) {
-        return {
-          id: scenario.id,
-          label: scenario.label,
-          expectedOutcome: scenario.expectedOutcome,
-          actualOutcome: "error",
-          category: "request_error",
-          riskScore: null,
-          status: "failed",
-          note: error instanceof Error ? error.message : "验证请求失败",
-        };
-      }
-    },
-    [authSession, hasGatewayAccess, settings]
-  );
-
-  const runValidationSuite = useCallback(async () => {
-    setValidationRunning(true);
-    setValidationResults(
-      createInitialValidationResults().map((item) => ({
-        ...item,
-        status: "running",
-        note: "执行中",
-      }))
-    );
-
-    const results: ValidationSuiteItem[] = [];
-    for (const scenario of DEMO_SCENARIOS) {
-      const result = await evaluateScenario(scenario);
-      results.push(result);
-      setValidationResults((current) =>
-        current.map((item) => (item.id === result.id ? result : item))
-      );
-    }
-
-    setValidationResults(results);
-    setValidationRunning(false);
-    const summary = summarizeValidationResults(results);
-    const runRecord: ValidationRunRecord = {
-      id: makeId("validation-run"),
-      createdAt: new Date().toISOString(),
-      mode: hasGatewayAccess ? "backend" : "local",
-      scenarioId: selectedScenarioId,
-      scenarioLabel: selectedScenario.label,
-      summary,
-      items: results,
-    };
-    setValidationHistory((current) => {
-      const next = [runRecord, ...current].slice(0, MAX_VALIDATION_RUNS);
-      writeStorage(STORAGE_KEYS.validationRuns, next);
-      return next;
-    });
-    addToast(
-      summary.failed === 0 ? "验证套件执行完成，所有场景符合预期" : `验证套件执行完成，${summary.failed} 个场景与预期不一致`,
-      summary.failed === 0 ? "success" : "error"
-    );
-  }, [addToast, evaluateScenario, hasGatewayAccess, selectedScenario.label, selectedScenarioId]);
 
 
 
