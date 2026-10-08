@@ -15,6 +15,7 @@
 
 import { useEffect, useState } from "react";
 import { AlertTriangle, ArrowLeft, LogIn, Shield } from "lucide-react";
+import { ScrollEdgeVeils } from "../../components/scroll-edge-veils";
 
 // Keep in sync with the handoff reader in src/app/page.tsx.
 const SSO_HANDOFF_KEY = "shadow-agent-sso-handoff";
@@ -76,8 +77,9 @@ export default function SsoCallbackPage() {
   }, []);
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background text-foreground">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,var(--page-glow-a),transparent_32rem),radial-gradient(circle_at_86%_16%,var(--page-glow-b),transparent_32rem)]" />
+    <main className="relative flex min-h-screen items-center justify-center overflow-x-clip bg-background text-foreground">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_18%_0%,var(--page-glow-a),transparent_32rem),radial-gradient(circle_at_86%_16%,var(--page-glow-b),transparent_32rem)]" />
+      <ScrollEdgeVeils />
       <section className="relative w-full max-w-md rounded-[var(--radius-lg)] border border-[var(--panel-border)] bg-[var(--panel-bg)] p-6 shadow-[var(--panel-shadow)] backdrop-blur-[28px]">
         <div className="flex items-center gap-3">
           <span className="flex h-11 w-11 items-center justify-center rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--tone-accent)_28%,transparent)] bg-[var(--tone-accent-surface)]">

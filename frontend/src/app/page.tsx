@@ -31,6 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GlassInterceptLogCard } from "./components/intercept-log-card";
 import { GlassSelect, type GlassSelectOption } from "./components/glass-select";
 import { InteractiveBackground } from "./components/interactive-background";
+import { ScrollEdgeVeils } from "./components/scroll-edge-veils";
 import SecurityDashboard from "./components/security-dashboard";
 import { buildTimeTooltip } from "./time-utils";
 import { registrationHint } from "./auth-logic";
@@ -1693,10 +1694,13 @@ export default function Home() {
     /* MotionConfig：全部 framer-motion 动画尊重系统「减少动态」偏好 ——
        transform/layout 动画转为即时，opacity 保留（全局 CSS 规则管不到 JS 动画） */
     <MotionConfig reducedMotion="user">
-    <main className="relative min-h-[100dvh] overflow-hidden bg-background text-foreground">
-      <div className="page-glow pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,var(--page-glow-a),transparent_32rem),radial-gradient(circle_at_86%_16%,var(--page-glow-b),transparent_32rem)]" aria-hidden />
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(var(--page-grid)_1px,transparent_1px),linear-gradient(90deg,var(--page-grid)_1px,transparent_1px)] bg-[size:64px_64px] opacity-60 [mask-image:radial-gradient(ellipse_at_30%_10%,black,transparent_75%)]" aria-hidden />
+    <main className="relative min-h-[100dvh] overflow-x-clip bg-background text-foreground">
+      {/* 背景三层 fixed 锁视口：不随文档高度拉伸（长页面粒子被摊薄拉长的根因），
+          滚动时背景恒定、内容流动 —— 视差感更稳。fixed 后代不受 overflow 裁剪，无碍。 */}
+      <div className="page-glow pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_18%_0%,var(--page-glow-a),transparent_32rem),radial-gradient(circle_at_86%_16%,var(--page-glow-b),transparent_32rem)]" aria-hidden />
+      <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(var(--page-grid)_1px,transparent_1px),linear-gradient(90deg,var(--page-grid)_1px,transparent_1px)] bg-[size:64px_64px] opacity-60 [mask-image:radial-gradient(ellipse_at_30%_10%,black,transparent_75%)]" aria-hidden />
       <InteractiveBackground />
+      <ScrollEdgeVeils />
       <div className="relative mx-auto grid min-h-[100dvh] w-full max-w-6xl items-center gap-10 px-5 py-12 lg:gap-14 xl:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
         <section className="max-w-2xl">
           <div className="inline-flex items-center gap-2 rounded-full border border-[color-mix(in_oklab,var(--tone-accent)_26%,transparent)] bg-[var(--tone-accent-surface)] px-3 py-1 text-[length:var(--text-micro)] font-semibold uppercase tracking-[0.14em] text-[var(--tone-accent-text)]">
@@ -2140,13 +2144,16 @@ export default function Home() {
 
   return (
     <MotionConfig reducedMotion="user">
-    <main className="relative min-h-[100dvh] overflow-hidden bg-background text-foreground">
-      <div className="page-glow pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,var(--page-glow-a),transparent_32rem),radial-gradient(circle_at_82%_14%,var(--page-glow-b),transparent_30rem),linear-gradient(135deg,rgba(255,255,255,0.035),transparent_40%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(var(--page-grid)_1px,transparent_1px),linear-gradient(90deg,var(--page-grid)_1px,transparent_1px)] bg-[size:56px_56px] opacity-25" />
+    <main className="relative min-h-[100dvh] overflow-x-clip bg-background text-foreground">
+      {/* 背景三层 fixed 锁视口（同 landing 屏）；overflow 用 x-clip —— overflow-hidden
+          会创建 scroll container，把 aside 的 sticky 困在 main 内导致侧栏跟页滚走。 */}
+      <div className="page-glow pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_18%_0%,var(--page-glow-a),transparent_32rem),radial-gradient(circle_at_82%_14%,var(--page-glow-b),transparent_30rem),linear-gradient(135deg,rgba(255,255,255,0.035),transparent_40%)]" />
+      <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(var(--page-grid)_1px,transparent_1px),linear-gradient(90deg,var(--page-grid)_1px,transparent_1px)] bg-[size:56px_56px] opacity-25" />
       {/* 粒子网络场：垫在网格底纹之上、内容之下 —— 指针推开节点、点亮连线、点击泛涟漪 */}
       <InteractiveBackground />
+      <ScrollEdgeVeils insetSidebar />
       <div className="relative grid min-h-[100dvh] grid-cols-1 lg:grid-cols-[268px_minmax(0,1fr)]">
-        <aside className="flex flex-col gap-5 border-b border-[var(--panel-border-soft)] bg-[var(--panel-bg-soft)] px-4 py-5 shadow-[var(--sidebar-shadow)] backdrop-blur-[var(--blur-glass)] lg:sticky lg:top-0 lg:h-[100dvh] lg:overflow-y-auto lg:border-b-0 lg:border-r">
+        <aside className="z-[var(--z-sticky)] flex flex-col gap-5 border-b border-[var(--panel-border-soft)] bg-[var(--panel-bg-soft)] px-4 py-5 shadow-[var(--sidebar-shadow)] backdrop-blur-[var(--blur-glass)] lg:sticky lg:top-0 lg:h-[100dvh] lg:overflow-y-auto lg:border-b-0 lg:border-r lg:[mask-image:linear-gradient(to_bottom,black_calc(100%_-_6rem),rgba(0,0,0,0.45))]">
           {/* 品牌 */}
           <button
             type="button"

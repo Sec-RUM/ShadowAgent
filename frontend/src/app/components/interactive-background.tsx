@@ -105,9 +105,9 @@ export function InteractiveBackground() {
     let phantoms: Phantom[] = [];
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
 
-    // 画布铺在 main 上,坐标是页面坐标;指针事件给的是视口坐标 ——
-    // 页面可滚动(main 高于视口)时两者相差 scrollX/Y,必须换算,
-    // 否则滚动后光标与粒子场错位(踩过)。cx/cy 存视口原始值,滚动时重算 x/y。
+    // 画布 fixed 铺在视口上（不随文档拉伸），坐标即视口坐标 ——
+    // 与指针事件的 clientX/Y 同一坐标系，滚动无需任何换算。
+    // （旧实现画布 absolute 随文档增高，长页面粒子被摊薄拉长，已废弃。）
     const pointer = { cx: -1e4, cy: -1e4, x: -1e4, y: -1e4, active: false, speed: 0 };
     const charge = { active: false, startX: 0, startY: 0, x: 0, y: 0 };
     let lastPointerAt = 0;
@@ -115,8 +115,8 @@ export function InteractiveBackground() {
     const fallbackAccent = "oklch(70% 0.12 178)";
 
     const syncPointerCanvas = () => {
-      pointer.x = pointer.cx + window.scrollX;
-      pointer.y = pointer.cy + window.scrollY;
+      pointer.x = pointer.cx;
+      pointer.y = pointer.cy;
     };
 
     const buildField = () => {
@@ -400,14 +400,14 @@ export function InteractiveBackground() {
       syncPointerCanvas();
       pointer.active = true;
       if (charge.active) {
-        charge.x = event.clientX + window.scrollX;
-        charge.y = event.clientY + window.scrollY;
+        charge.x = event.clientX;
+        charge.y = event.clientY;
       }
     };
 
     const onPointerDown = (event: PointerEvent) => {
-      const px = event.clientX + window.scrollX;
-      const py = event.clientY + window.scrollY;
+      const px = event.clientX;
+      const py = event.clientY;
       charge.active = true;
       charge.startX = px;
       charge.startY = py;
@@ -432,8 +432,8 @@ export function InteractiveBackground() {
       if (!charge.active) return;
       charge.active = false;
       if (reduced.matches) return;
-      const px = event.clientX + window.scrollX;
-      const py = event.clientY + window.scrollY;
+      const px = event.clientX;
+      const py = event.clientY;
       const dx = px - charge.startX;
       const dy = py - charge.startY;
       const len = Math.hypot(dx, dy);
@@ -456,12 +456,11 @@ export function InteractiveBackground() {
     const onDoubleClick = (event: MouseEvent) => {
       if (reduced.matches) return;
       if (phantoms.length >= MAX_PHANTOMS) phantoms.shift();
-      phantoms.push({ x: event.clientX + window.scrollX, y: event.clientY + window.scrollY, age: 0 });
+      phantoms.push({ x: event.clientX, y: event.clientY, age: 0 });
     };
 
     const onWheel = (event: WheelEvent) => {
       if (reduced.matches) return;
-      syncPointerCanvas(); // 滚动改变了视口与页面的偏移,先同步指针坐标
       const kick = Math.max(-1, Math.min(1, event.deltaY / 500)) * WHEEL_KICK;
       for (const node of nodes) node.vy += kick;
       const now = performance.now();
@@ -502,7 +501,6 @@ export function InteractiveBackground() {
     window.addEventListener("pointercancel", resetGestures, { passive: true });
     window.addEventListener("dblclick", onDoubleClick, { passive: true });
     window.addEventListener("wheel", onWheel, { passive: true });
-    window.addEventListener("scroll", syncPointerCanvas, { passive: true });
     document.documentElement.addEventListener("pointerleave", resetGestures);
     document.addEventListener("visibilitychange", onVisibility);
     reduced.addEventListener("change", syncMotion);
@@ -518,7 +516,6 @@ export function InteractiveBackground() {
       window.removeEventListener("pointercancel", resetGestures);
       window.removeEventListener("dblclick", onDoubleClick);
       window.removeEventListener("wheel", onWheel);
-      window.removeEventListener("scroll", syncPointerCanvas);
       document.documentElement.removeEventListener("pointerleave", resetGestures);
       document.removeEventListener("visibilitychange", onVisibility);
       reduced.removeEventListener("change", syncMotion);
@@ -529,7 +526,7 @@ export function InteractiveBackground() {
     <canvas
       ref={canvasRef}
       aria-hidden
-      className="pointer-events-none absolute inset-0 h-full w-full"
+      className="pointer-events-none fixed inset-0 h-full w-full"
     />
   );
 }

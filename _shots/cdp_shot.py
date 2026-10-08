@@ -239,12 +239,22 @@ def main():
                 time.sleep(2.0)
             time.sleep(1.5)
 
+        # 可选：截图前滚动到指定 scrollY（第 9 个参数），等幕帘 transition 走完。
+        # 第 10 个参数 = "1" 时全页截图（captureBeyondViewport），默认视口截图 ——
+        # 验证 sticky 侧栏 / 滚动幕帘必须用视口截图（全页会把 fixed 元素摊平）。
+        # 滚动在 probe 之前执行，probe 才能读到滚动后的幕帘状态。
+        fullpage = len(sys.argv) > 10 and sys.argv[10] == "1"
+        scroll_y = int(sys.argv[9]) if len(sys.argv) > 9 and sys.argv[9] else 0
+        if scroll_y and not fullpage:
+            c.call("Runtime.evaluate", {"expression": f"window.scrollTo(0,{scroll_y})"})
+            time.sleep(1.4)  # veil opacity transition 560ms + 稳帧
+
         # 可选：点击完成后执行探针表达式并打印结果（第 8 个参数）。
         if len(sys.argv) > 8 and sys.argv[8]:
             pr = c.call("Runtime.evaluate", {"expression": sys.argv[8]})
             print("probe:", json.dumps(pr.get("result", {}))[:2000])
 
-        res = c.call("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": True})
+        res = c.call("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": fullpage})
         data = res.get("result", {}).get("data")
         if not data:
             raise SystemExit("no screenshot data: " + json.dumps(res)[:400])

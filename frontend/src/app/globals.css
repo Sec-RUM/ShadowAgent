@@ -742,6 +742,47 @@ html:not([data-theme]) .grid-texture::before {
   }
 }
 
+/* ---- 滚动边缘毛玻璃幕帘（ScrollEdgeVeils） --------------------------------
+   内容滚动掠过视口上下边缘的「交界面」时施加高斯模糊：顶帘/底帘各一条
+   backdrop-blur 渐隐带（mask 让模糊强度沿边→内衰减，不是一条生硬的雾线）。
+   opacity 由组件按滚动位置直写（高频滚动不走 React 渲染），淡入淡出走
+   transition —— 只在状态翻转时插值一次，丝滑不抖。z 取 --z-sticky：
+   盖在内容上、低于下拉（240）与 toast（500）。 */
+.scroll-veil {
+  position: fixed;
+  top: 0;
+  right: 0;
+  pointer-events: none;
+  z-index: var(--z-sticky);
+  opacity: 0;
+  backdrop-filter: blur(var(--blur-glass-sm)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--blur-glass-sm)) saturate(150%);
+  transition: opacity 560ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity;
+}
+
+.scroll-veil-top {
+  height: 4.5rem;
+  mask-image: linear-gradient(to bottom, #000 30%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 30%, transparent);
+}
+
+.scroll-veil-bottom {
+  top: auto;
+  bottom: 0;
+  height: 3.5rem;
+  mask-image: linear-gradient(to top, #000 20%, transparent);
+  -webkit-mask-image: linear-gradient(to top, #000 20%, transparent);
+}
+
+/* lg+：app shell 左侧有 268px 的 sticky 侧栏，幕帘从侧栏右缘起（对齐
+   lg:grid-cols-[268px_minmax(0,1fr)]）；落地页无侧栏，不带修饰类即全宽。 */
+@media (min-width: 64rem) {
+  .scroll-veil-inset-sidebar {
+    left: 268px;
+  }
+}
+
 /* ---- 语义标签 ------------------------------------------------------------ */
 .chip {
   display: inline-flex;
