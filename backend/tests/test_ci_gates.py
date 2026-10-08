@@ -38,7 +38,12 @@ def test_backend_dependencies_are_audited_strictly(workflow: str) -> None:
 
 
 def test_frontend_dependencies_are_audited(workflow: str) -> None:
-    assert "npm audit --audit-level=high" in workflow, "前端依赖审计丢失"
+    assert "npm audit --omit=dev --audit-level=high" in workflow, (
+        "前端依赖审计丢失或不再限定运行时树 —— 2026-10-08 起与后端"
+        " pip-audit（只审 requirements.txt 运行时依赖）对齐；"
+        "braces（GHSA-vfj7-8cjw-p6xm，仅 eslint 工具链可达）上游无修复版本，"
+        "放宽回全树审计前必须先有上游修复并单独说明"
+    )
 
 
 def test_frontend_audit_is_blocking(workflow: str) -> None:
